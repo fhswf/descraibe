@@ -1,6 +1,6 @@
 # 🧠 Audiodeskriptionen_SS25
 
-Entwicklung einer modularen, KI-gestützten Lösung zur automatisierten Erstellung von Audiodeskriptionen im Rahmen des Masterprojekts *Angewandte Künstliche Intelligenz* (Sommersemester 2025) an der FH Südwestfalen.
+Entwicklung einer modularen, KI-gestützten Lösung zur automatisierten Erstellung von Audiodeskriptionen im Rahmen eines Hochschulprojekts, Studiengang *Angewandte Künstliche Intelligenz* (Sommersemester 2025) an der FH Südwestfalen.
 
 ---
 
