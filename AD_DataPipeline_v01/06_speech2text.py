@@ -178,13 +178,13 @@ def transkription_mit_zeitstempel(wav_file,txt_file,mod_lvl="L"):
     
     if(mod_lvl == "L"):
         model = whisper.load_model("large", device=device)  # nur Modell laden #large # medium
-        print("whisper Large Modell wird verwendet! Lange Ausrührungsdauer!")
+        print("whisper Large Modell wird verwendet! Lange Ausführungsdauer!")
     elif (mod_lvl == "M"):
         model = whisper.load_model("medium", device=device)  # nur Modell laden #large # medium
-        print("whisper medium Modell wird verwendet! Mittlere Ausrührungsdauer - Texte genau kontrollieren!")
+        print("whisper medium Modell wird verwendet! Mittlere Ausführungsdauer - Texte genau kontrollieren!")
     elif (mod_lvl == "S"):
         model = whisper.load_model("small", device=device)  # nur Modell laden #large # medium
-        print("whisper small Modell wird verwendet! kurze Ausrührungsdauer - Texte genau kontrollieren - oft weniger gute Texte!")
+        print("whisper small Modell wird verwendet! kurze Ausführungsdauer - Texte genau kontrollieren - oft weniger gute Texte!")
         
     result = model.transcribe(
         wav_file,
@@ -235,7 +235,7 @@ if __name__ == "__main__":
     #Skriptverzeichnis ermitteln
     script_dir = os.path.dirname(os.path.abspath(__file__))
     default_video_path = os.path.join(script_dir, "Film.mp4")
-    default_output_file = os.path.join(script_dir, "FilmBilder")
+    default_output_file = os.path.join(script_dir, "Transkription.txt")
 
     # Argumente definieren
     parser = argparse.ArgumentParser(description="(MP4)Audio Transkription Speech-2-Text.")
@@ -250,5 +250,4 @@ if __name__ == "__main__":
     extract_audio(mp4_path=args.wav_file, wav_path=temp_audio ) # wird entfernt, sobald .wav als eingabe bereitgestellt wird.
 
     transkription_mit_zeitstempel(wav_file=temp_audio, txt_file=args.output_file, mod_lvl=args.transkript_lvl) #wav_file=args.wav_file,  <-- Für Anpassung
-
 
