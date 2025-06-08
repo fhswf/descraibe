@@ -1,0 +1,1 @@
+# Platzhalter für 06_speech2text.py

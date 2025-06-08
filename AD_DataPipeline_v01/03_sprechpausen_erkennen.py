@@ -1,0 +1,1 @@
+# Platzhalter für 03_sprechpausen_erkennen.py

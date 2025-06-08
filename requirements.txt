@@ -1,0 +1,5 @@
+opencv-python
+pydub
+openai
+transformers
+pandas

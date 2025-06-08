@@ -1,0 +1,1 @@
+# Platzhalter für 04_szenenerkennung.py

@@ -1,0 +1,1 @@
+# Platzhalter für 07_standbilder.py

@@ -1,0 +1,1 @@
+# Platzhalter für 05_midframe_extraktion.py
