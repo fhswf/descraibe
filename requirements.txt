@@ -3,3 +3,6 @@ pydub
 openai
 transformers
 pandas
+moviepy
+pydub
+whisper
