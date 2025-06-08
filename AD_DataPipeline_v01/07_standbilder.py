@@ -15,6 +15,8 @@
 '''
 # Aufruf der Funktion ermöglicht das Exportieren von Bildern aus einem Video
 #
+# >> Einfachster Aufruf zur Umwandlung einer benannten "Film.mp4", im gleichen Ordner wie diese Datei: python 07_standbilder.py
+#
 # Parameter:
 #
 # Film: video_path - .mp4 erwartet
