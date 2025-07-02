@@ -5,7 +5,7 @@
 #
 # Gruppe: Adriana Klaja, Claus-Peter Koch
 #
-# Version: 0.2.0.0  - 25.06.2025 
+# Version: 0.2.1.0  - 02.07.2025 - Update auf .SRT Ausgabe als Untertitelformat
 #
 # !!!!! Testversion für Audiodeskription aus einer MP4 !!!!! 
 #
@@ -19,7 +19,7 @@
 #    -- Audiofilter für Musik > Spektrum der Sprache
 #    -- Voice Activity Detectors(VAD)
 #
-# - Sprecher Erkennung - Wer spricht (falls es mehrere Sprecher gibt)
+# - Sprecher Erkennung - Wer spricht (falls es mehrere Sprecher gibt) >> WhipsperX
 #
 ##################################################################
 '''
@@ -65,7 +65,6 @@ from datetime import timedelta
 import torch
 import argparse
 import soundfile as sf
-import webrtcvad
 import json #optional
 
 
@@ -201,6 +200,7 @@ def format_time_min_sec_ms(input_str: str) -> str:
     # Formatierung
     return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
 
+
 def save_transcript_txt(segments, txt_path="transkript.txt"):
     """
     Speichert ein Transkript bestehend aus Zeitsegmenten und Text in einer Textdatei.
@@ -229,8 +229,38 @@ def save_transcript_txt(segments, txt_path="transkript.txt"):
             f.write(f"[{start:06.2f} - {end:06.2f}; {duration:05.2f}] [{start_m_s_ms}-{end_m_s_ms}] {text}\n")
         return(True)
             
-            
-            
+
+def format_time_srt(seconds: float) -> str:
+    """
+    Wandelt Sekunden (float) in das SRT-Zeitformat: hh:mm:ss,SSS
+    """
+    total_ms = int(round(seconds * 1000))
+    hours = total_ms // 3600000
+    minutes = (total_ms % 3600000) // 60000
+    secs = (total_ms % 60000) // 1000
+    millis = total_ms % 1000
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def save_transcript_srt(segments, srt_path="transcript.srt"):
+    """
+    Speichert ein Transkript im SRT-Standard.
+
+    Args:
+        segments (list[dict]): Liste von Segmenten mit 'start' (float), 'end' (float), 'text' (str)
+        srt_path (str): Zielpfad der SRT-Datei
+
+    Returns:
+        True bei Erfolg
+    """
+    with open(srt_path, "w", encoding="utf-8") as f:
+        for idx, seg in enumerate(segments, start=1):
+            start = format_time_srt(seg['start'])
+            end = format_time_srt(seg['end'])
+            text = seg['text'].strip()
+            f.write(f"{idx}\n{start} --> {end}\n{text}\n\n")
+    return True
+
 
 def transkription_mit_zeitstempel(wav_file,txt_file,mod_lvl="L"):
     """
@@ -272,6 +302,7 @@ def transkription_mit_zeitstempel(wav_file,txt_file,mod_lvl="L"):
     )
         
     save_transcript_txt(result["segments"], txt_file)
+    save_transcript_srt(result["segments"], "srt_transkript.srt")
     print("Aktuelle Uhrzeit:", datetime.now().strftime("%H:%M:%S"))
     print(f"Transkript gespeichert unter: {txt_file}")
 
@@ -292,8 +323,8 @@ if __name__ == "__main__":
     # Argumente parsen und Funktion starten
     args = parser.parse_args()
 
-    temp_audio = "temp_audio.wav"   #<-- Entfällt bei Anpassung
-    temp_audio2 = "temp_audio2.wav"   #<-- Entfällt bei Anpassung
+    temp_audio = "temp_audio.wav"   #<-- Entfällt bei Anpassung an Vorgängergruppe
+    temp_audio2 = "temp_audio2.wav"   #<-- Entfällt bei Anpassung an Vorgängergruppe
     extract_audio(mp4_path=args.wav_file, wav_path=temp_audio ) # wird entfernt, sobald .wav als eingabe bereitgestellt wird.
     extract_speech_preserve_timeline(temp_audio,temp_audio2) # Lädt Audio und führt eine Spracherkennung durch - dort wo nicht gesprochen wird soll gemutet werden.
     
