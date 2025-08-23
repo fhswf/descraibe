@@ -14,11 +14,18 @@ def detect_scene_timestamps (video_path:str, screenshot_path = None):
             Standbilder zu Beginn der neuen Szene werden in <Screenshot_path> abgelegt
     """
 
-    scene_timestamps = detect(video_path, ContentDetector())
-    print(type(scene_timestamps))
-    if screenshot_path != None: 
-        videostream = open_video(video_path)
-        images = save_images(scene_list=scene_timestamps,video=videostream,output_dir=screenshot_path,num_images=1)
-        return (scene_timestamps, images)
-    else:
-        return scene_timestamps
+    try:
+        scene_timestamps = detect(video_path, ContentDetector())
+        print(type(scene_timestamps))
+        if screenshot_path != None: 
+            videostream = open_video(video_path)
+            images = save_images(scene_list=scene_timestamps,video=videostream,output_dir=screenshot_path,num_images=1)
+            return (scene_timestamps, images)
+        else:
+            return scene_timestamps
+    except AttributeError as error:
+        print(f"{error}")
+    except IOError as error:
+        print(f"there was an error trying to parse the data{error}")
+    except SyntaxError as error:
+        print(f"Error processing path: {error}")
