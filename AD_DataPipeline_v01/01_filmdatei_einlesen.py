@@ -9,5 +9,10 @@ def load_movie (file_path):
     Returns:
         Video (VideoFileClip) 
     """
-    video = VideoFileClip(file_path)
-    return video
+    try:
+        video = VideoFileClip(file_path)
+        return video
+    except IOError as error:
+        print(f"there was an error trying to parse the data{error}")
+    except SyntaxError as error:
+        print(f"Error processing path: {error}")
