@@ -5,7 +5,7 @@
 #
 # Gruppe: Adriana Klaja, Claus-Peter Koch
 #
-# Version: 0.1.0.0  - 08.06.2025 
+# Version: 0.2.1.0  - 02.07.2025 - Update auf .SRT Ausgabe als Untertitelformat
 #
 # !!!!! Testversion für Audiodeskription aus einer MP4 !!!!! 
 #
@@ -19,7 +19,7 @@
 #    -- Audiofilter für Musik > Spektrum der Sprache
 #    -- Voice Activity Detectors(VAD)
 #
-# - Sprecher Erkennung - Wer spricht (falls es mehrere Sprecher gibt)
+# - Sprecher Erkennung - Wer spricht (falls es mehrere Sprecher gibt) >> WhipsperX
 #
 ##################################################################
 '''
@@ -39,6 +39,9 @@
 '''
 
 #%pip install --upgrade setuptools wheel
+#!pip install numpy
+#!pip install moviepy
+#!pip install 
 #!pip install --upgrade pip setuptools wheel
 #!pip install webrtcvad-wheels
 #!pip install webrtcvad
@@ -61,7 +64,7 @@ from datetime import datetime
 from datetime import timedelta
 import torch
 import argparse
-
+import soundfile as sf
 import json #optional
 
 
@@ -103,7 +106,62 @@ def extract_audio(mp4_path, wav_path, sample_rate=16000):
     os.remove(temp_wav) # löschen der temporären Datei
     return(True)
 
+def extract_speech_preserve_timeline(input_wav: str,
+                                     output_wav: str,
+                                     sr: int = 16000,
+                                     vad_aggressiveness: int = 2):
+    """
+    Extrahiert aus einer WAV-Datei nur die Sprachanteile,
+    ersetzt alle anderen Segmente durch Stille gleicher Länge
+    und speichert das Ergebnis als WAV mit identischer Gesamtdauer.
+    """
+    # 1) Audio einlesen
+    print(f"[+] Lese Audio ({sr} Hz, Mono) aus '{input_wav}' …")
+    audio, sample_rate = sf.read(input_wav)
 
+    # Samplingrate anpassen, falls erforderlich
+    if sample_rate != sr:
+        raise ValueError(f"Erwartete Samplingrate {sr}, gefunden {sample_rate}")
+
+    # Stereo → Mono, falls nötig
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+
+    total_samples = len(audio)
+
+    # 2) VAD initialisieren
+    print(f"[+] Initialisiere VAD (Aggressivität={vad_aggressiveness}) …")
+    vad = webrtcvad.Vad(vad_aggressiveness)
+    frame_ms = 30  # Frame-Größe in ms
+    frame_size = int(sr * frame_ms / 1000)
+
+    # Auf Frame-Grenzen auffüllen
+    padding = (frame_size - total_samples % frame_size) % frame_size
+    padded = np.pad(audio, (0, padding), mode="constant")
+
+    # 3) Frame-weises Durchlaufen und Ersetzen
+    print("[+] Durchsuche Frames und ersetze Nicht‑Sprache durch Stille …")
+    output_frames = []
+    num_frames = len(padded) // frame_size
+    for i in range(num_frames):
+        start = i * frame_size
+        frame = padded[start:start + frame_size]
+        # PCM-Bytes für webrtcvad
+        pcm = (frame * 32768).astype(np.int16).tobytes()
+        if vad.is_speech(pcm, sample_rate=sr):
+            output_frames.append(frame)
+        else:
+            # Ersetze durch Null-Frame (Stille)
+            output_frames.append(np.zeros_like(frame))
+
+    # 4) Rekonstruieren und auf Original-Länge trimmen
+    processed = np.concatenate(output_frames)
+    processed = processed[:total_samples]
+
+    # 5) Speichern
+    print(f"[+] Schreibe Ergebnis ({len(processed)/sr:.2f} s) nach '{output_wav}' …")
+    sf.write(output_wav, processed, sr)
+    print("[✓] Fertig – Gesamtdauer und Time Alignment erhalten.")
 
 def read_wave(path):
     """ Funktion liest eine .wav Datei ein.
@@ -122,6 +180,25 @@ def read_wave(path):
         assert wf.getframerate() == 16000
         pcm_data = wf.readframes(wf.getnframes())
         return pcm_data, wf.getframerate()
+
+
+def format_time_min_sec_ms(input_str: str) -> str:
+    """
+    Wandelt einen String im Format 'Sekunden.Millisekunden' (z.B. '103.06')
+    in 'Minuten:Sekunden:Millisekunden' (z.B. '01:43.060') um.
+    """
+    try:
+        # in float-Sekunden parsen
+        total_seconds = float(input_str)
+    except ValueError:
+        return ""
+    # Gesamte Millisekunden
+    total_ms = int(round(total_seconds * 1000))
+    minutes = total_ms // 60000
+    seconds = (total_ms % 60000) // 1000
+    milliseconds = total_ms % 1000
+    # Formatierung
+    return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
 
 
 def save_transcript_txt(segments, txt_path="transkript.txt"):
@@ -146,12 +223,44 @@ def save_transcript_txt(segments, txt_path="transkript.txt"):
             start = seg['start']
             end = seg['end']
             duration = end - start
+            start_m_s_ms = format_time_min_sec_ms(start)
+            end_m_s_ms = format_time_min_sec_ms(end)
             text = seg['text'].strip()
-            f.write(f"[{start:06.2f} - {end:06.2f}; {duration:05.2f}] {text}\n")
+            f.write(f"[{start:06.2f} - {end:06.2f}; {duration:05.2f}] [{start_m_s_ms}-{end_m_s_ms}] {text}\n")
         return(True)
             
-            
-            
+
+def format_time_srt(seconds: float) -> str:
+    """
+    Wandelt Sekunden (float) in das SRT-Zeitformat: hh:mm:ss,SSS
+    """
+    total_ms = int(round(seconds * 1000))
+    hours = total_ms // 3600000
+    minutes = (total_ms % 3600000) // 60000
+    secs = (total_ms % 60000) // 1000
+    millis = total_ms % 1000
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def save_transcript_srt(segments, srt_path="transcript.srt"):
+    """
+    Speichert ein Transkript im SRT-Standard.
+
+    Args:
+        segments (list[dict]): Liste von Segmenten mit 'start' (float), 'end' (float), 'text' (str)
+        srt_path (str): Zielpfad der SRT-Datei
+
+    Returns:
+        True bei Erfolg
+    """
+    with open(srt_path, "w", encoding="utf-8") as f:
+        for idx, seg in enumerate(segments, start=1):
+            start = format_time_srt(seg['start'])
+            end = format_time_srt(seg['end'])
+            text = seg['text'].strip()
+            f.write(f"{idx}\n{start} --> {end}\n{text}\n\n")
+    return True
+
 
 def transkription_mit_zeitstempel(wav_file,txt_file,mod_lvl="L"):
     """
@@ -178,13 +287,13 @@ def transkription_mit_zeitstempel(wav_file,txt_file,mod_lvl="L"):
     
     if(mod_lvl == "L"):
         model = whisper.load_model("large", device=device)  # nur Modell laden #large # medium
-        print("whisper Large Modell wird verwendet! Lange Ausführungsdauer!")
+        print("whisper Large Modell wird verwendet! Lange Ausrührungsdauer!")
     elif (mod_lvl == "M"):
         model = whisper.load_model("medium", device=device)  # nur Modell laden #large # medium
-        print("whisper medium Modell wird verwendet! Mittlere Ausführungsdauer - Texte genau kontrollieren!")
+        print("whisper medium Modell wird verwendet! Mittlere Ausrührungsdauer - Texte genau kontrollieren!")
     elif (mod_lvl == "S"):
         model = whisper.load_model("small", device=device)  # nur Modell laden #large # medium
-        print("whisper small Modell wird verwendet! kurze Ausführungsdauer - Texte genau kontrollieren - oft weniger gute Texte!")
+        print("whisper small Modell wird verwendet! kurze Ausrührungsdauer - Texte genau kontrollieren - oft weniger gute Texte!")
         
     result = model.transcribe(
         wav_file,
@@ -193,42 +302,10 @@ def transkription_mit_zeitstempel(wav_file,txt_file,mod_lvl="L"):
     )
         
     save_transcript_txt(result["segments"], txt_file)
+    save_transcript_srt(result["segments"], "srt_transkript.srt")
     print("Aktuelle Uhrzeit:", datetime.now().strftime("%H:%M:%S"))
     print(f"Transkript gespeichert unter: {txt_file}")
 
-# In[17]:
-
-'''
-def main(mp4_path):
-    wav_path = os.path.join(script_dir, "audio_temp.wav")
-    extract_audio(mp4_path, wav_path)
-
-    audio, sample_rate = read_wave(wav_path)
-    vad = webrtcvad.Vad(2)
-    frames = list(frame_generator(30, audio, sample_rate))
-    segments = vad_collector(sample_rate, 30, 300, vad, frames)
-
-    os.remove(wav_path)
-
-    save_segments_to_json(segments)
-    print("Unbearbeitete Segmente gespeichert in speech_segments.json")
-
-    # Optional zusammenfassen
-    merged = merge_segments(segments, threshold=0.51) #0.25s = 250ms
-    
-    print("\nZusammengefasste Sprachsegmente:")
-    for start, end in merged:
-        dauer = end - start
-        print(f"{start:.2f} - {end:.2f} - Dauer: {dauer:.2f}s")
-
-    # WAV nochmal erstellen für MP3-Export (falls zuvor gelöscht)
-    extract_audio(mp4_path, wav_path)
-    export_segments_to_mp3(wav_path, merged, max_count=5)
-    os.remove(wav_path)
-    
-    transkription_mit_zeitstempel("/home/claus/Englands-Biber---Der-Chaos-Effekt_238831350_01_AD.mp4")
-
-'''
 
 
 if __name__ == "__main__":
@@ -246,8 +323,10 @@ if __name__ == "__main__":
     # Argumente parsen und Funktion starten
     args = parser.parse_args()
 
-    temp_audio = "temp_audio.wav"   #<-- Entfällt bei Anpassung
+    temp_audio = "temp_audio.wav"   #<-- Entfällt bei Anpassung an Vorgängergruppe
+    temp_audio2 = "temp_audio2.wav"   #<-- Entfällt bei Anpassung an Vorgängergruppe
     extract_audio(mp4_path=args.wav_file, wav_path=temp_audio ) # wird entfernt, sobald .wav als eingabe bereitgestellt wird.
-
-    transkription_mit_zeitstempel(wav_file=temp_audio, txt_file=args.output_file, mod_lvl=args.transkript_lvl) #wav_file=args.wav_file,  <-- Für Anpassung
+    extract_speech_preserve_timeline(temp_audio,temp_audio2) # Lädt Audio und führt eine Spracherkennung durch - dort wo nicht gesprochen wird soll gemutet werden.
+    
+    transkription_mit_zeitstempel(wav_file=temp_audio2, txt_file=args.output_file, mod_lvl=args.transkript_lvl) #wav_file=args.wav_file,  <-- Für Anpassung
 
