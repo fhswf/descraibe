@@ -66,6 +66,7 @@ import torch
 import argparse
 import soundfile as sf
 import json #optional
+import csv
 
 
 # Gerät wählen (automatisch GPU, wenn vorhanden, sonst CPU)
@@ -77,6 +78,27 @@ print("Gerätname: ", torch.cuda.get_device_name(0))
 #Aktuelles Arbeitsverzeichnis ermitteln:
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
+def save_transcript_csv(segments, csv_path="transkript.csv"):
+    """
+    Speichert ein Transkript als CSV-Datei mit den Spalten:
+    Startzeit (s), Endzeit (s), Transkriptions-Text.
+
+    Args:
+        segments (list[dict]): Liste von Segmenten mit 'start' (float), 'end' (float), 'text' (str)
+        csv_path (str): Zielpfad der CSV-Datei
+
+    Returns:
+        True bei Erfolg
+    """
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter=";")  # Semikolon als Trennzeichen (Excel-freundlich)
+        writer.writerow(["Startzeit", "Endzeit", "Text"])  # Header
+        for seg in segments:
+            start = f"{seg['start']:.2f}"
+            end = f"{seg['end']:.2f}"
+            text = seg['text'].strip()
+            writer.writerow([start, end, text])
+    return True
 
 def extract_audio(mp4_path, wav_path, sample_rate=16000):
     """ Funktion extrahiert Audio aus MP4, wandelt um zu 16kHz, Mono, 16bit PCM
@@ -301,6 +323,7 @@ def transkription_mit_zeitstempel(wav_file,txt_file,mod_lvl="L"):
         condition_on_previous_text=False
     )
         
+    save_transcript_csv(result["segments"], "srt_transkript.csv")
     save_transcript_txt(result["segments"], txt_file)
     save_transcript_srt(result["segments"], "srt_transkript.srt")
     print("Aktuelle Uhrzeit:", datetime.now().strftime("%H:%M:%S"))
