@@ -94,10 +94,10 @@ def save_transcript_csv(segments, csv_path="transkript.csv"):
         writer = csv.writer(f, delimiter=";")  # Semikolon als Trennzeichen (Excel-freundlich)
         writer.writerow(["Startzeit", "Endzeit", "Text"])  # Header
         for seg in segments:
-            start = f"{seg['start']:.2f}"
-            end = f"{seg['end']:.2f}"
+            start = seg['start']
+            end = seg['end']                    
             text = seg['text'].strip()
-            writer.writerow([start, end, text])
+            writer.writerow([format_time_srt(start), format_time_srt(end), text])
     return True
 
 def extract_audio(mp4_path, wav_path, sample_rate=16000):
