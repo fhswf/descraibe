@@ -31,8 +31,7 @@ Das Notebook ist modular konzipiert und kann mit den bestehenden Komponenten des
 ---
 
 ### 👥 Autoren & Beitrag
-Dieses Modul wurde im Rahmen des Projekts **„Audiodeskriptionen_SS25 – Entwicklung einer KI-Lösung zur Erstellung von Audiodeskriptionen“**  
-an der **Fachhochschule Südwestfalen (FH SWF)** entwickelt.
+Dieses Modul wurde im Rahmen des Projekts **„Audiodeskriptionen_SS25 – Entwicklung einer KI-Lösung zur Erstellung von Audiodeskriptionen“** an der **Fachhochschule Südwestfalen (FH SWF)** entwickelt.
 
 **Team:**  
 Projektteam Audiodeskriptionen_SS25
