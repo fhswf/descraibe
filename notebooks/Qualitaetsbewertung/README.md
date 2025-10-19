@@ -23,7 +23,7 @@ Das Notebook ist modular konzipiert und kann mit den bestehenden Komponenten des
 - **Visualisierung:** Jupyter-basiertes Dashboard mit einheitlichem Layout  
 - **Output:** Markdown-Report oder segmentweiser TXT-Export
 
-📄 **Datei:** [📘 Qualitätsbewertung Notebook](notebooks/Qualitaetsbewertung/AD_Qualitaetsnotebook_Pro.ipynb)
+📄 **Datei:** [📘 Qualitätsbewertung Notebook](./AD_Qualitätsnotebook_Pro.ipynb)
 
 ### 🖼️ Beispiel-Screenshot
 (notebooks/Qualitaetsbewertung/assets/dashboard_vorschau.png)
