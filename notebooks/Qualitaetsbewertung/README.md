@@ -24,15 +24,15 @@ Das Notebook ist modular konzipiert und kann mit den bestehenden Komponenten des
 - **Output:** Markdown-Report oder segmentweiser TXT-Export
 
 📄 **Datei:** [📘 Qualitätsbewertung Notebook](notebooks/Qualitaetsbewertung/AD_Qualitaetsnotebook_Pro.ipynb)
+
 ### 🖼️ Beispiel-Screenshot
 (notebooks/Qualitaetsbewertung/assets/dashboard_vorschau.png)
 
 ---
 
 ### 👥 Autoren & Beitrag
-Dieses Modul wurde im Rahmen des Projekts  
-**„Audiodeskriptionen_SS25 – Entwicklung einer KI-Lösung zur Erstellung von Audiodeskriptionen“**  
-an der **Fachhochschule Südwestfalen (fhSWF)** entwickelt.
+Dieses Modul wurde im Rahmen des Projekts **„Audiodeskriptionen_SS25 – Entwicklung einer KI-Lösung zur Erstellung von Audiodeskriptionen“**  
+an der **Fachhochschule Südwestfalen (FH SWF)** entwickelt.
 
 **Team:**  
 Projektteam Audiodeskriptionen_SS25
