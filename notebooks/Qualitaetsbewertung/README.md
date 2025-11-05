@@ -1,7 +1,6 @@
 ## 🎯 AD-Qualitätsnotebook Pro – Automatisierte Bewertung von Audiodeskriptionen
 
-Das **AD-Qualitätsnotebook Pro** ist Teil des Projekts *Audiodeskriptionen_SS25*  
-und dient der interaktiven **Qualitätsanalyse von Audiodeskriptionen** zwischen  
+Das **AD-Qualitätsnotebook Pro** ist Teil des Projekts *Audiodeskriptionen_SS25* und dient der interaktiven **Qualitätsanalyse von Audiodeskriptionen** zwischen  
 **MDR-Referenztexten** und **KI-generierten Hypothesen**.
 
 ---
@@ -36,18 +35,15 @@ und dient der interaktiven **Qualitätsanalyse von Audiodeskriptionen** zwischen
 
 ### 🧠 Zielsetzung
 
-Das Notebook bietet ein **reproduzierbares, metrisch fundiertes Verfahren** zur  
-**objektiven Qualitätsbewertung** von Audiodeskriptionen.  
-Es kombiniert linguistische, semantische, stilistische und zeitliche Kennzahlen  
-in einer einheitlichen Oberfläche und liefert sowohl **numerische Ergebnisse**  
+Das Notebook bietet ein **reproduzierbares, metrisch fundiertes Verfahren** zur **objektiven Qualitätsbewertung** von Audiodeskriptionen.  
+Es kombiniert linguistische, semantische, stilistische und zeitliche Kennzahlen in einer einheitlichen Oberfläche und liefert sowohl **numerische Ergebnisse**  
 als auch **qualitative Interpretationen & Rubric-Noten**.
 
 ---
 
 ### 👥 Autoren & Beitrag
 
-Entwickelt im Rahmen des Projekts  
-**„Audiodeskriptionen_SS25 – KI-gestützte Erstellung und Evaluation von Audiodeskriptionen“**  
+Entwickelt im Rahmen des Projekts **„Audiodeskriptionen_SS25 – KI-gestützte Erstellung und Evaluation von Audiodeskriptionen“**  
 an der **Fachhochschule Südwestfalen (FH SWF)**.
 
 **Projektteam:** *Audiodeskriptionen_SS25*
@@ -56,5 +52,4 @@ an der **Fachhochschule Südwestfalen (FH SWF)**.
 
 ### 📜 Lizenz
 
-Dieses Notebook ist ausschließlich für **Forschung und Lehre** bestimmt.  
-Eine kommerzielle Nutzung oder Weitergabe erfordert die **schriftliche Genehmigung** der Autor:innen.
+Dieses Notebook ist ausschließlich für **Forschung und Lehre** bestimmt. Eine kommerzielle Nutzung oder Weitergabe erfordert die **schriftliche Genehmigung** der Autor:innen.
