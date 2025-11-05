@@ -28,8 +28,7 @@ Das **AD-Qualitätsnotebook Pro** ist Teil des Projekts *Audiodeskriptionen_SS25
 | **Visualisierung** | Jupyter-Dashboard mit Sticky-Header, Scroll-Container (72 vh) |
 | **Output** | Markdown-Report, TSV oder segmentweiser TXT-Export |
 
-📄 **Notebook:** [📘 AD_Qualitaetsnotebook_Pro.ipynb](./notebooks/Qualitaetsbewertung/AD_Qualitaetsnotebook_Pro.ipynb)
-
+📄 **Notebook:** [📘 AD_Qualitätsnotebook_Pro.ipynb](https://github.com/fhswf/Audiodeskriptionen_SS25/blob/main/notebooks/Qualitaetsbewertung/AD_Qualit%C3%A4tsnotebook_Pro.ipynb)
 ---
 
 ### 🧠 Zielsetzung
