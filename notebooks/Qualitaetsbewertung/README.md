@@ -1,7 +1,6 @@
 ## 🎯 AD-Qualitätsnotebook Pro – Automatisierte Bewertung von Audiodeskriptionen
 
-Das **AD-Qualitätsnotebook Pro** ist Teil des Projekts *Audiodeskriptionen_SS25* und dient der interaktiven **Qualitätsanalyse von Audiodeskriptionen** zwischen  
-**MDR-Referenztexten** und **KI-generierten Hypothesen**.
+Das **AD-Qualitätsnotebook Pro** ist Teil des Projekts *Audiodeskriptionen_SS25* und dient der interaktiven **Qualitätsanalyse von Audiodeskriptionen** zwischen **MDR-Referenztexten** und **KI-generierten Hypothesen**.
 
 ---
 
@@ -36,8 +35,7 @@ Das **AD-Qualitätsnotebook Pro** ist Teil des Projekts *Audiodeskriptionen_SS25
 ### 🧠 Zielsetzung
 
 Das Notebook bietet ein **reproduzierbares, metrisch fundiertes Verfahren** zur **objektiven Qualitätsbewertung** von Audiodeskriptionen.  
-Es kombiniert linguistische, semantische, stilistische und zeitliche Kennzahlen in einer einheitlichen Oberfläche und liefert sowohl **numerische Ergebnisse**  
-als auch **qualitative Interpretationen & Rubric-Noten**.
+Es kombiniert linguistische, semantische, stilistische und zeitliche Kennzahlen in einer einheitlichen Oberfläche und liefert sowohl **numerische Ergebnisse** als auch **qualitative Interpretationen & Rubric-Noten**.
 
 ---
 
