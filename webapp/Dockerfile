@@ -48,15 +48,36 @@ COPY webapp/backend ./backend
 COPY webapp/frontend ./frontend
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
+# All values can be overridden at runtime:
+#   docker run -e OPENAI_API_KEY=sk-... -e MAX_UPLOAD_MB=4096 ...
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    # Job data is written here; mount a volume to persist across restarts.
-    JOBS_DIR=/app/jobs
+    # --- Required (no default) -----------------------------------
+    # OpenAI API key used for GPT scene-description calls.
+    # Must be set at runtime; the app will reject /api/run/gpt if absent.
+    OPENAI_API_KEY="" \
+    # --- Job storage ---------------------------------------------
+    # Directory where per-job temp files (video, audio, frames) are written.
+    # Mount a persistent volume here to survive container restarts.
+    AD_JOBS_DIR=/app/jobs \
+    # --- Upload limits -------------------------------------------
+    # Maximum video upload size in megabytes (Flask MAX_CONTENT_LENGTH).
+    MAX_UPLOAD_MB=2048 \
+    # --- Gunicorn tuning -----------------------------------------
+    # Keep workers=1: the pipeline holds large in-memory state per job.
+    # Increase threads for concurrent SSE streams.
+    GUNICORN_WORKERS=1 \
+    GUNICORN_THREADS=4 \
+    GUNICORN_TIMEOUT=600
 
 VOLUME ["/app/jobs"]
 
 EXPOSE 5000
 
-# Use gunicorn for production; Flask dev server for quick debugging.
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", \
-     "--timeout", "600", "backend.app:app"]
+CMD ["sh", "-c", \
+    "gunicorn --bind 0.0.0.0:5000 \
+    --workers $GUNICORN_WORKERS \
+    --threads $GUNICORN_THREADS \
+    --timeout $GUNICORN_TIMEOUT \
+    backend.app:app"]

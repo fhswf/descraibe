@@ -27,6 +27,10 @@ FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="")
 CORS(app)
 
+# Limit upload size (default 2 GB – videos can be large).
+_max_mb = int(os.environ.get("MAX_UPLOAD_MB", 2048))
+app.config["MAX_CONTENT_LENGTH"] = _max_mb * 1024 * 1024
+
 # SSE progress queues per job
 _SSE_QUEUES: Dict[str, queue.Queue] = {}
 _SSE_LOCK = threading.Lock()
@@ -42,6 +46,13 @@ def _get_queue(job_id: str) -> queue.Queue:
 def _push(job_id: str, event: str, data: Any) -> None:
     q = _get_queue(job_id)
     q.put({"event": event, "data": data})
+
+
+# ── Health check (K8s liveness / readiness probe) ─────────────────────────────
+
+@app.route("/api/ping")
+def ping():
+    return jsonify({"status": "ok"})
 
 
 # ── Frontend ───────────────────────────────────────────────────────────────────
@@ -144,6 +155,12 @@ def run_transcribe():
         "use_fw_vad": bool(body.get("use_fw_vad", True)),
         "vad_min_silence_ms": int(body.get("vad_min_silence_ms", 350)),
         "word_timestamps": bool(body.get("word_timestamps", True)),
+        # Silero-gate (P1-A): double-VAD pass to prevent timestamp bleed
+        "use_silero_gate": bool(body.get("use_silero_gate", True)),
+        "silero_threshold": float(body.get("silero_threshold", 0.70)),
+        "silero_min_speech_s": float(body.get("silero_min_speech_s", 0.45)),
+        "silero_min_silence_s": float(body.get("silero_min_silence_s", 0.55)),
+        "clamp_to_vad": bool(body.get("clamp_to_vad", True)),
     }
 
     # We need audio – extract if needed
@@ -237,7 +254,8 @@ def run_slots():
             pad_in_s=float(body.get("pad_in_s", 0.0)),
             pad_out_s=float(body.get("pad_out_s", 0.0)),
             speech_df=speech_df if body.get("filter_whisper", False) else None,
-            whisper_overlap_threshold=float(body.get("whisper_overlap_threshold", 0.5)),
+            whisper_overlap_eps_s=float(body.get("whisper_overlap_eps_s",
+                                                  body.get("whisper_overlap_threshold", 0.05))),
         )
 
         qr = slots_mod.quality_report(

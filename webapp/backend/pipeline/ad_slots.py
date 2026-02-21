@@ -1,4 +1,10 @@
-"""ad_slots.py – convert pauses → AD slots + quality assessment (Steps 04b-04d)."""
+"""ad_slots.py – convert pauses → AD slots + quality assessment (Steps 04b-04d).
+
+Fidelity note (aligned with FINAL notebook step 04b):
+- Whisper overlap filter uses a fixed absolute epsilon (default 0.05 s) matching
+  the notebook's WHISPER_OVERLAP_EPS = 0.05 constant, NOT a slot-duration ratio.
+- Quality report uses absolute overlap thresholds: red >= 0.20 s, yellow >= 0.05 s.
+"""
 from __future__ import annotations
 
 from typing import Optional
@@ -12,12 +18,13 @@ def pauses_to_slots(
     pad_in_s: float = 0.0,
     pad_out_s: float = 0.0,
     speech_df: Optional[pd.DataFrame] = None,
-    whisper_overlap_threshold: float = 0.5,
+    whisper_overlap_eps_s: float = 0.05,  # absolute epsilon, not ratio
 ) -> pd.DataFrame:
     """Convert pause DataFrames into AD slots.
 
-    Applies padding and minimum duration filter.  When `speech_df` is provided
-    slots that overlap significantly with detected speech are flagged and removed.
+    Applies padding and minimum duration filter.  When `speech_df` is provided,
+    slots that overlap with any speech segment by more than `whisper_overlap_eps_s`
+    seconds are removed (absolute epsilon matching the notebook's logic).
 
     Returns: DataFrame(slot, start_s, end_s, dur_s)
     """
@@ -32,25 +39,38 @@ def pauses_to_slots(
                          "dur_s": round(dur, 3)})
 
     slots = pd.DataFrame(rows if rows else [], columns=["start_s", "end_s", "dur_s"])
-    slots.insert(0, "slot", range(len(slots)))
+    slots.insert(0, "slot", range(1, len(slots) + 1))
 
     # Filter using whisper speech segments if provided
     if speech_df is not None and not speech_df.empty and not slots.empty:
         keep = []
         for _, s_row in slots.iterrows():
-            overlap = _total_overlap(s_row["start_s"], s_row["end_s"], speech_df)
-            ratio = overlap / max(s_row["dur_s"], 1e-9)
-            keep.append(ratio < whisper_overlap_threshold)
+            has_speech = _any_overlap_exceeds(
+                s_row["start_s"], s_row["end_s"], speech_df, whisper_overlap_eps_s
+            )
+            keep.append(not has_speech)
         slots = slots[keep].reset_index(drop=True)
-        slots["slot"] = range(len(slots))
+        slots["slot"] = range(1, len(slots) + 1)
 
     return slots
 
 
+def _any_overlap_exceeds(
+    start: float, end: float, speech_df: pd.DataFrame, eps_s: float
+) -> bool:
+    """Return True if any speech segment overlaps [start, end] by more than eps_s."""
+    for _, row in speech_df.iterrows():
+        overlap = max(0.0, min(end, float(row["end_s"])) - max(start, float(row["start_s"])))
+        if overlap > eps_s:
+            return True
+    return False
+
+
 def _total_overlap(start: float, end: float, speech_df: pd.DataFrame) -> float:
+    """Return total seconds of overlap between [start, end] and all speech segments."""
     total = 0.0
     for _, row in speech_df.iterrows():
-        overlap = max(0.0, min(end, row["end_s"]) - max(start, row["start_s"]))
+        overlap = max(0.0, min(end, float(row["end_s"])) - max(start, float(row["start_s"])))
         total += overlap
     return total
 
@@ -60,31 +80,43 @@ def quality_report(
     speech_df: pd.DataFrame,
     slots_df: pd.DataFrame,
 ) -> dict:
-    """Generate a quality report comparing pauses with whisper speech.
+    """Generate a quality report comparing pauses with silero/whisper speech.
+
+    Traffic-light thresholds (absolute overlap, aligning with notebook step 04d):
+      GREEN  : max speech overlap < 0.05 s
+      YELLOW : max speech overlap 0.05 – 0.20 s
+      RED    : max speech overlap >= 0.20 s
 
     Returns dict with:
         - total_pauses, total_slots
         - green_count / yellow_count / red_count
         - rows: list of dicts per pause with traffic-light status
     """
+    RED_S = 0.20
+    YELLOW_S = 0.05
+
     rows = []
     for _, p in pauses_df.iterrows():
-        overlap = _total_overlap(p["start_s"], p["end_s"], speech_df)
-        ratio = overlap / max(p["dur_s"], 1e-9)
+        # Compute max single-segment overlap (notebook uses max, not total)
+        max_ov = 0.0
+        for _, sp in speech_df.iterrows():
+            ov = max(0.0, min(float(p["end_s"]), float(sp["end_s"])) -
+                         max(float(p["start_s"]), float(sp["start_s"])))
+            if ov > max_ov:
+                max_ov = ov
 
-        if ratio < 0.1:
-            status = "green"
-        elif ratio < 0.4:
+        if max_ov >= RED_S:
+            status = "red"
+        elif max_ov >= YELLOW_S:
             status = "yellow"
         else:
-            status = "red"
+            status = "green"
 
         rows.append({
             "start_s": p["start_s"],
             "end_s": p["end_s"],
             "dur_s": p["dur_s"],
-            "speech_overlap_s": round(overlap, 3),
-            "overlap_ratio": round(ratio, 3),
+            "speech_overlap_max_s": round(max_ov, 3),
             "status": status,
         })
 

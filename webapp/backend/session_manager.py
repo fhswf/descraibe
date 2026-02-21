@@ -1,7 +1,7 @@
 """session_manager.py – per-job temp directories and state management."""
 from __future__ import annotations
 
-import json
+import os
 import shutil
 import threading
 import uuid
@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
-_BASE_DIR = Path("/tmp/ad_jobs")
+# Configurable via AD_JOBS_DIR env var so a Docker volume can be mounted.
+_BASE_DIR = Path(os.environ.get("AD_JOBS_DIR", "/tmp/ad_jobs"))
 _STORE: Dict[str, Dict[str, Any]] = {}
 _LOCK = threading.Lock()
 

@@ -1,0 +1,202 @@
+# Audiodeskription Webapp
+
+A Flask-based web application that runs the Audiodeskription pipeline: VAD pause detection, Whisper transcription, scene image extraction, and GPT-powered audio description generation.
+
+## Quick Start (Docker)
+
+```bash
+docker build -f webapp/Dockerfile -t audiodeskription-webapp .
+
+docker run \
+  -p 5000:5000 \
+  -e OPENAI_API_KEY=sk-... \
+  -v /my/local/jobs:/app/jobs \
+  audiodeskription-webapp
+```
+
+Then open [http://localhost:5000](http://localhost:5000).
+
+---
+
+## Environment Variables
+
+| Variable | Default | Required | Description |
+|---|---|---|---|
+| `OPENAI_API_KEY` | *(empty)* | **Yes** | OpenAI API key for GPT scene-description calls. The app will reject `/api/run/gpt` if not set. Can also be supplied per-request in the JSON body as `api_key`. |
+| `AD_JOBS_DIR` | `/app/jobs` | No | Directory where per-job temp files (uploaded video, extracted audio, frames) are written. **Mount a Docker volume here** to persist data across container restarts. |
+| `MAX_UPLOAD_MB` | `2048` | No | Maximum video upload size in megabytes. Maps to Flask's `MAX_CONTENT_LENGTH`. Increase for very large video files. |
+| `GUNICORN_WORKERS` | `1` | No | Number of gunicorn worker processes. **Keep at 1** — the pipeline stores large in-memory state (DataFrames, image lists) per job; multiple workers do not share this state. |
+| `GUNICORN_THREADS` | `4` | No | Threads per worker. Increase to handle more concurrent SSE progress streams. |
+| `GUNICORN_TIMEOUT` | `600` | No | Request timeout in seconds. Pipeline steps (Whisper transcription, GPT calls) can take several minutes. |
+
+> [!IMPORTANT]
+> `OPENAI_API_KEY` is the only **required** environment variable. The container will start without it, but calls to `/api/run/gpt` will return a `400` error until it is provided.
+
+---
+
+## GPT Config YAML
+
+The app expects a YAML file that defines **presets** – named configurations for the GPT description step. The file path is set via the `GPT_CONFIG_PATH` env var (default: `/app/config/gpt_config.yaml`).
+
+### File format
+
+```yaml
+presets:
+  <preset-name>:
+    model: gpt-4o              # OpenAI model name
+    temperature: 0.2           # 0.0 – 2.0
+    max_output_tokens: 1024    # Max tokens in the completion
+    detail: high               # Image detail level: "low" | "high" | "auto"
+```
+
+All keys inside a preset are optional — missing values fall back to the defaults used by `/api/run/gpt`.
+
+### Included presets (K8s ConfigMap default)
+
+| Preset | Model | Temp | Max tokens | Detail |
+|--------|-------|------|-----------|--------|
+| `standard` | `gpt-4o` | 0.2 | 1024 | high |
+| `fast` | `gpt-4o-mini` | 0.3 | 512 | low |
+| `quality` | `gpt-4o` | 0.1 | 2048 | high |
+
+### Local Docker usage
+
+Mount your own preset file into the container:
+
+```bash
+docker run \
+  -p 5000:5000 \
+  -e OPENAI_API_KEY=sk-... \
+  -e GPT_CONFIG_PATH=/app/config/gpt_config.yaml \
+  -v /path/to/my/gpt_config.yaml:/app/config/gpt_config.yaml:ro \
+  audiodeskription-webapp
+```
+
+### Kubernetes / ArgoCD
+
+In K8s, the file is stored as the `gpt-config` ConfigMap and mounted read-only at `/app/config/`. To add or update presets, edit [`k8s/configmap-gpt-yaml.yaml`](../k8s/configmap-gpt-yaml.yaml) and push — ArgoCD will sync the change and restart the pod automatically.
+
+---
+
+## GPT Prompt Files
+
+The notebook (step **05a**) loads the GPT prompts from **plain `.txt` files** rather than hard-coding them. The webapp's `/api/run/gpt` endpoint accepts the same content as request-body strings. Understanding the file structure helps you author prompts that match the notebook's behaviour.
+
+### The four prompt files
+
+| File | Required | Role |
+|------|----------|------|
+| `system_instruction.txt` | **Yes** | Model role & ground rules (e.g. *"You are a professional audio describer…"*). |
+| `ad_rules.txt` | **Yes** | Domain-specific AD style rules (e.g. Naturdoku conventions, sentence length, forbidden phrases). |
+| `user_instruction.txt` | **Yes** | Task description sent as the user message: what the model should produce, tone, output format. |
+| `few_shots.txt` | No | Example input/output pairs that improve stylistic consistency. |
+
+### How they are assembled (notebook `_build_prompts_from_loaded_parts`)
+
+The notebook concatenates the files into two final prompts:
+
+```
+SYSTEM_FINAL  =  system_instruction
+              +  "\n\n# Audiodeskription – Regeln\n"  +  ad_rules
+              +  "\n\n# Few-Shots / Beispiele\n"      +  few_shots   (only if provided)
+
+USER_BASE     =  user_instruction
+```
+
+`SYSTEM_FINAL` becomes the OpenAI `system` message. `USER_BASE` is sent as the `user` message together with the slot image(s).
+
+### Using prompt files with the webapp
+
+Pass the assembled text directly in the POST body of `/api/run/gpt`:
+
+```json
+{
+  "job_id": "<uuid>",
+  "system_prompt": "<contents of SYSTEM_FINAL>",
+  "user_prompt":   "<contents of USER_BASE>",
+  "model": "gpt-4o",
+  "temperature": 0.2,
+  "max_tokens": 1024,
+  "detail": "high"
+}
+```
+
+> [!TIP]
+> To replicate the notebook exactly, read your three text files locally and concatenate them with the separators shown above before sending the request. The frontend wizard's *"Prompts"* step does this for you.
+
+---
+
+## Development (without Docker)
+
+### Prerequisites
+- Python ≥ 3.11
+- [`uv`](https://docs.astral.sh/uv/) (`pip install uv` or `curl -Lsf https://astral.sh/uv/install.sh | sh`)
+- `ffmpeg` on `$PATH` (required by moviepy / scenedetect)
+
+### Install & Run
+
+```bash
+cd webapp
+uv sync                          # installs all deps from uv.lock
+
+export OPENAI_API_KEY=sk-...
+uv run python -m backend.app     # or: flask --app backend.app run --debug
+```
+
+The dev server starts on [http://localhost:5000](http://localhost:5000).
+
+---
+
+## Job Data & Persistence
+
+Each uploaded video creates a **job directory** under `$AD_JOBS_DIR/<uuid>/` containing:
+
+```
+<uuid>/
+├── <original-filename>.mp4   # uploaded video
+├── audio.wav                 # extracted 16 kHz mono audio
+├── frames/                   # scene mid-frames (JPEGs)
+├── gapfill/                  # extra frames extracted for AD slots
+└── output/
+    ├── ad_broadcast.srt
+    ├── ad_broadcast.json
+    ├── ad_directors.srt
+    └── ad_directors.json
+```
+
+> [!WARNING]
+> Job state is stored **in memory** and is lost on container restart. Only the files in `$AD_JOBS_DIR` survive. Re-uploading and re-running the pipeline is required after a restart.
+
+---
+
+## GPU Support
+
+By default the image uses the CPU-only PyTorch wheels and a slim Python base image. To enable GPU (CUDA) support:
+
+1. In `webapp/Dockerfile`, swap the base image:
+   ```dockerfile
+   # FROM python:3.11-slim
+   FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+   ```
+
+2. In `webapp/pyproject.toml`, uncomment the PyTorch CUDA index:
+   ```toml
+   [tool.uv]
+   index-url = "https://download.pytorch.org/whl/cu121"
+   ```
+
+3. Rebuild the image and run with `--gpus all`.
+
+---
+
+## Running Tests
+
+End-to-end UI tests use [Playwright](https://playwright.dev/):
+
+```bash
+cd webapp
+npm install          # install Playwright
+npm run test         # or: npx playwright test
+```
+
+The backend must be running on `http://localhost:5000` before executing tests.

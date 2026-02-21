@@ -1,0 +1,37 @@
+# GPT Preset Configuration
+# ArgoCD source: this ConfigMap is mounted into the container at /app/config/gpt_config.yaml
+# The webapp reads OPENAI_API_KEY from the environment (provided by the Secret below).
+#
+# Edit the `presets` block to add or change GPT presets.
+# The webapp's /api/run/gpt endpoint reads model/temperature/max_tokens from the request body;
+# this file is the reference preset store that can be loaded by a future /api/config/gpt_preset
+# endpoint (or directly by the notebook-compatible pipeline run).
+#
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpt-config
+  namespace: audiodeskription
+  labels:
+    app.kubernetes.io/name: audiodeskription
+    app.kubernetes.io/component: config
+data:
+  gpt_config.yaml: |
+    # Audiodeskription GPT presets
+    # Each preset defines a model configuration for the GPT description step.
+    presets:
+      standard:
+        model: gpt-4o
+        temperature: 0.2
+        max_output_tokens: 1024
+        detail: high
+      fast:
+        model: gpt-4o-mini
+        temperature: 0.3
+        max_output_tokens: 512
+        detail: low
+      quality:
+        model: gpt-4o
+        temperature: 0.1
+        max_output_tokens: 2048
+        detail: high

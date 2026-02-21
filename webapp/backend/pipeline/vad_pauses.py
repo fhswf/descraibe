@@ -27,7 +27,7 @@ def extract_pauses(
     *,
     sample_rate_hz: int = 16000,
     threshold: float = 0.5,
-    min_speech_duration_ms: int = 1500,
+    min_speech_duration_ms: int = 200,        # notebook default: 200 ms
     min_silence_duration_ms: int = 400,
     speech_pad_ms: int = 50,
     min_pause_duration_s: float = 0.3,
@@ -36,7 +36,7 @@ def extract_pauses(
     """Detect speech pauses via Silero VAD.
 
     Returns:
-        pauses_df   – DataFrame(slot, start_s, end_s, dur_s)
+        pauses_df   – DataFrame(index, start_s, end_s, dur_s)
         speech_df   – DataFrame(start_s, end_s, dur_s)
         srt_str     – SRT string of pauses
     """
