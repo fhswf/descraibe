@@ -18,6 +18,86 @@ Then open [http://localhost:5000](http://localhost:5000).
 
 ---
 
+## Kubernetes / ArgoCD Deployment
+
+All Kubernetes manifests live in [`k8s/`](../k8s/) and are managed by Kustomize.
+Point an ArgoCD **Application** at that directory — ArgoCD will create every resource
+(Namespace, ConfigMaps, Secret, PVC, Deployment, Service, Ingress) automatically.
+
+### ArgoCD Application manifest
+
+Save this as `k8s/argocd-app.yaml` (already included) and apply it **once** into the
+`argocd` namespace. It is **not** part of the Kustomize root so ArgoCD doesn't try to
+manage itself.
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: audiodeskription
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/YOUR_ORG/Audiodeskriptionen_SS25   # ← replace
+    targetRevision: main
+    path: k8s
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: audiodeskription
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+```
+
+```bash
+# Apply once – ArgoCD takes it from there
+kubectl apply -f k8s/argocd-app.yaml -n argocd
+```
+
+### Pre-flight checklist
+
+> [!IMPORTANT]
+> Complete these steps **before** applying the Application manifest:
+>
+> 1. **Image** — set your real image reference in `k8s/deployment.yaml` and `k8s/kustomization.yaml`:
+>    `ghcr.io/YOUR_ORG/audiodeskription-webapp:latest`
+> 2. **Domain** — replace `audiodeskription.example.com` in `k8s/ingress.yaml`.
+> 3. **OpenAI API key** — inject the real key via External Secrets Operator or ArgoCD Vault Plugin
+>    instead of committing it in `k8s/secret.yaml`.
+> 4. **Storage class** — update `storageClassName` in `k8s/pvc.yaml` to match your cluster
+>    (e.g. `gp2`, `longhorn`, `ceph-rbd`).
+
+### What ArgoCD deploys (`k8s/` directory)
+
+| File | Resource | Purpose |
+|------|----------|---------|
+| `namespace.yaml` | Namespace | `audiodeskription` |
+| `configmap-gpt-yaml.yaml` | ConfigMap `gpt-config` | GPT model presets → `/app/config/gpt_config.yaml` |
+| `configmap-prompts.yaml` | ConfigMap `prompts-config` | Prompt `.txt` files → `/app/config/prompts/` |
+| `secret.yaml` | Secret `openai-secret` | OpenAI API key (use ESO in production) |
+| `pvc.yaml` | PVC `audiodeskription-jobs` | 50 Gi scratch space for `/app/jobs` |
+| `deployment.yaml` | Deployment | Single-replica Flask/Gunicorn app |
+| `service.yaml` | Service | ClusterIP, port 80 → 5000 |
+| `ingress.yaml` | Ingress | Nginx, 4 GB body limit, cert-manager TLS |
+
+### Updating prompts or GPT config
+
+Edit the relevant ConfigMap file and push to `main` — ArgoCD syncs within ≈3 minutes and rolls the pod.
+
+```bash
+# Example: update the AD rules
+vim k8s/configmap-prompts.yaml
+git commit -am "chore: update AD rules"
+git push
+```
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Required | Description |
