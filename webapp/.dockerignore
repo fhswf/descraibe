@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# Python artefacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.eggs
+
+# uv / pip caches
+.cache
+.uv
+
+# Virtual environments
+.venv
+venv
+env
+
+# Node / Playwright (tests only, not needed in image)
+node_modules
+test-results
+playwright.config.js
+tests/
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea
+.vscode
+
+# Job data (mounted as a volume at runtime)
+jobs/
