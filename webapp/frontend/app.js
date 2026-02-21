@@ -115,7 +115,31 @@ function animateBar(id, cur, total) {
     });
 })();
 
+function resetSession() {
+    STATE.jobId = null;
+    STATE.currentStep = 0;
+    STATE.doneSteps.clear();
+    STATE.gptRecords = [];
+    if (STATE.sse) STATE.sse.close();
+    STATE.sse = null;
+
+    // Remove active/done from all sidebar buttons
+    document.querySelectorAll('.step-btn').forEach(b => b.classList.remove('done', 'active'));
+
+    // Hide all result cards
+    document.querySelectorAll('.card').forEach(c => {
+        if (c.id.endsWith('-results-card') || c.id.endsWith('-quality-card') || c.id === 'video-stats-card' || c.id === 'gpt-done-card' || c.id === 'results-records-card') {
+            c.style.display = 'none';
+        }
+    });
+
+    // Reset progress bars
+    document.querySelectorAll('.progress-bar-fill').forEach(el => el.style.width = '0%');
+}
+
 function doUpload(file) {
+    resetSession();
+
     const prog = document.getElementById('upload-progress');
     const bar = document.getElementById('upload-bar');
     const msg = document.getElementById('upload-msg');
@@ -138,12 +162,14 @@ function doUpload(file) {
         if (res.error) { msg.textContent = '❌ ' + res.error; return; }
 
         STATE.jobId = res.job_id;
+        localStorage.setItem('ad_job_id', STATE.jobId);
         document.getElementById('job-badge').textContent = 'Job: ' + STATE.jobId.slice(0, 8) + '…';
         bar.style.width = '100%';
         msg.textContent = '✅ Upload abgeschlossen';
 
         renderVideoStats(res.stats);
         markDone(0);
+        goTo(1); // Jump to VAD step visually
         connectSSE(STATE.jobId);
     };
 
@@ -517,3 +543,85 @@ function buildTable(rows, cols) {
     }).join('');
     return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
+
+// ── Session Restoration ────────────────────────────────────────────────────────
+function restoreSession() {
+    const savedJobId = localStorage.getItem('ad_job_id');
+    if (!savedJobId) return;
+
+    fetch(`/api/results/${savedJobId}`)
+        .then(r => r.ok ? r.json() : Promise.reject('Not found'))
+        .then(data => {
+            if (data.error) throw new Error(data.error);
+
+            STATE.jobId = data.job_id;
+            document.getElementById('job-badge').textContent = 'Job: ' + STATE.jobId.slice(0, 8) + '…';
+
+            // Reconstruct timeline visually
+            if (data.video_stats) {
+                renderVideoStats(data.video_stats);
+                markDone(0);
+                document.getElementById('upload-bar').style.width = '100%';
+                document.getElementById('upload-msg').textContent = '✅ Session wiederhergestellt';
+                document.getElementById('upload-progress').classList.add('visible');
+            }
+
+            let nextStep = 1;
+
+            if (data.pauses_count > 0) {
+                markDone(1);
+                document.getElementById('vad-results-card').style.display = 'block';
+                document.getElementById('vad-table').innerHTML = `<p style="padding:12px;color:var(--text-muted)">${data.pauses_count} Sprechpausen geladen.</p>`;
+                nextStep = 2;
+            }
+
+            if (data.transcript_meta) {
+                markDone(2);
+                document.getElementById('transcribe-results-card').style.display = 'block';
+                document.getElementById('transcribe-meta').innerHTML = `<span class="badge badge-green">Transkript geladen</span>`;
+                nextStep = 3;
+            }
+
+            if (data.slots_count > 0) {
+                markDone(3);
+                document.getElementById('slots-quality-card').style.display = 'block';
+                if (data.quality_report) {
+                    const q = data.quality_report;
+                    document.getElementById('slots-quality-summary').innerHTML = `
+                      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+                        <span class="badge badge-violet">${data.slots_count} Slots</span>
+                        <span class="badge badge-green">🟢 ${q.green_count} OK</span>
+                        <span class="badge badge-yellow">🟡 ${q.yellow_count} Grenzwertig</span>
+                        <span class="badge badge-red">🔴 ${q.red_count} Kritisch</span>
+                      </div>
+                    `;
+                }
+                nextStep = 4;
+            }
+
+            if (data.images_count > 0) {
+                markDone(4);
+                document.getElementById('images-results-card').style.display = 'block';
+                document.getElementById('images-summary').innerHTML = `<span class="badge badge-violet">${data.images_count} Bilder geladen</span>`;
+                nextStep = 5;
+            }
+
+            if (data.output_paths && Object.keys(data.output_paths).length > 0) {
+                markDone(6);
+                document.getElementById('gpt-done-card').style.display = 'block';
+                document.getElementById('gpt-done-summary').innerHTML = `<span class="badge badge-green">✅ Skripte generiert</span>`;
+                nextStep = 7;
+            }
+
+            connectSSE(STATE.jobId);
+            goTo(nextStep);
+        })
+        .catch(err => {
+            console.warn("Could not restore session:", err);
+            localStorage.removeItem('ad_job_id');
+        });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    restoreSession();
+});

@@ -67,9 +67,18 @@ def extract_pauses(
             force_reload=False,
             onnx=False,
         )
-        (get_speech_timestamps, _, read_audio, *_) = utils
+        (get_speech_timestamps, *_) = utils
 
-        audio = read_audio(wav_path, sampling_rate=sample_rate_hz)
+        # Read audio with soundfile instead of Silero's read_audio utility,
+        # which relies on torchaudio.load() – broken in torchaudio >= 2.9
+        # (requires torchcodec).  soundfile is already a project dependency.
+        wav_data, sr = sf.read(wav_path, dtype="float32", always_2d=False)
+        if sr != sample_rate_hz:
+            raise RuntimeError(
+                f"WAV sample rate {sr} != expected {sample_rate_hz}. "
+                "Re-extract audio at the correct sample rate."
+            )
+        audio = torch.from_numpy(wav_data)
 
         if progress_cb:
             progress_cb("Running VAD…")
