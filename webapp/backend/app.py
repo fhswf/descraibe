@@ -48,6 +48,55 @@ def _push(job_id: str, event: str, data: Any) -> None:
     q.put({"event": event, "data": data})
 
 
+# ── Prompt auto-loader (GPT_PROMPTS_DIR) ──────────────────────────────────────
+# Mirrors the notebook's _build_prompts_from_loaded_parts() logic (step 05a).
+# Returns (system_final, user_base) assembled from the four .txt files.
+
+def _load_prompts_from_dir(prompts_dir: str) -> tuple[str, str] | None:
+    """Load and assemble prompt files from a directory.
+
+    Reads:
+      system_instruction.txt  (required)
+      ad_rules.txt            (required)
+      user_instruction.txt    (required)
+      few_shots.txt           (optional)
+
+    Assembles:
+      SYSTEM_FINAL = system_instruction
+                   + "\n\n# Audiodeskription – Regeln\n" + ad_rules
+                   + "\n\n# Few-Shots / Beispiele\n"    + few_shots (if non-empty)
+      USER_BASE    = user_instruction
+
+    Returns (system_final, user_base), or None if any required file is missing/empty.
+    """
+    d = Path(prompts_dir)
+    required = ["system_instruction.txt", "ad_rules.txt", "user_instruction.txt"]
+    texts: dict[str, str] = {}
+    for fname in required:
+        p = d / fname
+        if not p.exists():
+            return None
+        txt = p.read_text(encoding="utf-8").strip()
+        if not txt:
+            return None
+        texts[fname] = txt
+
+    system_final = (
+        texts["system_instruction.txt"]
+        + "\n\n# Audiodeskription – Regeln\n"
+        + texts["ad_rules.txt"]
+    )
+
+    few_shots_path = d / "few_shots.txt"
+    if few_shots_path.exists():
+        shots = few_shots_path.read_text(encoding="utf-8").strip()
+        if shots:
+            system_final += "\n\n# Few-Shots / Beispiele\n" + shots
+
+    user_base = texts["user_instruction.txt"]
+    return system_final.strip(), user_base.strip()
+
+
 # ── Health check (K8s liveness / readiness probe) ─────────────────────────────
 
 @app.route("/api/ping")
@@ -359,6 +408,19 @@ def run_gpt():
 
     system_prompt = body.get("system_prompt", "")
     user_prompt = body.get("user_prompt", "")
+
+    # If the request body doesn't supply prompts, try loading from GPT_PROMPTS_DIR.
+    # This allows K8s ConfigMap-mounted files to serve as the default prompt source.
+    if not system_prompt or not user_prompt:
+        prompts_dir = os.environ.get("GPT_PROMPTS_DIR", "")
+        if prompts_dir:
+            loaded = _load_prompts_from_dir(prompts_dir)
+            if loaded:
+                if not system_prompt:
+                    system_prompt = loaded[0]
+                if not user_prompt:
+                    user_prompt = loaded[1]
+
     cut = body.get("cut", "broadcast")
 
     gpt_params = {

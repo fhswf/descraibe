@@ -32,6 +32,11 @@ spec:
             # GPT config path: the ConfigMap is mounted as a file at /app/config/
             - name: GPT_CONFIG_PATH
               value: /app/config/gpt_config.yaml
+            # Prompt templates dir: the prompts ConfigMap is mounted at /app/config/prompts/
+            # The app assembles system_instruction + ad_rules [+ few_shots] → SYSTEM_FINAL
+            # and uses user_instruction as USER_BASE when no explicit prompts are in the request.
+            - name: GPT_PROMPTS_DIR
+              value: /app/config/prompts
             # Standard gunicorn/app tuning
             - name: AD_JOBS_DIR
               value: /app/jobs
@@ -53,6 +58,9 @@ spec:
               mountPath: /app/jobs
             - name: gpt-config
               mountPath: /app/config
+              readOnly: true
+            - name: prompts-config
+              mountPath: /app/config/prompts
               readOnly: true
           # ── Resources ────────────────────────────────────────────────────────
           # Minimum viable for CPU inference. Adjust for GPU nodes.
@@ -87,3 +95,6 @@ spec:
         - name: gpt-config
           configMap:
             name: gpt-config
+        - name: prompts-config
+          configMap:
+            name: prompts-config

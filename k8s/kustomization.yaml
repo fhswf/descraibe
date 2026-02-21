@@ -13,6 +13,7 @@ resources:
   - namespace.yaml
   - pvc.yaml
   - configmap-gpt-yaml.yaml
+  - configmap-prompts.yaml
   - secret.yaml          # ⚠ Replace with External Secrets / Vault in production
   - deployment.yaml
   - service.yaml

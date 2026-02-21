@@ -28,6 +28,8 @@ Then open [http://localhost:5000](http://localhost:5000).
 | `GUNICORN_WORKERS` | `1` | No | Number of gunicorn worker processes. **Keep at 1** — the pipeline stores large in-memory state (DataFrames, image lists) per job; multiple workers do not share this state. |
 | `GUNICORN_THREADS` | `4` | No | Threads per worker. Increase to handle more concurrent SSE progress streams. |
 | `GUNICORN_TIMEOUT` | `600` | No | Request timeout in seconds. Pipeline steps (Whisper transcription, GPT calls) can take several minutes. |
+| `GPT_CONFIG_PATH` | `/app/config/gpt_config.yaml` | No | Path to the GPT preset YAML (see section below). |
+| `GPT_PROMPTS_DIR` | *(unset)* | No | Directory containing the four prompt `.txt` files. When set, `/api/run/gpt` reads and assembles prompts automatically if none are supplied in the request body (see *GPT Prompt Files* section below). |
 
 > [!IMPORTANT]
 > `OPENAI_API_KEY` is the only **required** environment variable. The container will start without it, but calls to `/api/run/gpt` will return a `400` error until it is provided.
@@ -123,6 +125,32 @@ Pass the assembled text directly in the POST body of `/api/run/gpt`:
 
 > [!TIP]
 > To replicate the notebook exactly, read your three text files locally and concatenate them with the separators shown above before sending the request. The frontend wizard's *"Prompts"* step does this for you.
+
+### Auto-loading via `GPT_PROMPTS_DIR`
+
+When the `GPT_PROMPTS_DIR` environment variable is set, the app reads the four files from
+that directory at request time and assembles `SYSTEM_FINAL` / `USER_BASE` automatically.
+Explicit `system_prompt` / `user_prompt` fields in the request body always take precedence.
+
+#### Local Docker usage
+
+```bash
+mkdir -p my_prompts
+# put your .txt files in my_prompts/
+docker run \
+  -p 5000:5000 \
+  -e OPENAI_API_KEY=sk-... \
+  -e GPT_PROMPTS_DIR=/app/config/prompts \
+  -v $(pwd)/my_prompts:/app/config/prompts:ro \
+  audiodeskription-webapp
+```
+
+#### Kubernetes / ArgoCD
+
+The prompts are stored in [`k8s/configmap-prompts.yaml`](../k8s/configmap-prompts.yaml) and
+mounted read-only at `/app/config/prompts/`. Edit the file and push — ArgoCD will sync and
+restart the pod. The `GPT_PROMPTS_DIR=/app/config/prompts` env var is already set in
+[`k8s/deployment.yaml`](../k8s/deployment.yaml).
 
 ---
 
