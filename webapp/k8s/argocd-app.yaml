@@ -29,7 +29,7 @@ spec:
   project: default
 
   source:
-    repoURL: https://github.com/fhswf/Audiodeskriptionen_SS25
+    repoURL: git@github.com:fhswf/Audiodeskriptionen_SS25.git
     targetRevision: main
     path: webapp/k8s
 
