@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: audiodeskription
+  namespace: audiodeskription
+  labels:
+    app.kubernetes.io/name: audiodeskription
+    app.kubernetes.io/component: webapp
+  annotations:
+    # Nginx ingress: disable body size limit for large video uploads.
+    nginx.ingress.kubernetes.io/proxy-body-size: "4096m"
+    # Increase timeouts for long-running pipeline requests and SSE streams.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    # TLS: cert-manager – comment out if you manage TLS externally.
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - audiodeskription.example.com   # ← replace with your domain
+      secretName: audiodeskription-tls
+  rules:
+    - host: audiodeskription.example.com  # ← replace with your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: audiodeskription
+                port:
+                  name: http
