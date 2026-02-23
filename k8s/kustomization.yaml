@@ -23,4 +23,4 @@ resources:
 # ArgoCD Image Updater or CI can update the newTag field automatically.
 images:
   - name: ghcr.io/YOUR_ORG/audiodeskription-webapp
-    newTag: latest         # ← override per environment or let Image Updater manage this
+    newTag: 0.1.0 # x-release-please-version
