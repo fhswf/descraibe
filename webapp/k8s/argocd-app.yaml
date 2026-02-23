@@ -23,9 +23,9 @@ spec:
   project: default
 
   source:
-    repoURL: https://github.com/YOUR_ORG/Audiodeskriptionen_SS25   # ← replace
-    targetRevision: main                                            # ← branch / tag / SHA
-    path: k8s                                                       # Kustomize root
+    repoURL: https://github.com/fhswf/Audiodeskriptionen_SS25
+    targetRevision: main
+    path: webapp/k8s
 
   destination:
     server: https://kubernetes.default.svc
