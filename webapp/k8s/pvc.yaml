@@ -12,8 +12,8 @@ metadata:
     app.kubernetes.io/component: storage
 spec:
   accessModes:
-    - ReadWriteOnce
-  storageClassName: ceph-block
+    - ReadWriteMany
+  storageClassName: ceph-filesystem
   resources:
     requests:
       storage: 50Gi
