@@ -227,7 +227,8 @@ def transcribe(
     start_s: Optional[float] = None,
     end_s: Optional[float] = None,
     # callbacks
-    progress_cb: Optional[Callable[[str], None]] = None,
+    progress_cb: Optional[Callable[[str, Optional[float], Optional[float]], None]] = None,
+    total_duration_s: float = 0.0,
 ) -> tuple[pd.DataFrame, str, dict]:
     """Transcribe audio using faster-whisper with optional Silero-gate.
 
@@ -322,6 +323,11 @@ def transcribe(
     # ── Collect rows ──────────────────────────────────────────────────────
     rows = []
     out_idx = 1
+    
+    # We want to report progress during generation
+    total_duration_s = max(total_duration_s, 0.1) # Avoid div-by-zero
+    last_reported_s = -1.0
+    
     for seg in segments:
         text = (getattr(seg, "text", "") or "").strip()
         if not text:
@@ -359,6 +365,18 @@ def transcribe(
             "no_speech_prob": float(nsp) if nsp is not None else None,
         })
         out_idx += 1
+        
+        # Report progress if 1 second has passed since last report to avoid spamming the frontend
+        if progress_cb and (seg_end - last_reported_s >= 1.0 or seg_end >= total_duration_s):
+             # Format mm:ss
+             def fmt(secs):
+                 secs = int(max(0, secs))
+                 return f"{secs//60:02}:{secs%60:02}"
+             
+             capped_end = min(seg_end, total_duration_s)
+             msg = f"Transcribing… {fmt(capped_end)} / {fmt(total_duration_s)}"
+             progress_cb(msg, capped_end, total_duration_s)
+             last_reported_s = seg_end
 
     cols = ["index", "start_s", "end_s", "dur_s", "text", "avg_logprob", "no_speech_prob"]
     df = pd.DataFrame(rows, columns=cols)

@@ -96,10 +96,12 @@ function animateBar(id, cur, total) {
     const el = document.getElementById(id);
     if (!el) return;
     if (cur !== null && total !== null && total > 0) {
-        el.style.width = Math.round((cur / total) * 100) + '%';
+        el.style.width = Math.max(1, Math.round((cur / total) * 100)) + '%';
+        el.classList.remove('indeterminate-pulse');
     } else {
         // indeterminate – pulse at 60%
-        if (parseFloat(el.style.width) < 60) el.style.width = '60%';
+        if (parseFloat(el.style.width || '0') < 60) el.style.width = '60%';
+        el.classList.add('indeterminate-pulse');
     }
 }
 

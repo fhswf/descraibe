@@ -282,19 +282,38 @@ def run_transcribe():
             audio_path = str(Path(sm.job_dir(job_id)) / "audio.wav")
 
             from moviepy import VideoFileClip
+            from proglog import ProgressBarLogger
+
+            class AudioExtractionLogger(ProgressBarLogger):
+                def bars_callback(self, bar, attr, value, old_value=None):
+                    if bar == "t":
+                        total = self.state.bars[bar].get("total", 1)
+                        _push(job_id, "progress", {
+                            "step": "transcribe",
+                            "message": "Extracting audio…",
+                            "current": value,
+                            "total": total
+                        })
+
             clip = VideoFileClip(video_path)
+            logger = AudioExtractionLogger()
             clip.audio.write_audiofile(audio_path, fps=16000, nbytes=2,
-                                       ffmpeg_params=["-ac", "1"], logger=None)
+                                       ffmpeg_params=["-ac", "1"], logger=logger)
             clip.close()
             sm.update_job(job_id, audio_path=audio_path)
 
-            _push(job_id, "progress", {"step": "transcribe", "message": "Running Whisper…"})
+            _push(job_id, "progress", {"step": "transcribe", "message": "Running Whisper…", "current": 0, "total": 100})
 
-            def cb(msg):
-                _push(job_id, "progress", {"step": "transcribe", "message": msg})
+            def cb(msg, cur=None, total=None):
+                _push(job_id, "progress", {"step": "transcribe", "message": msg, "current": cur, "total": total})
+
+            video_stats = job.get("video_stats", {})
+            total_duration = video_stats.get("duration_s", 0)
 
             seg_df, srt_str, meta = trans_mod.transcribe(
-                audio_path, progress_cb=cb, **params
+                audio_path, progress_cb=cb, 
+                total_duration_s=total_duration,
+                **params
             )
             sm.update_job(job_id,
                           segments_df=seg_df,
