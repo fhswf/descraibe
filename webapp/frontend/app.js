@@ -56,6 +56,8 @@ function handleSSEEvent(payload) {
         onVADDone(data);
     } else if (event === 'transcribe_done') {
         onTranscribeDone(data);
+    } else if (event === 'slots_done') {
+        onSlotsDone(data);
     } else if (event === 'images_done') {
         onImagesDone(data);
     } else if (event === 'gpt_done') {
@@ -77,6 +79,9 @@ function handleProgress(data) {
     } else if (step === 'transcribe') {
         document.getElementById('transcribe-msg').textContent = msg;
         animateBar('transcribe-bar', cur, total);
+    } else if (step === 'slots') {
+        document.getElementById('slots-msg').textContent = msg;
+        animateBar('slots-bar', cur, total);
     } else if (step === 'images') {
         document.getElementById('images-msg').textContent = msg;
         animateBar('images-bar', cur, total);
@@ -290,6 +295,8 @@ function onTranscribeDone(data) {
 // ── Step 3: Slots ───────────────────────────────────────────────────────────────
 function runSlots() {
     if (!STATE.jobId) return alert('Bitte zuerst Sprechpausen erkennen.');
+    document.getElementById('slots-progress-card').style.display = 'block';
+    document.getElementById('slots-quality-card').style.display = 'none';
 
     fetch('/api/run/slots', {
         method: 'POST',
@@ -301,14 +308,16 @@ function runSlots() {
             pad_out_s: parseFloat(document.getElementById('slot-pad-out').value),
             filter_whisper: document.getElementById('slot-filter-whisper').value === 'true',
         }),
-    }).then(r => r.json()).then(data => {
-        if (data.error) return showError('slots', data.error);
+    });
+}
 
-        const card = document.getElementById('slots-quality-card');
-        card.style.display = 'block';
+function onSlotsDone(data) {
+    document.getElementById('slots-progress-card').style.display = 'none';
+    const card = document.getElementById('slots-quality-card');
+    card.style.display = 'block';
 
-        const q = data.quality || {};
-        document.getElementById('slots-quality-summary').innerHTML = `
+    const q = data.quality || {};
+    document.getElementById('slots-quality-summary').innerHTML = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
         <span class="badge badge-violet">${data.slot_count} Slots</span>
         <span class="badge badge-green">🟢 ${q.green_count} OK</span>
@@ -316,12 +325,11 @@ function runSlots() {
         <span class="badge badge-red">🔴 ${q.red_count} Kritisch</span>
       </div>`;
 
-        const painted = (data.slots || []).map(r => ({ ...r, _color: '' }));
-        document.getElementById('slots-table').innerHTML = buildTable(
-            painted, ['slot', 'start_s', 'end_s', 'dur_s']
-        );
-        markDone(3);
-    });
+    const painted = (data.slots || []).map(r => ({ ...r, _color: '' }));
+    document.getElementById('slots-table').innerHTML = buildTable(
+        painted, ['slot', 'start_s', 'end_s', 'dur_s']
+    );
+    markDone(3);
 }
 
 // ── Step 4: Images ──────────────────────────────────────────────────────────────
@@ -497,6 +505,7 @@ function showError(step, message) {
     const map = {
         vad: 'vad-progress-card',
         transcribe: 'transcribe-progress-card',
+        slots: 'slots-progress-card',
         images: 'images-progress-card',
         gpt: 'gpt-progress-card',
     };

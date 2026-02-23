@@ -293,34 +293,44 @@ def run_slots():
     if not job or job.get("pauses_df") is None:
         return jsonify({"error": "Pauses not available. Run VAD first."}), 400
 
-    try:
-        pauses_df: pd.DataFrame = job["pauses_df"]
-        speech_df: pd.DataFrame = job.get("segments_df")  # whisper transcript
+    def run():
+        try:
+            sm.set_status(job_id, "running", "Generating AD slots…")
+            _push(job_id, "progress", {"step": "slots", "message": "Converting pauses to slots…"})
 
-        slots_df = slots_mod.pauses_to_slots(
-            pauses_df,
-            min_slot_s=float(body.get("min_slot_s", 1.0)),
-            pad_in_s=float(body.get("pad_in_s", 0.0)),
-            pad_out_s=float(body.get("pad_out_s", 0.0)),
-            speech_df=speech_df if body.get("filter_whisper", False) else None,
-            whisper_overlap_eps_s=float(body.get("whisper_overlap_eps_s",
-                                                  body.get("whisper_overlap_threshold", 0.05))),
-        )
+            pauses_df: pd.DataFrame = job["pauses_df"]
+            speech_df: pd.DataFrame = job.get("segments_df")  # whisper transcript
 
-        qr = slots_mod.quality_report(
-            pauses_df,
-            speech_df if speech_df is not None else pd.DataFrame(columns=["start_s","end_s"]),
-            slots_df,
-        )
+            slots_df = slots_mod.pauses_to_slots(
+                pauses_df,
+                min_slot_s=float(body.get("min_slot_s", 1.0)),
+                pad_in_s=float(body.get("pad_in_s", 0.0)),
+                pad_out_s=float(body.get("pad_out_s", 0.0)),
+                speech_df=speech_df if body.get("filter_whisper", False) else None,
+                whisper_overlap_eps_s=float(body.get("whisper_overlap_eps_s",
+                                                      body.get("whisper_overlap_threshold", 0.05))),
+            )
 
-        sm.update_job(job_id, slots_df=slots_df, quality_report=qr)
-        return jsonify({
-            "slot_count": len(slots_df),
-            "slots": slots_df.to_dict(orient="records"),
-            "quality": qr,
-        })
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+            _push(job_id, "progress", {"step": "slots", "message": "Evaluating quality…"})
+            qr = slots_mod.quality_report(
+                pauses_df,
+                speech_df if speech_df is not None else pd.DataFrame(columns=["start_s","end_s"]),
+                slots_df,
+            )
+
+            sm.update_job(job_id, slots_df=slots_df, quality_report=qr)
+            sm.set_status(job_id, "idle")
+            _push(job_id, "slots_done", {
+                "slot_count": len(slots_df),
+                "slots": slots_df.to_dict(orient="records"),
+                "quality": qr,
+            })
+        except Exception as exc:
+            sm.set_status(job_id, "error", str(exc))
+            _push(job_id, "error", {"step": "slots", "message": str(exc)})
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"status": "started"})
 
 
 # ── Image Extraction ───────────────────────────────────────────────────────────
