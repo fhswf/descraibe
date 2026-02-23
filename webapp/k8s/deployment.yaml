@@ -42,12 +42,8 @@ spec:
               value: /app/jobs
             - name: MAX_UPLOAD_MB
               value: "4096"
-            - name: GUNICORN_WORKERS
-              value: "1"
-            - name: GUNICORN_THREADS
-              value: "4"
-            - name: GUNICORN_TIMEOUT
-              value: "600"
+            - name: UVICORN_WORKERS
+              value: "2"
           # OpenAI API key injected from Secret
           envFrom:
             - secretRef:
@@ -72,7 +68,7 @@ spec:
             limits:
               nvidia.com/mig-2g.20gb: "1"
               cpu: "4"
-              memory: "16Gi"
+              memory: "32Gi"
           # ── Probes ───────────────────────────────────────────────────────────
           livenessProbe:
             httpGet:
