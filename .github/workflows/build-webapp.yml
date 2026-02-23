@@ -14,12 +14,18 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/audiodeskription-webapp
 
 jobs:
   build:
+    # Skip if this is a push event and the commit message is a release-please commit
+    if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore: release') }}"
     runs-on: ubuntu-latest
     permissions:
       contents: read
