@@ -25,7 +25,7 @@ env:
 jobs:
   build:
     # Skip if this is a push event and the commit message is a release-please commit
-    if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore: release') }}"
+    if: "${{ inputs.release_tag != '' || github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore: release') }}"
     runs-on: ubuntu-latest
     permissions:
       contents: read
