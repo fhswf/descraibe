@@ -40,8 +40,7 @@ WORKDIR /app
 COPY webapp/pyproject.toml .
 
 # Install Python dependencies (no dev extras, compile bytecode)
-RUN uv pip install --system --no-cache . \
-    && uv pip install --system --no-cache gunicorn
+RUN uv pip install --system --no-cache .
 
 # Copy the rest of the webapp
 COPY webapp/backend ./backend
@@ -64,20 +63,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # --- Upload limits -------------------------------------------
     # Maximum video upload size in megabytes (Flask MAX_CONTENT_LENGTH).
     MAX_UPLOAD_MB=2048 \
-    # --- Gunicorn tuning -----------------------------------------
+    # --- Uvicorn tuning -----------------------------------------
     # Keep workers=1: the pipeline holds large in-memory state per job.
-    # Increase threads for concurrent SSE streams.
-    GUNICORN_WORKERS=1 \
-    GUNICORN_THREADS=4 \
-    GUNICORN_TIMEOUT=600
+    UVICORN_WORKERS=1 \
+    # Keep-alive timeout (seconds). Uvicorn does not have a hard request timeout like Gunicorn.
+    UVICORN_TIMEOUT=600
 
 VOLUME ["/app/jobs"]
 
 EXPOSE 5000
 
 CMD ["sh", "-c", \
-    "gunicorn --bind 0.0.0.0:5000 \
-    --workers $GUNICORN_WORKERS \
-    --threads $GUNICORN_THREADS \
-    --timeout $GUNICORN_TIMEOUT \
-    backend.app:app"]
+    "uvicorn backend.app:app \
+    --host 0.0.0.0 \
+    --port 5000 \
+    --workers $UVICORN_WORKERS \
+    --timeout-keep-alive $UVICORN_TIMEOUT"]
