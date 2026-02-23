@@ -92,7 +92,7 @@ def describe_slots(
     if slot_map_df is not None and not slot_map_df.empty:
         for _, r in slot_map_df.iterrows():
             sid = int(r["slot"])
-            ip = str(r.get("image_path", ""))
+            ip = str(r.get("img_path", ""))
             if ip and Path(ip).exists():
                 img_index.setdefault(sid, []).append(ip)
 

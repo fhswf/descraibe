@@ -25,6 +25,27 @@ async function checkSystemInfo() {
                 badge.style.color = 'var(--accent)';
             }
         }
+
+        if (data.default_prompts) {
+            const dp = data.default_prompts;
+            const sysPromptEl = document.getElementById('system-prompt');
+            const usrPromptEl = document.getElementById('user-prompt');
+            const adRulesEl = document.getElementById('ad-rules');
+            const fewShotsEl = document.getElementById('few-shots');
+
+            if (dp.system_instruction && sysPromptEl) {
+                sysPromptEl.value = dp.system_instruction;
+            }
+            if (dp.ad_rules && adRulesEl) {
+                adRulesEl.value = dp.ad_rules;
+            }
+            if (dp.few_shots && fewShotsEl) {
+                fewShotsEl.value = dp.few_shots;
+            }
+            if (dp.user_instruction && usrPromptEl) {
+                usrPromptEl.value = dp.user_instruction;
+            }
+        }
     } catch (e) {
         console.warn('Could not fetch system info:', e);
     }
@@ -57,7 +78,7 @@ function markDone(step) {
 // ── SSE connection ──────────────────────────────────────────────────────────────
 function connectSSE(jobId) {
     if (STATE.sse) STATE.sse.close();
-    STATE.sse = new EventSource(`/api/status/${jobId}`);
+    STATE.sse = new EventSource(`/api/jobs/${jobId}/stream`);
     STATE.sse.onmessage = (ev) => {
         try {
             const payload = JSON.parse(ev.data);
@@ -186,7 +207,7 @@ async function doUpload(file) {
         // 1. Initialize or check status
         if (jobId) {
             msg.textContent = 'Prüfe auf abgebrochenen Upload...';
-            const statusRes = await fetch(`/api/upload_status?job_id=${jobId}&filename=${encodeURIComponent(file.name)}`);
+            const statusRes = await fetch(`/api/jobs/${jobId}/upload_status?filename=${encodeURIComponent(file.name)}`);
             if (statusRes.ok) {
                 const statusData = await statusRes.json();
                 if (statusData.uploaded_bytes) {
@@ -206,7 +227,7 @@ async function doUpload(file) {
             initFormData.append('total_size', file.size);
             if (jobId) initFormData.append('job_id', jobId);
 
-            const initRes = await fetch('/api/upload', { method: 'POST', body: initFormData });
+            const initRes = await fetch('/api/jobs', { method: 'POST', body: initFormData });
             if (!initRes.ok) throw new Error('Initialisierung fehlgeschlagen');
             const initData = await initRes.json();
 
@@ -240,7 +261,7 @@ async function doUpload(file) {
 
             while (!success && retryCount < 3) {
                 try {
-                    const chunkRes = await fetch('/api/upload_chunk', { method: 'POST', body: fd });
+                    const chunkRes = await fetch(`/api/jobs/${STATE.jobId}/video`, { method: 'POST', body: fd });
                     if (!chunkRes.ok) throw new Error(`HTTP error! status: ${chunkRes.status}`);
 
                     const data = await chunkRes.json();
@@ -312,7 +333,7 @@ function runVAD() {
     document.getElementById('vad-progress-card').style.display = 'block';
     document.getElementById('vad-results-card').style.display = 'none';
 
-    fetch('/api/run/vad', {
+    fetch(`/api/jobs/${STATE.jobId}/vad`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -322,7 +343,12 @@ function runVAD() {
             min_silence_duration_ms: parseInt(document.getElementById('vad-min-silence').value),
             min_pause_duration_s: parseFloat(document.getElementById('vad-min-pause').value),
         }),
-    });
+    }).then(async r => {
+        if (!r.ok) {
+            const errData = await r.json().catch(() => ({}));
+            showError('vad', errData.error || `HTTP Error ${r.status}`);
+        }
+    }).catch(err => showError('vad', err.message));
 }
 
 function onVADDone(data) {
@@ -339,7 +365,7 @@ function runTranscribe() {
     document.getElementById('transcribe-progress-card').style.display = 'block';
     document.getElementById('transcribe-results-card').style.display = 'none';
 
-    fetch('/api/run/transcribe', {
+    fetch(`/api/jobs/${STATE.jobId}/transcribe`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -348,7 +374,12 @@ function runTranscribe() {
             language: document.getElementById('whisper-lang').value,
             use_fw_vad: document.getElementById('whisper-vad').value === 'true',
         }),
-    });
+    }).then(async r => {
+        if (!r.ok) {
+            const errData = await r.json().catch(() => ({}));
+            showError('transcribe', errData.error || `HTTP Error ${r.status}`);
+        }
+    }).catch(err => showError('transcribe', err.message));
 }
 
 function uploadSRT(input) {
@@ -362,7 +393,7 @@ function uploadSRT(input) {
 
     document.getElementById('srt-upload-status').textContent = 'Wird hochgeladen…';
 
-    fetch('/api/upload_srt', { method: 'POST', body: fd }).then(r => r.json()).then(data => {
+    fetch(`/api/jobs/${STATE.jobId}/srt`, { method: 'POST', body: fd }).then(r => r.json()).then(data => {
         if (data.error) {
             document.getElementById('srt-upload-status').textContent = '❌ ' + data.error;
             return;
@@ -380,8 +411,8 @@ function onTranscribeDone(data) {
 
     const meta = data.metadata || {};
     document.getElementById('transcribe-meta').innerHTML = `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      ${meta.language ? `<span class="badge badge-teal">Sprache: ${meta.language} (${(meta.language_prob * 100).toFixed(0)}%)</span>` : ''}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            ${meta.language ? `<span class="badge badge-teal">Sprache: ${meta.language} (${(meta.language_prob * 100).toFixed(0)}%)</span>` : ''}
       ${meta.segment_count != null ? `<span class="badge badge-violet">${meta.segment_count} Segmente</span>` : ''}
       ${data.segment_count != null ? `<span class="badge badge-violet">${data.segment_count} Segmente</span>` : ''}
     </div>`;
@@ -400,7 +431,7 @@ function runSlots() {
     document.getElementById('slots-progress-card').style.display = 'block';
     document.getElementById('slots-quality-card').style.display = 'none';
 
-    fetch('/api/run/slots', {
+    fetch(`/api/jobs/${STATE.jobId}/slots`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -410,7 +441,12 @@ function runSlots() {
             pad_out_s: parseFloat(document.getElementById('slot-pad-out').value),
             filter_whisper: document.getElementById('slot-filter-whisper').value === 'true',
         }),
-    });
+    }).then(async r => {
+        if (!r.ok) {
+            const errData = await r.json().catch(() => ({}));
+            showError('slots', errData.error || `HTTP Error ${r.status}`);
+        }
+    }).catch(err => showError('slots', err.message));
 }
 
 function onSlotsDone(data) {
@@ -420,7 +456,7 @@ function onSlotsDone(data) {
 
     const q = data.quality || {};
     document.getElementById('slots-quality-summary').innerHTML = `
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
         <span class="badge badge-violet">${data.slot_count} Slots</span>
         <span class="badge badge-green">🟢 ${q.green_count} OK</span>
         <span class="badge badge-yellow">🟡 ${q.yellow_count} Grenzwertig</span>
@@ -440,7 +476,7 @@ function runImages() {
     document.getElementById('images-progress-card').style.display = 'block';
     document.getElementById('images-results-card').style.display = 'none';
 
-    fetch('/api/run/images', {
+    fetch(`/api/jobs/${STATE.jobId}/images`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -450,7 +486,12 @@ function runImages() {
             min_scene_length: parseInt(document.getElementById('img-min-scene').value),
             short_scene_s: parseFloat(document.getElementById('img-short-scene').value),
         }),
-    });
+    }).then(async r => {
+        if (!r.ok) {
+            const errData = await r.json().catch(() => ({}));
+            showError('images', errData.error || `HTTP Error ${r.status}`);
+        }
+    }).catch(err => showError('images', err.message));
 }
 
 function onImagesDone(data) {
@@ -459,7 +500,7 @@ function onImagesDone(data) {
     card.style.display = 'block';
 
     document.getElementById('images-summary').innerHTML = `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <span class="badge badge-violet">${data.scene_count} Szenenbilder</span>
       <span class="badge badge-teal">${data.slots_mapped} Slots gemappt</span>
     </div>`;
@@ -470,9 +511,9 @@ function onImagesDone(data) {
     const imgs = slotMap.filter(r => r.image_path).slice(0, 20);
     gallery.innerHTML = imgs.map(r => {
         const name = r.image_path.split('/').pop();
-        return `<img class="gallery-img" src="/api/preview/${STATE.jobId}/image/${name}"
-      alt="Slot ${r.slot}" title="Slot ${r.slot}: ${r.start_s}s–${r.end_s}s"
-      onerror="this.style.display='none'" />`;
+        return `< img class= "gallery-img" src = "/api/jobs/${STATE.jobId}/images/${name}"
+      alt = "Slot ${r.slot}" title = "Slot ${r.slot}: ${r.start_s}s–${r.end_s}s"
+      onerror = "this.style.display='none'" /> `;
     }).join('');
 
     markDone(4);
@@ -482,7 +523,7 @@ function onImagesDone(data) {
 function renderGptConfigPreview() {
     const el = document.getElementById('gpt-config-summary');
     el.innerHTML = `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <span class="badge badge-violet">Modell: ${v('gpt-model')}</span>
       <span class="badge badge-teal">T=${v('gpt-temp')}</span>
       <span class="badge badge-teal">MaxTok=${v('gpt-max-tokens')}</span>
@@ -490,14 +531,11 @@ function renderGptConfigPreview() {
       <span class="badge badge-violet">Detail: ${v('gpt-detail')}</span>
       ${v('system-prompt') ? '<span class="badge badge-green">System ✅</span>' : '<span class="badge badge-red">System fehlt!</span>'}
       ${v('user-prompt') ? '<span class="badge badge-green">User ✅</span>' : '<span class="badge badge-red">User fehlt!</span>'}
-      ${v('api-key') ? '<span class="badge badge-green">API Key ✅</span>' : '<span class="badge badge-red">API Key fehlt!</span>'}
     </div>`;
 }
 
 // ── Step 6: GPT Generation ──────────────────────────────────────────────────────
 function runGPT() {
-    const apiKey = v('api-key');
-    if (!apiKey) return alert('Bitte OpenAI API Key eingeben.');
     if (!v('system-prompt') || !v('user-prompt')) return alert('System- und User-Instruktion sind Pflichtfelder.');
     if (!STATE.jobId) return alert('Bitte zuerst alle vorherigen Schritte abschließen.');
 
@@ -513,12 +551,11 @@ function runGPT() {
     if (adRules) systemFinal += '\n\n# AD-Regeln\n' + adRules;
     if (fewShots) systemFinal += '\n\n# Few-Shots\n' + fewShots;
 
-    fetch('/api/run/gpt', {
+    fetch(`/api/jobs/${STATE.jobId}/gpt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             job_id: STATE.jobId,
-            api_key: apiKey,
             system_prompt: systemFinal,
             user_prompt: v('user-prompt'),
             model: v('gpt-model'),
@@ -527,6 +564,18 @@ function runGPT() {
             detail: v('gpt-detail'),
             cut: v('gpt-cut'),
         }),
+    }).then(async r => {
+        if (!r.ok) {
+            const errData = await r.json().catch(() => ({}));
+            const msg = errData.error || `HTTP Error ${r.status}`;
+            appendFeedLine(`❌ Fehler: ${msg}`, 'error');
+            document.getElementById('gpt-progress-msg').textContent = 'Generierung fehlgeschlagen.';
+            document.getElementById('gpt-bar').style.backgroundColor = 'var(--text-red)';
+        }
+    }).catch(err => {
+        appendFeedLine(`❌ Netzwerkfehler: ${err.message}`, 'error');
+        document.getElementById('gpt-progress-msg').textContent = 'Generierung fehlgeschlagen.';
+        document.getElementById('gpt-bar').style.backgroundColor = 'var(--text-red)';
     });
 }
 
@@ -539,12 +588,12 @@ function onGPTDone(data) {
     const errCount = data.error_count ?? 0;
 
     document.getElementById('gpt-done-summary').innerHTML = `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+            <div style = "display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;" >
       <span class="badge badge-green">✅ ${okCount} generiert</span>
       <span class="badge badge-yellow">⏩ ${skipCount} übersprungen</span>
       ${errCount ? `<span class="badge badge-red">❌ ${errCount} Fehler</span>` : ''}
-    </div>
-    <p style="font-size:0.875rem;color:var(--text-secondary)">Ausgabedateien stehen im nächsten Schritt zum Download bereit.</p>`;
+   </div>
+            <p style="font-size:0.875rem;color:var(--text-secondary)">Ausgabedateien stehen im nächsten Schritt zum Download bereit.</p>`;
 
     STATE.gptRecords = data.records || [];
     markDone(6);
@@ -564,7 +613,7 @@ function appendFeedLine(msg, cls = 'info') {
 function renderResults() {
     if (!STATE.jobId) return;
 
-    fetch(`/api/results/${STATE.jobId}`).then(r => r.json()).then(data => {
+    fetch(`/api/jobs/${STATE.jobId}`).then(r => r.json()).then(data => {
         const paths = data.output_paths || {};
         const list = document.getElementById('download-list');
 
@@ -577,7 +626,7 @@ function renderResults() {
 
         list.innerHTML = Object.entries(paths).map(([key, name]) => {
             const info = fileLabels[key] || { icon: '📁', name: key, type: '' };
-            return `<a class="download-item" href="/api/download/${STATE.jobId}/${key}" download>
+            return `<a class="download-item" href="/api/jobs/${STATE.jobId}/downloads/${key}" download>
         <span class="download-icon">${info.icon}</span>
         <span class="download-name">${info.name}</span>
         <span class="download-type">${name} &nbsp; ${info.type}</span>
@@ -602,7 +651,7 @@ function renderResults() {
 // ── Error display ───────────────────────────────────────────────────────────────
 function showError(step, message) {
     console.error(`[${step}] ${message}`);
-    const alertHtml = `<div class="alert alert-error" style="margin-top:12px;">❌ ${escHtml(message)}</div>`;
+    const alertHtml = `<div class="alert alert-error" style = "margin-top:12px;" >❌ ${escHtml(message)}</div>`;
 
     const map = {
         vad: 'vad-progress-card',
@@ -629,9 +678,9 @@ function formatDuration(s) {
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
     const sec = Math.round(s % 60);
-    if (h > 0) return `${h}h ${m}m ${sec}s`;
-    if (m > 0) return `${m}m ${sec}s`;
-    return `${sec}s`;
+    if (h > 0) return `${h}h ${m}m ${sec} s`;
+    if (m > 0) return `${m}m ${sec} s`;
+    return `${sec} s`;
 }
 
 function formatBytes(b) {
@@ -643,16 +692,16 @@ function formatBytes(b) {
 
 function buildTable(rows, cols) {
     if (!rows || rows.length === 0) return '<p style="padding:12px;color:var(--text-muted)">Keine Daten</p>';
-    const head = cols.map(c => `<th>${escHtml(c)}</th>`).join('');
+    const head = cols.map(c => `< th > ${escHtml(c)}</th > `).join('');
     const body = rows.map(row => {
         const cells = cols.map(c => {
             const val = row[c] ?? '';
             const display = typeof val === 'number' ? String(val) : String(val).slice(0, 120);
-            return `<td>${escHtml(display)}</td>`;
+            return `<td> ${escHtml(display)}</td> `;
         }).join('');
-        return `<tr>${cells}</tr>`;
+        return `<tr> ${cells}</tr> `;
     }).join('');
-    return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+    return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table> `;
 }
 
 // ── Session Restoration ────────────────────────────────────────────────────────
@@ -660,7 +709,7 @@ function restoreSession() {
     const savedJobId = localStorage.getItem('ad_job_id');
     if (!savedJobId) return;
 
-    fetch(`/api/results/${savedJobId}`)
+    fetch(`/api/jobs/${savedJobId}`)
         .then(r => r.ok ? r.json() : Promise.reject('Not found'))
         .then(data => {
             if (data.error) throw new Error(data.error);
@@ -682,14 +731,14 @@ function restoreSession() {
             if (data.pauses_count > 0) {
                 markDone(1);
                 document.getElementById('vad-results-card').style.display = 'block';
-                document.getElementById('vad-table').innerHTML = `<p style="padding:12px;color:var(--text-muted)">${data.pauses_count} Sprechpausen geladen.</p>`;
+                document.getElementById('vad-table').innerHTML = `<p style = "padding:12px;color:var(--text-muted)" > ${data.pauses_count} Sprechpausen geladen.</p> `;
                 nextStep = 2;
             }
 
             if (data.transcript_meta) {
                 markDone(2);
                 document.getElementById('transcribe-results-card').style.display = 'block';
-                document.getElementById('transcribe-meta').innerHTML = `<span class="badge badge-green">Transkript geladen</span>`;
+                document.getElementById('transcribe-meta').innerHTML = `<span class="badge badge-green" > Transkript geladen</span> `;
                 nextStep = 3;
             }
 
@@ -699,13 +748,13 @@ function restoreSession() {
                 if (data.quality_report) {
                     const q = data.quality_report;
                     document.getElementById('slots-quality-summary').innerHTML = `
-                      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
                         <span class="badge badge-violet">${data.slots_count} Slots</span>
                         <span class="badge badge-green">🟢 ${q.green_count} OK</span>
                         <span class="badge badge-yellow">🟡 ${q.yellow_count} Grenzwertig</span>
                         <span class="badge badge-red">🔴 ${q.red_count} Kritisch</span>
-                      </div>
-                    `;
+                     </div>
+            `;
                 }
                 nextStep = 4;
             }
@@ -713,14 +762,14 @@ function restoreSession() {
             if (data.images_count > 0) {
                 markDone(4);
                 document.getElementById('images-results-card').style.display = 'block';
-                document.getElementById('images-summary').innerHTML = `<span class="badge badge-violet">${data.images_count} Bilder geladen</span>`;
+                document.getElementById('images-summary').innerHTML = `<span class="badge badge-violet" > ${data.images_count} Bilder geladen</span> `;
                 nextStep = 5;
             }
 
             if (data.output_paths && Object.keys(data.output_paths).length > 0) {
                 markDone(6);
                 document.getElementById('gpt-done-card').style.display = 'block';
-                document.getElementById('gpt-done-summary').innerHTML = `<span class="badge badge-green">✅ Skripte generiert</span>`;
+                document.getElementById('gpt-done-summary').innerHTML = `<span class="badge badge-green" >✅ Skripte generiert</span> `;
                 nextStep = 7;
             }
 

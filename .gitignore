@@ -214,3 +214,4 @@ __marimo__/
 node_modules/
 webapp/test-results/
 webapp/playwright-report/
+webapp/config/

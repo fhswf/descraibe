@@ -1,16 +1,21 @@
-"""app.py – Flask web application for the Audiodeskription pipeline."""
+"""app.py – FastAPI web application for the Audiodeskription pipeline."""
 from __future__ import annotations
 
 import json
 import os
 import queue
 import threading
+import asyncio
+import uvicorn
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import pandas as pd
-from flask import Flask, Response, jsonify, request, send_file, send_from_directory
-from flask_cors import CORS
+from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException, Body
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -24,12 +29,19 @@ import session_manager as sm
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 
-app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="")
-CORS(app)
+app = FastAPI(title="Audiodeskription API", docs_url=None)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Limit upload size (default 2 GB – videos can be large).
 _max_mb = int(os.environ.get("MAX_UPLOAD_MB", 2048))
-app.config["MAX_CONTENT_LENGTH"] = _max_mb * 1024 * 1024
+# FastAPI uses starlette.requests.Request, which streams large files automatically.
 
 # SSE progress queues per job
 _SSE_QUEUES: Dict[str, queue.Queue] = {}
@@ -49,8 +61,6 @@ def _push(job_id: str, event: str, data: Any) -> None:
 
 
 # ── Prompt auto-loader (GPT_PROMPTS_DIR) ──────────────────────────────────────
-# Mirrors the notebook's _build_prompts_from_loaded_parts() logic (step 05a).
-# Returns (system_final, user_base) assembled from the four .txt files.
 
 def _load_prompts_from_dir(prompts_dir: str) -> tuple[str, str] | None:
     """Load and assemble prompt files from a directory.
@@ -96,26 +106,49 @@ def _load_prompts_from_dir(prompts_dir: str) -> tuple[str, str] | None:
     user_base = texts["user_instruction.txt"]
     return system_final.strip(), user_base.strip()
 
+def _load_raw_prompts_from_dir(prompts_dir: str) -> dict[str, str]:
+    """Load individual prompt files without assembling them for the frontend UI."""
+    d = Path(prompts_dir)
+    res = {}
+    for fname in ["system_instruction.txt", "ad_rules.txt", "user_instruction.txt", "few_shots.txt"]:
+        p = d / fname
+        if p.exists():
+            txt = p.read_text(encoding="utf-8").strip()
+            if txt:
+                res[fname.replace(".txt", "")] = txt
+    return res
+
 
 # ── Health check (K8s liveness / readiness probe) ─────────────────────────────
 
-@app.route("/api/ping")
+@app.get("/api/ping")
 def ping():
-    return jsonify({"status": "ok"})
+    return {"status": "ok"}
+
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=app.title + " - Swagger UI",
+        oauth2_redirect_url=app.swagger_ui_oauth2_redirect_url,
+        swagger_js_url="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js",
+        swagger_css_url="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css",
+    )
 
 
 # ── Frontend ───────────────────────────────────────────────────────────────────
 
-@app.route("/")
+@app.get("/")
 def index():
-    return send_from_directory(str(FRONTEND_DIR), "index.html")
+    return FileResponse(FRONTEND_DIR / "index.html")
 
 
 # ── Upload ─────────────────────────────────────────────────────────────────────
 
-@app.route("/api/system_info", methods=["GET"])
+@app.get("/api/system_info")
 def system_info():
-    """Return backend system information, such as GPU availability."""
+    """Return backend system information, such as GPU availability and default prompts."""
     gpu_available = False
     try:
         import torch
@@ -123,107 +156,105 @@ def system_info():
     except ImportError:
         pass
     
-    return jsonify({
-        "gpu_available": gpu_available
-    })
-
-@app.route("/api/upload", methods=["POST"])
-def upload():
-    # Only initialize the upload session
-    if "filename" not in request.form:
-        return jsonify({"error": "No filename provided"}), 400
-    if "total_size" not in request.form:
-        return jsonify({"error": "No total_size provided"}), 400
+    defaults = {}
+    prompts_dir = os.environ.get("GPT_PROMPTS_DIR", "")
+    if not prompts_dir:
+        # Fallback for dev environments or K8s if env is missing
+        potential_dirs = [
+            Path("/app/config/prompts"),
+            Path(__file__).parent.parent / "config" / "prompts"
+        ]
+        for d in potential_dirs:
+            if d.exists() and d.is_dir():
+                prompts_dir = str(d)
+                break
+                
+    if prompts_dir:
+        defaults = _load_raw_prompts_from_dir(prompts_dir)
     
-    # Check if a user passes an existing job ID they want to resume/re-upload to
-    # Usually the frontend will just ask POST /api/upload to create a new job
-    job_id = request.form.get("job_id")
-    if not job_id:
-        job_id = sm.create_job()
-    else:
-        # Check if job exists
-        job = sm.get_job(job_id)
-        if not job:
-            job_id = sm.create_job()
+    return {
+        "gpu_available": gpu_available,
+        "default_prompts": defaults
+    }
 
-    return jsonify({"job_id": job_id})
+@app.post("/api/jobs")
+async def create_job():
+    job_id = sm.create_job()
+    return {"job_id": job_id}
 
-@app.route("/api/upload_status", methods=["GET"])
-def upload_status():
-    job_id = request.args.get("job_id")
-    filename = request.args.get("filename")
-    
+@app.get("/api/jobs/{job_id}/upload_status")
+def upload_status(job_id: str, filename: str = None):
     if not job_id or not filename:
-        return jsonify({"error": "Missing job_id or filename"}), 400
+        return JSONResponse({"error": "Missing job_id or filename"}, status_code=400)
 
     job_path = sm.job_dir(job_id)
     if not job_path:
-        return jsonify({"error": "Unknown job"}), 404
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
 
     part_file = job_path / f"{filename}.part"
     if part_file.exists():
-        return jsonify({"uploaded_bytes": part_file.stat().st_size})
+        return {"uploaded_bytes": part_file.stat().st_size}
     
-    return jsonify({"uploaded_bytes": 0})
+    return {"uploaded_bytes": 0}
 
-@app.route("/api/upload_chunk", methods=["POST"])
-def upload_chunk():
+@app.post("/api/jobs/{job_id}/video")
+async def upload_chunk(
+    job_id: str,
+    filename: str = Form(...),
+    chunkIndex: int = Form(0),
+    totalChunks: int = Form(1),
+    chunk: UploadFile = File(...)
+):
     from pipeline import video_utils
     
-    job_id = request.form.get("job_id")
-    filename = request.form.get("filename")
-    chunk_index = int(request.form.get("chunkIndex", 0))
-    total_chunks = int(request.form.get("totalChunks", 1))
-    
     if not job_id or not filename:
-        return jsonify({"error": "Missing job_id or filename"}), 400
+        return JSONResponse({"error": "Missing job_id or filename"}, status_code=400)
     
-    file_chunk = request.files.get("chunk")
-    if not file_chunk:
-        return jsonify({"error": "No chunk data provided"}), 400
+    if not chunk:
+        return JSONResponse({"error": "No chunk data provided"}, status_code=400)
 
     job_path = sm.job_dir(job_id)
     if not job_path:
-         return jsonify({"error": "Unknown job"}), 404
+         return JSONResponse({"error": "Unknown job"}, status_code=404)
 
     part_file = job_path / f"{filename}.part"
     video_path = job_path / filename
 
     # Append the chunk
     with open(part_file, "ab") as f:
-        # If it's the first chunk, ensure we start fresh (in case of a weird retry)
-        # But wait, we want to resume! The UI will seek to the right byte. 
-        # So we just append. The frontend is responsible for sending the correct chunk.
-        f.write(file_chunk.read())
+        # We process in chunks to avoid blowing up memory
+        while True:
+            data = await chunk.read(1024 * 1024)
+            if not data:
+                break
+            f.write(data)
 
     # If it's the final chunk
-    if chunk_index == total_chunks - 1:
+    if chunkIndex == totalChunks - 1:
         # Rename part to final
         part_file.rename(video_path)
         
         try:
             stats = video_utils.get_video_stats(str(video_path))
         except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
+            return JSONResponse({"error": str(exc)}, status_code=500)
 
         sm.update_job(job_id, video_path=str(video_path), video_stats=stats)
-        return jsonify({"job_id": job_id, "stats": stats, "complete": True})
+        return {"job_id": job_id, "stats": stats, "complete": True}
 
-    return jsonify({"success": True, "complete": False})
+    return {"success": True, "complete": False}
 
 
 # ── VAD Pauses ─────────────────────────────────────────────────────────────────
 
-@app.route("/api/run/vad", methods=["POST"])
-def run_vad():
+@app.post("/api/jobs/{job_id}/vad")
+def run_vad(job_id: str, body: dict = Body(default={})):
     from pipeline import vad_pauses
-    body = request.json or {}
-    job_id = body.get("job_id")
     job = sm.get_job(job_id)
     if not job:
-        return jsonify({"error": "Unknown job"}), 404
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
     if not job.get("video_path"):
-        return jsonify({"error": "No video uploaded"}), 400
+        return JSONResponse({"error": "No video uploaded"}, status_code=400)
 
     params = {
         "threshold": float(body.get("threshold", 0.5)),
@@ -257,28 +288,24 @@ def run_vad():
             _push(job_id, "error", {"step": "vad", "message": str(exc)})
 
     threading.Thread(target=run, daemon=True).start()
-    return jsonify({"status": "started"})
+    return {"status": "started"}
 
 
 # ── Transcription ──────────────────────────────────────────────────────────────
 
-@app.route("/api/run/transcribe", methods=["POST"])
-def run_transcribe():
+@app.post("/api/jobs/{job_id}/transcribe")
+def run_transcribe(job_id: str, body: dict = Body(default={})):
     from pipeline import transcription as trans_mod
-    body = request.json or {}
-    job_id = body.get("job_id")
     job = sm.get_job(job_id)
     if not job:
-        return jsonify({"error": "Unknown job"}), 404
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
 
-    # Optional: upload existing SRT handled by /api/upload_srt
     params = {
         "model_size": body.get("model_size", "small"),
         "language": body.get("language", "de"),
         "use_fw_vad": bool(body.get("use_fw_vad", True)),
         "vad_min_silence_ms": int(body.get("vad_min_silence_ms", 350)),
         "word_timestamps": bool(body.get("word_timestamps", True)),
-        # Silero-gate (P1-A): double-VAD pass to prevent timestamp bleed
         "use_silero_gate": bool(body.get("use_silero_gate", True)),
         "silero_threshold": float(body.get("silero_threshold", 0.70)),
         "silero_min_speech_s": float(body.get("silero_min_speech_s", 0.45)),
@@ -286,7 +313,6 @@ def run_transcribe():
         "clamp_to_vad": bool(body.get("clamp_to_vad", True)),
     }
 
-    # We need audio – extract if needed
     def run():
         try:
             sm.set_status(job_id, "running", "Extracting audio…")
@@ -344,47 +370,46 @@ def run_transcribe():
             _push(job_id, "error", {"step": "transcribe", "message": str(exc)})
 
     threading.Thread(target=run, daemon=True).start()
-    return jsonify({"status": "started"})
+    return {"status": "started"}
 
 
 # ── Upload existing SRT ────────────────────────────────────────────────────────
 
-@app.route("/api/upload_srt", methods=["POST"])
-def upload_srt():
+@app.post("/api/jobs/{job_id}/srt")
+async def upload_srt(job_id: str, srt: UploadFile = File(...)):
     from pipeline import transcription as trans_mod
-    job_id = request.form.get("job_id")
     job = sm.get_job(job_id)
     if not job:
-        return jsonify({"error": "Unknown job"}), 404
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
 
-    f = request.files.get("srt")
-    if not f:
-        return jsonify({"error": "No SRT file"}), 400
+    if not srt:
+        return JSONResponse({"error": "No SRT file"}, status_code=400)
 
     srt_path = sm.job_dir(job_id) / "uploaded_transcript.srt"
-    f.save(str(srt_path))
+    
+    with open(srt_path, "wb") as f:
+        data = await srt.read()
+        f.write(data)
 
     try:
         seg_df = trans_mod.load_srt_as_df(str(srt_path))
         sm.update_job(job_id, segments_df=seg_df,
                       transcript_srt=srt_path.read_text(encoding="utf-8"),
                       transcript_meta={"source": "uploaded"})
-        return jsonify({"segment_count": len(seg_df),
-                        "segments": seg_df.to_dict(orient="records")})
+        return {"segment_count": len(seg_df),
+                "segments": seg_df.to_dict(orient="records")}
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ── AD Slots ───────────────────────────────────────────────────────────────────
 
-@app.route("/api/run/slots", methods=["POST"])
-def run_slots():
+@app.post("/api/jobs/{job_id}/slots")
+def run_slots(job_id: str, body: dict = Body(default={})):
     from pipeline import ad_slots as slots_mod
-    body = request.json or {}
-    job_id = body.get("job_id")
     job = sm.get_job(job_id)
     if not job or job.get("pauses_df") is None:
-        return jsonify({"error": "Pauses not available. Run VAD first."}), 400
+        return JSONResponse({"error": "Pauses not available. Run VAD first."}, status_code=400)
 
     def run():
         try:
@@ -392,7 +417,9 @@ def run_slots():
             _push(job_id, "progress", {"step": "slots", "message": "Converting pauses to slots…"})
 
             pauses_df: pd.DataFrame = job["pauses_df"]
-            speech_df: pd.DataFrame = job.get("segments_df")  # whisper transcript
+            speech_df = job.get("segments_df")  # whisper transcript
+            if speech_df is None:
+                speech_df = pd.DataFrame(columns=["start_s","end_s"])
 
             slots_df = slots_mod.pauses_to_slots(
                 pauses_df,
@@ -407,7 +434,7 @@ def run_slots():
             _push(job_id, "progress", {"step": "slots", "message": "Evaluating quality…"})
             qr = slots_mod.quality_report(
                 pauses_df,
-                speech_df if speech_df is not None else pd.DataFrame(columns=["start_s","end_s"]),
+                speech_df,
                 slots_df,
             )
 
@@ -423,21 +450,19 @@ def run_slots():
             _push(job_id, "error", {"step": "slots", "message": str(exc)})
 
     threading.Thread(target=run, daemon=True).start()
-    return jsonify({"status": "started"})
+    return {"status": "started"}
 
 
 # ── Image Extraction ───────────────────────────────────────────────────────────
 
-@app.route("/api/run/images", methods=["POST"])
-def run_images():
+@app.post("/api/jobs/{job_id}/images")
+def run_images(job_id: str, body: dict = Body(default={})):
     from pipeline import image_extraction as img_mod
-    body = request.json or {}
-    job_id = body.get("job_id")
     job = sm.get_job(job_id)
     if not job:
-        return jsonify({"error": "Unknown job"}), 404
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
     if job.get("slots_df") is None:
-        return jsonify({"error": "Slots not available. Run slot generation first."}), 400
+        return JSONResponse({"error": "Slots not available. Run slot generation first."}, status_code=400)
 
     def run():
         try:
@@ -489,33 +514,39 @@ def run_images():
             _push(job_id, "error", {"step": "images", "message": str(exc)})
 
     threading.Thread(target=run, daemon=True).start()
-    return jsonify({"status": "started"})
+    return {"status": "started"}
 
 
 # ── GPT Description ────────────────────────────────────────────────────────────
 
-@app.route("/api/run/gpt", methods=["POST"])
-def run_gpt():
+@app.post("/api/jobs/{job_id}/gpt")
+def run_gpt(job_id: str, body: dict = Body(default={})):
     from pipeline import gpt_description as gpt_mod, export as export_mod
-    body = request.json or {}
-    job_id = body.get("job_id")
     job = sm.get_job(job_id)
     if not job:
-        return jsonify({"error": "Unknown job"}), 404
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
     if job.get("slots_df") is None:
-        return jsonify({"error": "Slots not available"}), 400
+        return JSONResponse({"error": "Slots not available"}, status_code=400)
 
     api_key = body.get("api_key") or os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
-        return jsonify({"error": "OpenAI API key required"}), 400
+        return JSONResponse({"error": "OpenAI API key required"}, status_code=400)
 
     system_prompt = body.get("system_prompt", "")
     user_prompt = body.get("user_prompt", "")
 
-    # If the request body doesn't supply prompts, try loading from GPT_PROMPTS_DIR.
-    # This allows K8s ConfigMap-mounted files to serve as the default prompt source.
     if not system_prompt or not user_prompt:
         prompts_dir = os.environ.get("GPT_PROMPTS_DIR", "")
+        if not prompts_dir:
+            potential_dirs = [
+                Path("/app/config/prompts"),
+                Path(__file__).parent.parent / "config" / "prompts"
+            ]
+            for d in potential_dirs:
+                if d.exists() and d.is_dir():
+                    prompts_dir = str(d)
+                    break
+
         if prompts_dir:
             loaded = _load_prompts_from_dir(prompts_dir)
             if loaded:
@@ -544,7 +575,9 @@ def run_gpt():
             sm.set_status(job_id, "running", "Generating descriptions…")
 
             slots_df: pd.DataFrame = job["slots_df"]
-            slot_map_df: pd.DataFrame = job.get("slot_map_df") or pd.DataFrame()
+            slot_map_df = job.get("slot_map_df")
+            if slot_map_df is None:
+                slot_map_df = pd.DataFrame()
 
             def cb(msg, cur, total):
                 _push(job_id, "progress", {
@@ -582,37 +615,44 @@ def run_gpt():
             _push(job_id, "error", {"step": "gpt", "message": str(exc)})
 
     threading.Thread(target=run, daemon=True).start()
-    return jsonify({"status": "started"})
+    return {"status": "started"}
 
 
 # ── SSE Progress Stream ────────────────────────────────────────────────────────
 
-@app.route("/api/status/<job_id>")
-def status_stream(job_id: str):
-    def generate():
+@app.get("/api/jobs/{job_id}/stream")
+async def status_stream(job_id: str, request: Request):
+    async def generate():
         q = _get_queue(job_id)
         # Send current job state immediately
         job = sm.get_job(job_id)
         if job:
             yield f"data: {json.dumps({'event': 'connected', 'status': job['status']})}\n\n"
+        
+        loop = asyncio.get_running_loop()
         while True:
+            if await request.is_disconnected():
+                break
             try:
-                item = q.get(timeout=30)
+                # Use run_in_executor to avoid blocking the event loop
+                item = await loop.run_in_executor(None, q.get, True, 1.0)
                 yield f"data: {json.dumps(item)}\n\n"
             except queue.Empty:
                 yield "data: {\"event\":\"ping\"}\n\n"
+            except Exception:
+                pass
 
-    return Response(generate(), mimetype="text/event-stream",
+    return StreamingResponse(generate(), media_type="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ── Results ────────────────────────────────────────────────────────────────────
 
-@app.route("/api/results/<job_id>")
-def results(job_id: str):
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str, request: Request):
     job = sm.get_job(job_id)
     if not job:
-        return jsonify({"error": "Unknown job"}), 404
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
 
     # Return serialisable subset
     out = {
@@ -625,45 +665,77 @@ def results(job_id: str):
         "transcript_meta": job.get("transcript_meta"),
         "quality_report": job.get("quality_report"),
         "output_paths": {k: Path(v).name for k, v in (job.get("output_paths") or {}).items()},
+        "links": build_hateoas_links(job, str(request.base_url))
     }
-    return jsonify(out)
+    return out
+
+def build_hateoas_links(job: dict, base_url: str):
+    """Dynamically generate valid next actions for a single job."""
+    base = base_url.rstrip("/")
+    jid = job["job_id"]
+    links = [
+        {"rel": "self", "href": f"{base}/api/jobs/{jid}", "method": "GET"},
+        {"rel": "stream", "href": f"{base}/api/jobs/{jid}/stream", "method": "GET"},
+        {"rel": "upload-video", "href": f"{base}/api/jobs/{jid}/video", "method": "POST"},
+        {"rel": "upload-srt", "href": f"{base}/api/jobs/{jid}/srt", "method": "POST"}
+    ]
+    if job.get("video_path"):
+        links.append({"rel": "run-vad", "href": f"{base}/api/jobs/{jid}/vad", "method": "POST"})
+        links.append({"rel": "run-transcribe", "href": f"{base}/api/jobs/{jid}/transcribe", "method": "POST"})
+        
+    if job.get("pauses_df") is not None:
+        links.append({"rel": "run-slots", "href": f"{base}/api/jobs/{jid}/slots", "method": "POST"})
+        
+    if job.get("slots_df") is not None and job.get("video_path"):
+        links.append({"rel": "run-images", "href": f"{base}/api/jobs/{jid}/images", "method": "POST"})
+        links.append({"rel": "run-gpt", "href": f"{base}/api/jobs/{jid}/gpt", "method": "POST"})
+        
+    return links
 
 
 # ── Download ───────────────────────────────────────────────────────────────────
 
-@app.route("/api/download/<job_id>/<file_key>")
+@app.get("/api/jobs/{job_id}/downloads/{file_key}")
 def download(job_id: str, file_key: str):
     job = sm.get_job(job_id)
     if not job:
-        return jsonify({"error": "Unknown job"}), 404
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
 
     paths = job.get("output_paths") or {}
     file_path = paths.get(file_key)
     if not file_path or not Path(file_path).exists():
-        return jsonify({"error": "File not found"}), 404
+        return JSONResponse({"error": "File not found"}, status_code=404)
 
-    return send_file(file_path, as_attachment=True)
+    filename = Path(file_path).name
+    return FileResponse(file_path, filename=filename)
 
 
 # ── Image Preview ──────────────────────────────────────────────────────────────
 
-@app.route("/api/preview/<job_id>/image/<path:img_name>")
+@app.get("/api/jobs/{job_id}/images/{img_name:path}")
 def preview_image(job_id: str, img_name: str):
     job = sm.get_job(job_id)
     if not job:
-        return jsonify({"error": "Unknown job"}), 404
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
 
     job_path = sm.job_dir(job_id)
     # Restrict to frames / gapfill subdirs
     for subdir in ["frames", "gapfill"]:
         candidate = job_path / subdir / img_name
         if candidate.exists():
-            return send_file(str(candidate), mimetype="image/jpeg")
+            return FileResponse(candidate, media_type="image/jpeg")
 
-    return jsonify({"error": "Image not found"}), 404
+    return JSONResponse({"error": "Image not found"}, status_code=404)
+
+
+# Mount static files last so it doesn't intercept API routes
+app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
 
 
 # ── Run Server ─────────────────────────────────────────────────────────────────
 
+def main():
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=5000, reload=True)
+
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000, threaded=True)
+    main()

@@ -1,5 +1,6 @@
-flask>=3.0
-flask-cors>=4.0
+fastapi>=0.100.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9
 
 # Pipeline deps (same as notebook)
 moviepy>=2.0

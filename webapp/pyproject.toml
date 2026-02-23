@@ -5,8 +5,9 @@ description = "Audiodeskription pipeline web application"
 requires-python = ">=3.11"
 dependencies = [
     # Web framework
-    "flask>=3.0",
-    "flask-cors>=4.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.30.0",
+    "python-multipart>=0.0.9",
     # Pipeline dependencies (same as notebook)
     "moviepy>=2.0",
     "torch",
