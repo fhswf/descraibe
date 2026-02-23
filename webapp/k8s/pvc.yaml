@@ -13,7 +13,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: standard  # change to your cluster's StorageClass (e.g. gp2, longhorn, ceph-rbd)
+  storageClassName: ""
   resources:
     requests:
       storage: 50Gi
