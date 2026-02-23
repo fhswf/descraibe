@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
 
+  workflow_dispatch:
+
 permissions:
   contents: write        # create tags & GitHub releases
   pull-requests: write   # open the version-bump PR
