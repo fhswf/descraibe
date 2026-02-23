@@ -178,8 +178,14 @@
           </div>
 
           <div class="card">
-            <p class="card-title">Modell &amp; Optionen</p>
-            <div class="form-grid">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <p class="card-title" style="margin: 0;">Modell &amp; Optionen</p>
+              <span id="gpu-status-badge"
+                style="font-size: 0.85rem; padding: 4px 8px; border-radius: 4px; background: rgba(255,255,255,0.1); color: var(--text-muted);">
+                GPU-Status wird abgefragt…
+              </span>
+            </div>
+            <div class="form-grid" style="margin-top: 12px;">
               <div class="form-group">
                 <label>Whisper Modell</label>
                 <select id="whisper-model">

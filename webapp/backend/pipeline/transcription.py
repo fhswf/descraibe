@@ -254,7 +254,21 @@ def transcribe(
 
     if progress_cb:
         progress_cb("Loading Whisper model…")
-    model = _get_model(model_size, device="cpu", compute_type=compute_type)
+        
+    # Dynamically select GPU if available
+    try:
+        import torch
+        if torch.cuda.is_available():
+            hw_device = "cuda"
+            hw_compute = "float16"
+        else:
+            hw_device = "cpu"
+            hw_compute = compute_type
+    except ImportError:
+        hw_device = "cpu"
+        hw_compute = compute_type
+
+    model = _get_model(model_size, device=hw_device, compute_type=hw_compute)
 
     # ── Silero gate (P1-A) ────────────────────────────────────────────────
     silero_intervals: list[tuple[float, float]] = []

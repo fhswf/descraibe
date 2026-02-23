@@ -113,6 +113,20 @@ def index():
 
 # ── Upload ─────────────────────────────────────────────────────────────────────
 
+@app.route("/api/system_info", methods=["GET"])
+def system_info():
+    """Return backend system information, such as GPU availability."""
+    gpu_available = False
+    try:
+        import torch
+        gpu_available = torch.cuda.is_available()
+    except ImportError:
+        pass
+    
+    return jsonify({
+        "gpu_available": gpu_available
+    })
+
 @app.route("/api/upload", methods=["POST"])
 def upload():
     # Only initialize the upload session

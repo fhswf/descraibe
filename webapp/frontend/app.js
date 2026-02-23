@@ -10,6 +10,27 @@ const STATE = {
     gptRecords: [],
 };
 
+// ── Initialization ─────────────────────────────────────────────────────────────
+async function checkSystemInfo() {
+    try {
+        const res = await fetch('/api/system_info');
+        const data = await res.json();
+        const badge = document.getElementById('gpu-status-badge');
+        if (badge) {
+            if (data.gpu_available) {
+                badge.textContent = 'GPU-Status: 🟢 Aktiv';
+                badge.style.color = '#fff';
+            } else {
+                badge.textContent = 'GPU-Status: 🔴 Nicht verfügbar (CPU-Modus)';
+                badge.style.color = 'var(--accent)';
+            }
+        }
+    } catch (e) {
+        console.warn('Could not fetch system info:', e);
+    }
+}
+window.addEventListener('DOMContentLoaded', checkSystemInfo);
+
 // ── Navigation ─────────────────────────────────────────────────────────────────
 function goTo(step) {
     document.querySelectorAll('.step-panel').forEach((p, i) => {
