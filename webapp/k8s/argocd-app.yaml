@@ -17,6 +17,12 @@ kind: Application
 metadata:
   name: audiodeskription
   namespace: argocd          # always deploy the Application object into the argocd namespace
+  annotations:
+    # 1. Subscribe to your existing 'on-deployed' trigger:
+    notifications.argoproj.io/subscribe.on-deployed.github: ""
+    
+    # 2. (Optional but recommended) Provide the external link for the GitHub Deployment dashboard:
+    link.argocd.argoproj.io/external-link: "https://descraibe.fh-swf.cloud" 
   labels:
     app.kubernetes.io/name: audiodeskription
 spec:
