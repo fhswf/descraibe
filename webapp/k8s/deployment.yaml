@@ -65,10 +65,12 @@ spec:
           # ── Resources ────────────────────────────────────────────────────────
           # Minimum viable for CPU inference. Adjust for GPU nodes.
           resources:
-            requests:
+            requests:                
+              nvidia.com/mig-2g.20gb: "1"
               cpu: "2"
               memory: "8Gi"
             limits:
+              nvidia.com/mig-2g.20gb: "1"
               cpu: "4"
               memory: "16Gi"
           # ── Probes ───────────────────────────────────────────────────────────
