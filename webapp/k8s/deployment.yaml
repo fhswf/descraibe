@@ -68,7 +68,7 @@ spec:
             requests:                
               nvidia.com/mig-2g.20gb: "1"
               cpu: "2"
-              memory: "8Gi"
+              memory: "6Gi"
             limits:
               nvidia.com/mig-2g.20gb: "1"
               cpu: "4"
