@@ -142,44 +142,123 @@ function resetSession() {
     document.querySelectorAll('.progress-bar-fill').forEach(el => el.style.width = '0%');
 }
 
-function doUpload(file) {
+// Chunk size for upload (e.g., 5MB)
+const CHUNK_SIZE = 5 * 1024 * 1024;
+
+async function doUpload(file) {
     resetSession();
 
     const prog = document.getElementById('upload-progress');
     const bar = document.getElementById('upload-bar');
     const msg = document.getElementById('upload-msg');
     prog.classList.add('visible');
+    bar.style.width = '0%';
+    msg.textContent = 'Bereite Upload vor...';
 
-    const fd = new FormData();
-    fd.append('video', file);
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    let jobId = localStorage.getItem('ad_job_id');
+    let startingChunk = 0;
 
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/upload');
-
-    xhr.upload.onprogress = e => {
-        if (e.lengthComputable) {
-            bar.style.width = Math.round((e.loaded / e.total) * 100) + '%';
+    try {
+        // 1. Initialize or check status
+        if (jobId) {
+            msg.textContent = 'Prüfe auf abgebrochenen Upload...';
+            const statusRes = await fetch(`/api/upload_status?job_id=${jobId}&filename=${encodeURIComponent(file.name)}`);
+            if (statusRes.ok) {
+                const statusData = await statusRes.json();
+                if (statusData.uploaded_bytes) {
+                    startingChunk = Math.floor(statusData.uploaded_bytes / CHUNK_SIZE);
+                    console.log(`Resuming from chunk ${startingChunk} / ${totalChunks}`);
+                }
+            } else {
+                jobId = null; // Job doesn't exist anymore on server
+            }
         }
-    };
 
-    xhr.onload = () => {
-        const res = JSON.parse(xhr.responseText);
-        if (res.error) { msg.textContent = '❌ ' + res.error; return; }
+        // 2. Initialize job if we don't have one (or it was invalid)
+        if (!jobId || startingChunk === 0) {
+            msg.textContent = 'Starte Upload...';
+            const initFormData = new FormData();
+            initFormData.append('filename', file.name);
+            initFormData.append('total_size', file.size);
+            if (jobId) initFormData.append('job_id', jobId);
 
-        STATE.jobId = res.job_id;
-        localStorage.setItem('ad_job_id', STATE.jobId);
+            const initRes = await fetch('/api/upload', { method: 'POST', body: initFormData });
+            if (!initRes.ok) throw new Error('Initialisierung fehlgeschlagen');
+            const initData = await initRes.json();
+
+            if (initData.error) throw new Error(initData.error);
+            jobId = initData.job_id;
+            localStorage.setItem('ad_job_id', jobId);
+            startingChunk = 0;
+        }
+
+        STATE.jobId = jobId;
         document.getElementById('job-badge').textContent = 'Job: ' + STATE.jobId.slice(0, 8) + '…';
-        bar.style.width = '100%';
-        msg.textContent = '✅ Upload abgeschlossen';
 
-        renderVideoStats(res.stats);
-        markDone(0);
-        goTo(1); // Jump to VAD step visually
-        connectSSE(STATE.jobId);
-    };
+        // 3. Upload chunks sequentially
+        for (let i = startingChunk; i < totalChunks; i++) {
+            const start = i * CHUNK_SIZE;
+            const end = Math.min(start + CHUNK_SIZE, file.size);
+            const chunk = file.slice(start, end);
 
-    xhr.onerror = () => { msg.textContent = '❌ Upload fehlgeschlagen'; };
-    xhr.send(fd);
+            const fd = new FormData();
+            fd.append('job_id', STATE.jobId);
+            fd.append('filename', file.name);
+            fd.append('chunkIndex', i);
+            fd.append('totalChunks', totalChunks);
+            fd.append('chunk', chunk, file.name);
+
+            msg.textContent = `Lade Teil ${i + 1} von ${totalChunks} hoch...`;
+
+            let retryCount = 0;
+            let success = false;
+            let finalData = null;
+
+            while (!success && retryCount < 3) {
+                try {
+                    const chunkRes = await fetch('/api/upload_chunk', { method: 'POST', body: fd });
+                    if (!chunkRes.ok) throw new Error(`HTTP error! status: ${chunkRes.status}`);
+
+                    const data = await chunkRes.json();
+                    if (data.error) throw new Error(data.error);
+
+                    success = true;
+                    if (data.complete) {
+                        finalData = data;
+                    }
+                } catch (err) {
+                    retryCount++;
+                    console.error(`Chunk ${i} failed (attempt ${retryCount}/3):`, err);
+                    if (retryCount >= 3) {
+                        throw new Error('Upload nach mehreren Versuchen abgebrochen.');
+                    }
+                    // Wait slightly before retry
+                    await new Promise(r => setTimeout(r, 1000 * retryCount));
+                }
+            }
+
+            // Update Progress Bar
+            const progress = ((i + 1) / totalChunks) * 100;
+            bar.style.width = Math.round(progress) + '%';
+
+            // If complete, finish up
+            if (finalData && finalData.complete) {
+                bar.style.width = '100%';
+                msg.textContent = '✅ Upload abgeschlossen';
+
+                renderVideoStats(finalData.stats);
+                markDone(0);
+                goTo(1); // Jump to VAD step visually
+                connectSSE(STATE.jobId);
+                return; // Done
+            }
+        }
+
+    } catch (err) {
+        msg.textContent = '❌ ' + err.message;
+        msg.innerHTML += '<br><button class="btn btn-primary" onclick="doUpload(document.getElementById(\'video-file-input\').files[0])" style="margin-top: 10px;">Upload fortsetzen / wiederholen</button>';
+    }
 }
 
 function renderVideoStats(stats) {

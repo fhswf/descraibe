@@ -115,27 +115,87 @@ def index():
 
 @app.route("/api/upload", methods=["POST"])
 def upload():
-    from pipeline import video_utils
-    if "video" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
+    # Only initialize the upload session
+    if "filename" not in request.form:
+        return jsonify({"error": "No filename provided"}), 400
+    if "total_size" not in request.form:
+        return jsonify({"error": "No total_size provided"}), 400
+    
+    # Check if a user passes an existing job ID they want to resume/re-upload to
+    # Usually the frontend will just ask POST /api/upload to create a new job
+    job_id = request.form.get("job_id")
+    if not job_id:
+        job_id = sm.create_job()
+    else:
+        # Check if job exists
+        job = sm.get_job(job_id)
+        if not job:
+            job_id = sm.create_job()
 
-    f = request.files["video"]
-    if not f.filename:
-        return jsonify({"error": "Empty filename"}), 400
+    return jsonify({"job_id": job_id})
 
-    job_id = sm.create_job()
+@app.route("/api/upload_status", methods=["GET"])
+def upload_status():
+    job_id = request.args.get("job_id")
+    filename = request.args.get("filename")
+    
+    if not job_id or not filename:
+        return jsonify({"error": "Missing job_id or filename"}), 400
+
     job_path = sm.job_dir(job_id)
-    video_path = job_path / f.filename
-    f.save(str(video_path))
+    if not job_path:
+        return jsonify({"error": "Unknown job"}), 404
 
-    try:
-        stats = video_utils.get_video_stats(str(video_path))
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+    part_file = job_path / f"{filename}.part"
+    if part_file.exists():
+        return jsonify({"uploaded_bytes": part_file.stat().st_size})
+    
+    return jsonify({"uploaded_bytes": 0})
 
-    sm.update_job(job_id, video_path=str(video_path), video_stats=stats)
+@app.route("/api/upload_chunk", methods=["POST"])
+def upload_chunk():
+    from pipeline import video_utils
+    
+    job_id = request.form.get("job_id")
+    filename = request.form.get("filename")
+    chunk_index = int(request.form.get("chunkIndex", 0))
+    total_chunks = int(request.form.get("totalChunks", 1))
+    
+    if not job_id or not filename:
+        return jsonify({"error": "Missing job_id or filename"}), 400
+    
+    file_chunk = request.files.get("chunk")
+    if not file_chunk:
+        return jsonify({"error": "No chunk data provided"}), 400
 
-    return jsonify({"job_id": job_id, "stats": stats})
+    job_path = sm.job_dir(job_id)
+    if not job_path:
+         return jsonify({"error": "Unknown job"}), 404
+
+    part_file = job_path / f"{filename}.part"
+    video_path = job_path / filename
+
+    # Append the chunk
+    with open(part_file, "ab") as f:
+        # If it's the first chunk, ensure we start fresh (in case of a weird retry)
+        # But wait, we want to resume! The UI will seek to the right byte. 
+        # So we just append. The frontend is responsible for sending the correct chunk.
+        f.write(file_chunk.read())
+
+    # If it's the final chunk
+    if chunk_index == total_chunks - 1:
+        # Rename part to final
+        part_file.rename(video_path)
+        
+        try:
+            stats = video_utils.get_video_stats(str(video_path))
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+        sm.update_job(job_id, video_path=str(video_path), video_stats=stats)
+        return jsonify({"job_id": job_id, "stats": stats, "complete": True})
+
+    return jsonify({"success": True, "complete": False})
 
 
 # ── VAD Pauses ─────────────────────────────────────────────────────────────────
