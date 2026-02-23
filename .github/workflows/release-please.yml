@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write        # create tags & GitHub releases
   pull-requests: write   # open the version-bump PR
+  packages: write        # needed to push to ghcr.io
 
 jobs:
   release-please:
