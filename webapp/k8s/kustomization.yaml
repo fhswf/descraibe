@@ -22,5 +22,5 @@ resources:
 # ── Image overrides ──────────────────────────────────────────────────────────
 # ArgoCD Image Updater or CI can update the newTag field automatically.
 images:
-  - name: ghcr.io/YOUR_ORG/audiodeskription-webapp
-    newTag: 0.2.1 # x-release-please-version
+  - name: ghcr.io/fhswf/audiodeskription-webapp
+    newTag: 0.2.2 # x-release-please-version

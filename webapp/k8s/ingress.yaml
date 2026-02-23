@@ -7,21 +7,15 @@ metadata:
     app.kubernetes.io/name: audiodeskription
     app.kubernetes.io/component: webapp
   annotations:
-    # Nginx ingress: disable body size limit for large video uploads.
-    nginx.ingress.kubernetes.io/proxy-body-size: "4096m"
-    # Increase timeouts for long-running pipeline requests and SSE streams.
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
-    # TLS: cert-manager – comment out if you manage TLS externally.
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Traefik annotations
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: "letsencrypt"
+    
 spec:
-  ingressClassName: nginx
-  tls:
-    - hosts:
-        - audiodeskription.example.com   # ← replace with your domain
-      secretName: audiodeskription-tls
+  ingressClassName: traefik
   rules:
-    - host: audiodeskription.example.com  # ← replace with your domain
+    - host: descraibe.fh-swf.cloud
       http:
         paths:
           - path: /
