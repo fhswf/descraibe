@@ -25,6 +25,7 @@ metadata:
     link.argocd.argoproj.io/external-link: "https://descraibe.fh-swf.cloud" 
   labels:
     app.kubernetes.io/name: audiodeskription
+    component: backend 
 spec:
   project: default
 
