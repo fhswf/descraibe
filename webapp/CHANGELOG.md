@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.10.1...v0.11.0) (2026-02-24)
+
+
+### Features
+
+* Add disk fallback to `get_job` to load jobs from disk if not found in memory. ([31e591c](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/31e591cd3f4d3e018a47a79d9532ff6d81288059))
+* Add TTS generation and final video export functionality, including a new backend pipeline and frontend step. ([dcb5a26](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/dcb5a26806b89f4b767ea3a9107544140c3179f6))
+* centralize progress display into a new `GlobalProgress` component and refactor step components to use global progress state. ([0283003](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/0283003f203188e0f9d25ddbd44160d4d3134346))
+
 ## [0.10.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.10.0...v0.10.1) (2026-02-24)
 
 
