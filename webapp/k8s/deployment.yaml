@@ -43,7 +43,7 @@ spec:
             - name: MAX_UPLOAD_MB
               value: "4096"
             - name: UVICORN_WORKERS
-              value: "2"
+              value: "1"
           # OpenAI API key injected from Secret
           envFrom:
             - secretRef:
