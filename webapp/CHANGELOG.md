@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.8.1...v0.9.0) (2026-02-24)
+
+
+### Features
+
+* Introduce a new React/Vite frontend application featuring a multi-step UI for audiodescription job management, and update backend integration. ([2f83799](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/2f8379905edf5d1f2a1518c314872fe5da4dc29e))
+* Standardize time display with optional hours, enhance video timeline controls and interaction, and refactor the main application layout. ([8436ea8](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/8436ea8412d64eea193a26c00a2d03553a5393ac))
+
 ## [0.8.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.8.0...v0.8.1) (2026-02-23)
 
 
