@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.12.0...v0.12.1) (2026-02-24)
+
+
+### Bug Fixes
+
+* Refactor progress bar callback to trigger on `attr == 'index'`, safely retrieve total, and include error handling. ([94989bb](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/94989bb437f5832edfb01784c197819f61958794))
+
 ## [0.12.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.11.0...v0.12.0) (2026-02-24)
 
 
