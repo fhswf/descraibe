@@ -58,18 +58,18 @@ export function StepUpload() {
     };
 
     return (
-        <div className="step-content">
-            <div className="step-header">
-                <div className="step-icon">📁</div>
+        <div className="flex flex-col gap-5">
+            <div className="flex items-start gap-4 pb-4 border-b border-border-subtle">
+                <div className="text-3xl leading-none">📁</div>
                 <div>
-                    <h2>Video hochladen</h2>
-                    <p>Wähle eine MP4-Datei zum Starten der Pipeline.</p>
+                    <h2 className="text-[1.4rem] font-bold mb-1">Video hochladen</h2>
+                    <p className="text-sm text-text-secondary">Wähle eine MP4-Datei zum Starten der Pipeline.</p>
                 </div>
             </div>
 
-            <div className="card">
+            <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
                 <div
-                    className="drop-zone"
+                    className="border-2 border-dashed border-border-subtle rounded-2xl p-12 text-center cursor-pointer transition-all relative hover:border-violet-500 hover:bg-violet-500/5 group"
                     onClick={() => fileInputRef.current?.click()}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => {
@@ -84,18 +84,20 @@ export function StepUpload() {
                         style={{ display: 'none' }}
                         onChange={(e) => e.target.files?.[0] && handleUpload(e.target.files[0])}
                     />
-                    <div className="drop-icon">🎞️</div>
-                    <p className="drop-title">MP4 per Drag & Drop hier ablegen</p>
-                    <p className="drop-sub">oder klicken zum Auswählen</p>
+                    <div className="text-[3rem] mb-3">🎞️</div>
+                    <p className="text-[1.1rem] font-semibold mb-1">MP4 per Drag & Drop hier ablegen</p>
+                    <p className="text-sm text-text-secondary">oder klicken zum Auswählen</p>
                 </div>
 
                 {uploading && (
-                    <div className="upload-progress" style={{ marginTop: '16px' }}>
-                        <div className="progress-wrap">
-                            <div className="progress-bar-bg">
-                                <div className="progress-bar-fill" style={{ width: `${progress}%` }}></div>
+                    <div className="mt-4">
+                        <div className="flex flex-col gap-2">
+                            <div className="h-1.5 bg-border-subtle rounded-full overflow-hidden">
+                                <div className="h-full bg-gradient-to-r from-violet-500 to-teal-500 rounded-full transition-all duration-400 relative overflow-hidden" style={{ width: `${progress}%` }}>
+                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-[shimmer_1.4s_infinite]"></div>
+                                </div>
                             </div>
-                            <span className="progress-msg">Uploading… {progress}%</span>
+                            <span className="text-xs text-text-secondary">Uploading… {progress}%</span>
                         </div>
                     </div>
                 )}

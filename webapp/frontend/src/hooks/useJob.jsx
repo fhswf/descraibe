@@ -1,9 +1,13 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 
 const JobContext = createContext();
 
 export function JobProvider({ children }) {
-    const [jobId, setJobId] = useState(null);
+    const [jobId, setJobId] = useState(() => {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('job') || null;
+    });
     const [jobData, setJobData] = useState(null);
     const [sseConnected, setSseConnected] = useState(false);
     const [gptRecords, setGptRecords] = useState([]);
@@ -11,20 +15,46 @@ export function JobProvider({ children }) {
     const [doneSteps, setDoneSteps] = useState(new Set());
     const [progressData, setProgressData] = useState({}); // { step: { msg, percent } }
     const [focusedSlot, setFocusedSlot] = useState(null);
+    const [srtTexts, setSrtTexts] = useState({});
+    const [isSavingSrt, setIsSavingSrt] = useState(false);
 
-    // Load job from URL on mount
     useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const id = params.get('job');
-        if (id) {
-            setJobId(id);
-            fetchJobData(id);
+        if (jobData?.gpt_records) {
+            const initialTexts = {};
+            jobData.gpt_records.forEach(rec => {
+                initialTexts[rec.slot] = rec.text || '';
+            });
+            setSrtTexts(initialTexts);
         }
-    }, []);
+    }, [jobData?.gpt_records]);
 
-    const fetchJobData = async (id) => {
+    const handleSaveSrtTexts = useCallback(async () => {
+        if (!jobId) return;
+        setIsSavingSrt(true);
         try {
-            const res = await fetch(`/api/jobs/${id}`);
+            const res = await fetch(`/api/jobs/${jobId}/texts`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ texts: srtTexts })
+            });
+            if (!res.ok) {
+                const data = await res.json();
+                throw new Error(data.error || 'Failed to save texts');
+            }
+            alert("Änderungen erfolgreich gespeichert! Die Ausgabedateien wurden aktualisiert.");
+        } catch (err) {
+            alert("Error: " + err.message);
+        } finally {
+            setIsSavingSrt(false);
+        }
+    }, [jobId, srtTexts, setIsSavingSrt]);
+
+    const fetchJobData = useCallback(async (id) => {
+        try {
+            // Add a cache-busting timestamp to ensure we get fresh data
+            const res = await fetch(`/api/jobs/${id}?t=${Date.now()}`, {
+                headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setJobData(data);
@@ -51,30 +81,37 @@ export function JobProvider({ children }) {
         } catch (err) {
             console.error("Failed to load job:", err);
         }
-    };
+    }, [setJobData, setDoneSteps, setCurrentStep]);
 
-    useEffect(() => {
+    const handleUpdateSlotTiming = useCallback(async (slotId, start_s, end_s) => {
         if (!jobId) return;
-
-        const source = new EventSource(`/api/jobs/${jobId}/stream`);
-
-        source.onopen = () => setSseConnected(true);
-        source.onerror = () => setSseConnected(false);
-
-        source.onmessage = (ev) => {
-            try {
-                const payload = JSON.parse(ev.data);
-                handleSSEEvent(payload);
-            } catch (err) {
-                console.error("SSE parsing error", err);
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/slots`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ slots: [{ slot: slotId, start_s, end_s }] })
+            });
+            if (!res.ok) {
+                const data = await res.json();
+                throw new Error(data.error || 'Failed to update slot timing');
             }
-        };
+            // Optionally refresh job data to sync the UI with updated metadata
+            fetchJobData(jobId);
+        } catch (err) {
+            console.error("Error updating slot timing:", err.message);
+            alert("Error updating slot timing: " + err.message);
+            // fetchJobData(jobId);
+        }
+    }, [jobId, fetchJobData]);
 
-        return () => {
-            source.close();
-            setSseConnected(false);
-        };
-    }, [jobId]);
+    // Load job from URL on mount
+    useEffect(() => {
+        if (jobId) {
+            fetchJobData(jobId);
+        }
+    }, [jobId, fetchJobData]);
+
+
 
     const handleSSEEvent = useCallback((payload) => {
         const { event, data } = payload;
@@ -114,7 +151,32 @@ export function JobProvider({ children }) {
                 fetchJobData(jobId); // Need full update for outputs
             }
         }
-    }, [jobId]);
+    }, [jobId, fetchJobData, setProgressData, setDoneSteps, setCurrentStep]);
+
+    useEffect(() => {
+        if (!jobId) return;
+
+        const source = new EventSource(`/api/jobs/${jobId}/stream`);
+
+        source.onopen = () => setSseConnected(true);
+        source.onerror = () => setSseConnected(false);
+
+        source.onmessage = (ev) => {
+            try {
+                const payload = JSON.parse(ev.data);
+                handleSSEEvent(payload);
+            } catch (err) {
+                console.error("SSE parsing error", err);
+            }
+        };
+
+        return () => {
+            source.close();
+            setSseConnected(false);
+        };
+    }, [jobId, handleSSEEvent]);
+
+
 
     const createJob = async () => {
         try {
@@ -148,7 +210,12 @@ export function JobProvider({ children }) {
             focusedSlot,
             setFocusedSlot,
             createJob,
-            fetchJobData
+            fetchJobData,
+            srtTexts,
+            setSrtTexts,
+            isSavingSrt,
+            handleSaveSrtTexts,
+            handleUpdateSlotTiming
         }}>
             {children}
         </JobContext.Provider>

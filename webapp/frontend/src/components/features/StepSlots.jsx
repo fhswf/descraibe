@@ -29,47 +29,51 @@ export function StepSlots() {
     const progress = progressData?.slots;
 
     return (
-        <div className="step-content">
-            <div className="step-header">
-                <div className="step-icon">🕐</div>
+        <div className="flex flex-col gap-5">
+            <div className="flex items-start gap-4 pb-4 border-b border-border-subtle">
+                <div className="text-3xl leading-none">🕐</div>
                 <div>
-                    <h2>AD-Slots generieren</h2>
-                    <p>Wandle Sprechpausen in Audio-Deskriptions-Slots um.</p>
+                    <h2 className="text-[1.4rem] font-bold mb-1">AD-Slots generieren</h2>
+                    <p className="text-sm text-text-secondary">Wandle Sprechpausen in Audio-Deskriptions-Slots um.</p>
                 </div>
             </div>
 
-            <div className="card">
-                <p className="card-title">Parameter</p>
-                <div className="form-grid">
-                    <div className="form-group">
-                        <label>Min. Slot-Dauer (s)</label>
+            <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">Parameter</p>
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-[0.8rem] font-medium text-text-secondary">Min. Slot-Dauer (s)</label>
                         <input
                             type="number" min="0.1" step="0.1"
                             value={params.min_slot_s}
                             onChange={e => setParams({ ...params, min_slot_s: parseFloat(e.target.value) })}
+                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                         />
                     </div>
-                    <div className="form-group">
-                        <label>Eingangs-Padding (s)</label>
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-[0.8rem] font-medium text-text-secondary">Eingangs-Padding (s)</label>
                         <input
                             type="number" min="0" step="0.05"
                             value={params.pad_in_s}
                             onChange={e => setParams({ ...params, pad_in_s: parseFloat(e.target.value) })}
+                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                         />
                     </div>
-                    <div className="form-group">
-                        <label>Ausgangs-Padding (s)</label>
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-[0.8rem] font-medium text-text-secondary">Ausgangs-Padding (s)</label>
                         <input
                             type="number" min="0" step="0.05"
                             value={params.pad_out_s}
                             onChange={e => setParams({ ...params, pad_out_s: parseFloat(e.target.value) })}
+                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                         />
                     </div>
-                    <div className="form-group">
-                        <label>Whisper-Filter (Sprache überschneidend)</label>
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-[0.8rem] font-medium text-text-secondary">Whisper-Filter (Sprache überschneidend)</label>
                         <select
                             value={params.filter_whisper.toString()}
                             onChange={e => setParams({ ...params, filter_whisper: e.target.value === 'true' })}
+                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                         >
                             <option value="false">Nein</option>
                             <option value="true">Ja (Slots mit Sprache entfernen)</option>
@@ -78,9 +82,9 @@ export function StepSlots() {
                 </div>
             </div>
 
-            <div className="btn-row">
+            <div className="flex gap-2.5 items-center flex-wrap">
                 <button
-                    className="btn btn-primary"
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] font-semibold text-[0.875rem] transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-br from-violet-500 to-[#7c3aed] text-white shadow-[0_4px_16px_rgba(139,92,246,0.3)] hover:not:disabled:shadow-[0_6px_24px_rgba(139,92,246,0.45)] hover:not:disabled:-translate-y-px"
                     onClick={handleRunSlots}
                     disabled={jobData?.status === 'running'}
                 >
@@ -89,12 +93,14 @@ export function StepSlots() {
             </div>
 
             {progress && (
-                <div className="card">
-                    <div className="progress-wrap">
-                        <div className="progress-bar-bg">
-                            <div className="progress-bar-fill" style={{ width: `${progress.percent}%` }}></div>
+                <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                    <div className="flex flex-col gap-2">
+                        <div className="h-1.5 bg-border-subtle rounded-full overflow-hidden">
+                            <div className="h-full bg-gradient-to-r from-violet-500 to-teal-500 rounded-full transition-all duration-400 relative overflow-hidden" style={{ width: `${progress.percent}%` }}>
+                                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-[shimmer_1.4s_infinite]"></div>
+                            </div>
                         </div>
-                        <span className="progress-msg">{progress.msg}</span>
+                        <span className="text-xs text-text-secondary">{progress.msg}</span>
                     </div>
                 </div>
             )}

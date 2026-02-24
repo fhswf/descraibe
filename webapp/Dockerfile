@@ -1,34 +1,47 @@
 # ── Audiodeskription Webapp Docker Image ──────────────────────────────────────
 #
-# Single-image build: the Flask backend serves the static frontend directly.
-# The frontend is plain HTML/CSS/JS (no build step needed).
+# Single-image build: the FastAPI backend serves the built frontend directly.
 #
 # Build:
-#   docker build -t audiodeskription-webapp .
+#   docker build -t audiodeskription-webapp webapp/
 #
 # Run (CPU-only, pass your OpenAI API key at runtime):
 #   docker run -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-webapp
 #
 # For GPU support, use the CUDA base image variant instead (see comment below).
 
+# ── Frontend Build ─────────────────────────────────────────────────────────────
+FROM node:20-slim AS frontend-builder
+WORKDIR /app/frontend
+COPY webapp/frontend/package*.json ./
+RUN npm install
+COPY webapp/frontend/ ./
+RUN npm run build
+
 # ── Base image ─────────────────────────────────────────────────────────────────
 # CPU variant (default – no CUDA runtime required):
-FROM python:3.11-slim
+# FROM python:3.11-slim
 
 # GPU variant: uncomment the line below and comment-out the CPU line above.
 # The torch index-url in pyproject.toml must also be set to the matching CUDA wheel.
-# FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 # ── System dependencies ────────────────────────────────────────────────────────
 # ffmpeg   – required by moviepy / scenedetect
 # libsm6 / libxext6 / libglib2.0-0 – required by opencv-python-headless
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
     ffmpeg \
     libsm6 \
     libxext6 \
     libglib2.0-0 \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Make python3.11 the default python
+RUN ln -s /usr/bin/python3.11 /usr/bin/python
 
 # ── Install uv ─────────────────────────────────────────────────────────────────
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -44,7 +57,8 @@ RUN uv pip install --system --no-cache .
 
 # Copy the rest of the webapp
 COPY webapp/backend ./backend
-COPY webapp/frontend ./frontend
+# Copy the built frontend from the builder stage
+COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
 # All values can be overridden at runtime:

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef } from 'react';
 import { useJob } from './hooks/useJob.jsx';
 import { VideoTimeline } from './components/features/VideoTimeline';
 import './index.css';
@@ -20,7 +20,9 @@ function App() {
     currentStep,
     setCurrentStep,
     doneSteps,
-    sseConnected
+    sseConnected,
+    isSavingSrt,
+    handleSaveSrtTexts
   } = useJob();
 
   const videoRef = useRef(null);
@@ -30,20 +32,45 @@ function App() {
   const videoUrl = jobData?.video_path ? `/api/jobs/${jobId}/downloads/video` : null;
 
   return (
-    <div className="app-shell">
-      <header className="header">
-        <div className="header-logo">🎬</div>
-        <h1>Descr<span>AI</span>be Pipeline</h1>
-        <span className="header-sub" id="job-badge">
-          {jobId ? (sseConnected ? `🟢 Job: ${jobId}` : `🔴 Job: ${jobId} (Offline)`) : 'Kein aktiver Job'}
-        </span>
+    <div className="grid grid-rows-[auto_1fr_auto] min-h-screen">
+      <header className="h-14 border-b border-border-subtle flex items-center justify-between px-4 bg-bg-surface z-50 sticky top-0">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-violet-500 rounded-lg flex items-center justify-center text-white">
+              <span className="material-icons-round text-lg">waves</span>
+            </div>
+            <h1 className="font-bold text-lg tracking-tight">Descr<span className="text-violet-500 text-xl">AI</span>be <span className="font-light opacity-60">Pipeline</span></h1>
+          </div>
+          {jobId && (
+            <>
+              <div className="h-6 w-px bg-border-subtle mx-2"></div>
+              <div className="flex items-center gap-2 text-xs font-mono opacity-50">
+                <span className={`w-2 h-2 rounded-full ${sseConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+                <span>Job: {jobId}</span>
+              </div>
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            className="px-4 py-2 bg-violet-500 hover:bg-opacity-90 transition-all rounded-lg text-white text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+            onClick={handleSaveSrtTexts}
+            disabled={isSavingSrt}
+          >
+            <span className="material-icons-round text-sm">save</span>
+            {isSavingSrt ? 'Speichert...' : 'Änderungen speichern'}
+          </button>
+          <button className="p-2 hover:bg-bg-card rounded-full transition-colors flex items-center justify-center">
+            <span className="material-icons-round text-text-secondary">settings</span>
+          </button>
+        </div>
       </header>
 
-      <div className="main-layout">
-        <aside className="sidebar">
+      <div className="grid grid-cols-[380px_1fr] gap-0 h-[calc(100vh-88px)]">
+        <aside className="bg-bg-surface border-r border-border-subtle p-6 px-4 overflow-y-auto flex flex-col gap-6">
           <StepNavigation currentStep={currentStep} setCurrentStep={setCurrentStep} doneSteps={doneSteps} />
 
-          <div className="step-controls">
+          <div className="flex flex-col gap-4">
             <StepUpload />
             <StepVAD />
             <StepTranscribe />
@@ -55,37 +82,37 @@ function App() {
           </div>
         </aside>
 
-        <main className="content">
-          <div className="main-workspace">
+        <main className="overflow-hidden p-6 flex flex-col gap-6">
+          <div className="flex flex-col gap-5 h-full flex-1 min-h-0">
             {videoUrl && (
-              <div className="split-view">
-                <div className="video-section" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                  <p className="card-title" style={{ margin: 0, marginBottom: '8px', flexShrink: 0 }}>Video Vorschau</p>
-                  <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', backgroundColor: '#000', borderRadius: '8px', overflow: 'hidden' }}>
+              <div className="grid grid-cols-2 gap-6 flex-1 min-h-0">
+                <div className="flex flex-col h-full min-h-0">
+                  <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-2 shrink-0">Video Vorschau</p>
+                  <div className="flex-1 min-h-0 flex justify-center bg-black rounded-lg overflow-hidden">
                     <video
                       ref={videoRef}
                       src={videoUrl}
                       controls
                       preload="auto"
-                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                      className="w-full h-full object-contain"
                     />
                   </div>
                 </div>
 
-                <div className="srt-section">
+                <div className="flex flex-col h-full min-h-0">
                   <SRTWidget />
                 </div>
               </div>
             )}
 
             {videoUrl && (
-              <div className="timeline-section">
+              <div className="shrink-0">
                 <VideoTimeline videoRef={videoRef} />
               </div>
             )}
 
             {!videoUrl && (
-              <div className="empty-workspace" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
+              <div className="flex items-center justify-center h-full text-text-muted">
                 <p>Bitte lade ein Video hoch (Schritt 1), um den Workspace anzuzeigen.</p>
               </div>
             )}
@@ -109,20 +136,37 @@ function StepNavigation({ currentStep, setCurrentStep, doneSteps }) {
   ];
 
   return (
-    <nav className="step-navigation">
-      <p className="sidebar-title">Pipeline-Schritte</p>
-      <div className="step-nav" id="step-nav">
-        {steps.map((s, i) => (
-          <button
-            key={i}
-            className={`step-btn ${currentStep === i ? 'active' : ''} ${doneSteps.has(i) ? 'done' : ''}`}
-            onClick={() => setCurrentStep(i)}
-          >
-            <span className="step-num">{s.num}</span>
-            <span className="step-label">{s.label}</span>
-            <span className="step-status-dot"></span>
-          </button>
-        ))}
+    <nav className="p-4 space-y-1 mt-[-1rem]">
+      <div className="text-[10px] font-bold text-text-muted uppercase tracking-widest px-2 mb-2">Workflow</div>
+      <div className="flex flex-col gap-1" id="step-nav">
+        {steps.map((s, i) => {
+          const isCurrent = currentStep === i;
+          const isDone = doneSteps.has(i);
+          return (
+            <button
+              key={i}
+              className={`flex items-center gap-3 p-2 rounded-lg transition-all group ${isCurrent
+                ? 'bg-violet-500/10 text-violet-500'
+                : 'hover:bg-bg-card text-text-primary'
+                } ${!isCurrent && !isDone ? 'opacity-50' : ''}`}
+              onClick={() => setCurrentStep(i)}
+            >
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-colors ${isCurrent ? 'bg-violet-500 text-white' :
+                  isDone ? 'border-2 border-green-500 text-green-500 group-hover:bg-green-500 group-hover:text-white' :
+                    'border-2 border-text-muted text-text-secondary'
+                }`}>
+                {s.num}
+              </div>
+              <span className={`text-sm font-medium ${isDone && !isCurrent ? 'opacity-60' : ''}`}>{s.label}</span>
+              {isDone && !isCurrent && (
+                <span className="material-icons-round text-green-500 ml-auto text-sm">check_circle</span>
+              )}
+              {isCurrent && (
+                <span className="w-1.5 h-1.5 rounded-full bg-violet-500 ml-auto"></span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </nav>
   );

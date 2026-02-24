@@ -52,92 +52,98 @@ export function StepPrompts() {
     };
 
     return (
-        <div className="step-content">
-            <div className="step-header">
-                <div className="step-icon">⚙️</div>
+        <div className="flex flex-col gap-5">
+            <div className="flex items-start gap-4 pb-4 border-b border-border-subtle">
+                <div className="text-3xl leading-none">⚙️</div>
                 <div>
-                    <h2>Prompts & GPT-Konfiguration</h2>
-                    <p>Definiere System-Instruktion, User-Instruktion, AD-Regeln und Modell-Parameter.</p>
+                    <h2 className="text-[1.4rem] font-bold mb-1">Prompts & GPT-Konfiguration</h2>
+                    <p className="text-sm text-text-secondary">Definiere System-Instruktion, User-Instruktion, AD-Regeln und Modell-Parameter.</p>
                 </div>
             </div>
 
-            <div className="card">
-                <p className="card-title">System-Instruktion (Rolle & Grundregeln)</p>
-                <div className="form-group">
+            <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">System-Instruktion (Rolle & Grundregeln)</p>
+                <div className="flex flex-col gap-1.5">
                     <textarea
                         rows="4"
                         placeholder="Du bist ein professioneller Audiodeskriptions-Autor…"
                         value={params.system_prompt}
                         onChange={e => setParams({ ...params, system_prompt: e.target.value })}
+                        className="resize-y min-h-[100px] bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                     />
                 </div>
             </div>
 
-            <div className="card">
-                <p className="card-title">User-Instruktion (Aufgabe & Format)</p>
-                <div className="form-group">
+            <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">User-Instruktion (Aufgabe & Format)</p>
+                <div className="flex flex-col gap-1.5">
                     <textarea
                         rows="3"
                         placeholder="Erstelle eine präzise Audiodeskription für die folgenden Szenenbilder…"
                         value={params.user_prompt}
                         onChange={e => setParams({ ...params, user_prompt: e.target.value })}
+                        className="resize-y min-h-[100px] bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                     />
                 </div>
             </div>
 
-            <div className="card">
-                <p className="card-title">AD-Regeln</p>
-                <div className="form-group">
+            <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">AD-Regeln</p>
+                <div className="flex flex-col gap-1.5">
                     <textarea
                         rows="4"
                         placeholder="1. Beschreibe Handlungen im Präsens…"
                         value={params.ad_rules}
                         onChange={e => setParams({ ...params, ad_rules: e.target.value })}
+                        className="resize-y min-h-[100px] bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                     />
                 </div>
             </div>
 
-            <div className="card">
-                <p className="card-title">Few-Shots (optional)</p>
-                <div className="form-group">
+            <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">Few-Shots (optional)</p>
+                <div className="flex flex-col gap-1.5">
                     <textarea
                         rows="3"
                         placeholder="Beispiel 1: …"
                         value={params.few_shots}
                         onChange={e => setParams({ ...params, few_shots: e.target.value })}
+                        className="resize-y min-h-[100px] bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                     />
                 </div>
             </div>
 
-            <div className="card">
-                <p className="card-title">GPT-Modell & Parameter</p>
-                <div className="form-grid">
-                    <div className="form-group">
-                        <label>Modell</label>
-                        <select value={params.model} onChange={e => setParams({ ...params, model: e.target.value })}>
+            <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">GPT-Modell & Parameter</p>
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-[0.8rem] font-medium text-text-secondary">Modell</label>
+                        <select value={params.model} onChange={e => setParams({ ...params, model: e.target.value })} className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15">
                             <option value="gpt-4o">gpt-4o</option>
                             <option value="gpt-4o-mini">gpt-4o-mini</option>
                         </select>
                     </div>
-                    <div className="form-group">
-                        <label>Temperature: {params.temperature}</label>
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-[0.8rem] font-medium text-text-secondary">Temperature: {params.temperature}</label>
                         <input
                             type="range" min="0" max="1.5" step="0.05"
                             value={params.temperature}
                             onChange={e => setParams({ ...params, temperature: parseFloat(e.target.value) })}
+                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15 accent-violet-500 pr-0 pl-0 py-0"
                         />
                     </div>
-                    <div className="form-group">
-                        <label>Max. Tokens</label>
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-[0.8rem] font-medium text-text-secondary">Max. Tokens</label>
                         <input
                             type="number" min="64" step="64"
                             value={params.max_tokens}
                             onChange={e => setParams({ ...params, max_tokens: parseInt(e.target.value) })}
+                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                         />
                     </div>
-                    <div className="form-group">
-                        <label>Cut-Typ</label>
-                        <select value={params.cut} onChange={e => setParams({ ...params, cut: e.target.value })}>
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-[0.8rem] font-medium text-text-secondary">Cut-Typ</label>
+                        <select value={params.cut} onChange={e => setParams({ ...params, cut: e.target.value })} className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15">
                             <option value="broadcast">Broadcast (Silbenlimit)</option>
                             <option value="directors">Director's Cut (ausführlich)</option>
                         </select>
@@ -145,8 +151,8 @@ export function StepPrompts() {
                 </div>
             </div>
 
-            <div className="btn-row">
-                <button className="btn btn-primary" onClick={handleNext}>
+            <div className="flex gap-2.5 items-center flex-wrap">
+                <button className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] font-semibold text-[0.875rem] transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-br from-violet-500 to-[#7c3aed] text-white shadow-[0_4px_16px_rgba(139,92,246,0.3)] hover:not:disabled:shadow-[0_6px_24px_rgba(139,92,246,0.45)] hover:not:disabled:-translate-y-px" onClick={handleNext}>
                     Weiter → Generierung →
                 </button>
             </div>
