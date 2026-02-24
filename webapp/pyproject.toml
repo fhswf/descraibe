@@ -1,6 +1,6 @@
 [project]
 name = "audiodeskription-webapp"
-version = "0.11.0"
+version = "0.12.0"
 description = "Audiodeskription pipeline web application"
 requires-python = ">=3.11"
 dependencies = [

@@ -22,4 +22,4 @@ resources:
 # ArgoCD Image Updater or CI can update the newTag field automatically.
 images:
   - name: ghcr.io/fhswf/audiodeskription-webapp
-    newTag: v0.11.0 # x-release-please-version
+    newTag: v0.12.0 # x-release-please-version
