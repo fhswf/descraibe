@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.9.0...v0.10.0) (2026-02-24)
+
+
+### Features
+
+* editing of ad slots ([4eda520](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/4eda52010753b6c3f266ad7169754aaafa5a2147))
+
 ## [0.9.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.8.1...v0.9.0) (2026-02-24)
 
 
