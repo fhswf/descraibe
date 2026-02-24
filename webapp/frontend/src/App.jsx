@@ -38,9 +38,7 @@ function App() {
       <header className="h-14 border-b border-border-subtle flex items-center justify-between px-4 bg-bg-surface z-50 sticky top-0">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-violet-500 rounded-lg flex items-center justify-center text-white">
-              <span className="material-icons-round text-lg">waves</span>
-            </div>
+            <img src="/favicon.png" alt="DescrAIbe Logo" className="w-8 h-8 rounded-[8px] object-cover shadow-sm" />
             <h1 className="font-bold text-lg tracking-tight">Descr<span className="text-violet-500 text-xl">AI</span>be <span className="font-light opacity-60">Pipeline</span></h1>
           </div>
           {jobId && (

@@ -7,7 +7,6 @@ import { useJob } from '../../hooks/useJob.jsx';
 
 export function VideoTimeline({ videoRef }) {
     const containerRef = useRef(null);
-    const timelineRef = useRef(null);
     const wavesurferRef = useRef(null);
     const regionsRef = useRef(null);
     const { jobData, focusedSlot, handleUpdateSlotTiming } = useJob();
@@ -69,8 +68,14 @@ export function VideoTimeline({ videoRef }) {
             minPxPerSec: 50, // Initial zoom
             plugins: [
                 TimelinePlugin.create({
-                    container: timelineRef.current,
+                    insertPosition: 'beforebegin',
+                    height: 25,
                     formatTimeCallback: formatTime,
+                    style: {
+                        fontSize: '10px',
+                        color: 'rgba(255, 255, 255, 0.5)',
+                        marginBottom: '8px'
+                    }
                 }),
             ],
             media: videoRef.current, // Sync with the video element!
@@ -307,7 +312,6 @@ export function VideoTimeline({ videoRef }) {
             </div>
 
             <div className="bg-[#0a0a0a] p-4 relative pt-2">
-                <div ref={timelineRef} className="h-[25px] mb-2 text-[10px] font-mono opacity-50 text-text-muted w-full" />
                 <div ref={containerRef} className="w-full border-b border-border-subtle pb-2"></div>
             </div>
         </div>
