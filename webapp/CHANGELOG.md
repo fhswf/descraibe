@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.11.0...v0.12.0) (2026-02-24)
+
+
+### Features
+
+* Update favicon and app logo, add custom scrollbar styling, and refactor Wavesurfer timeline integration. ([d0d7589](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/d0d7589e79cf25a30decb31761af3175ed3258ff))
+
 ## [0.11.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.10.1...v0.11.0) (2026-02-24)
 
 
