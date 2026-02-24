@@ -46,7 +46,7 @@ wheels = [
 
 [[package]]
 name = "audiodeskription-webapp"
-version = "0.6.1"
+version = "0.8.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -58,6 +58,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pyphen" },
+    { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "scenedetect" },
@@ -84,6 +85,7 @@ requires-dist = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pyphen" },
+    { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "pyyaml" },
     { name = "scenedetect", specifier = ">=0.6" },

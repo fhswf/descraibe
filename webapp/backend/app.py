@@ -5,6 +5,9 @@ import json
 import os
 import queue
 import threading
+
+from dotenv import load_dotenv
+load_dotenv()
 import asyncio
 import uvicorn
 from pathlib import Path
@@ -27,7 +30,7 @@ import session_manager as sm
 
 # ── App setup ──────────────────────────────────────────────────────────────────
 
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 
 app = FastAPI(title="Audiodeskription API", docs_url=None)
 
@@ -141,6 +144,8 @@ async def custom_swagger_ui_html():
 
 @app.get("/")
 def index():
+    if not FRONTEND_DIR.exists():
+        return JSONResponse({"error": "Frontend build not found. Run npm run build in the frontend directory."})
     return FileResponse(FRONTEND_DIR / "index.html")
 
 
@@ -618,6 +623,46 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
     return {"status": "started"}
 
 
+@app.put("/api/jobs/{job_id}/texts")
+def update_texts(job_id: str, body: dict = Body(...)):
+    from pipeline import export as export_mod
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
+
+    cut = body.get("cut", "broadcast")
+    key = f"gpt_records_{cut}"
+    records = job.get(key, [])
+    
+    if not records:
+        return JSONResponse({"error": "No records found to update"}, status_code=400)
+
+    updates = body.get("texts", {})
+    if not updates:
+        return JSONResponse({"error": "No text updates provided"}, status_code=400)
+
+    # Apply updates
+    for rec in records:
+        s_id = str(rec.get("slot"))
+        if s_id in updates:
+            rec["text"] = updates[s_id]
+            rec["ok"] = True
+            rec["skipped"] = False
+
+    try:
+        # Re-export files with the new texts
+        run_folder = sm.job_dir(job_id) / "output"
+        paths = export_mod.write_outputs(run_folder, records, cut)
+
+        # Update job state
+        sm.update_job(job_id, **{key: records}, 
+                      output_paths={**job.get("output_paths", {}), **paths})
+        
+        return {"status": "success", "updated_count": len(updates)}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
 # ── SSE Progress Stream ────────────────────────────────────────────────────────
 
 @app.get("/api/jobs/{job_id}/stream")
@@ -655,6 +700,15 @@ def get_job(job_id: str, request: Request):
         return JSONResponse({"error": "Unknown job"}, status_code=404)
 
     # Return serialisable subset
+    import math
+
+    def make_serializable(df):
+        if df is None:
+            return None
+        # Replace NaN with None
+        df_clean = df.replace({float('nan'): None})
+        return df_clean.to_dict(orient="records")
+
     out = {
         "job_id": job_id,
         "status": job.get("status"),
@@ -662,9 +716,18 @@ def get_job(job_id: str, request: Request):
         "pauses_count": len(job["pauses_df"]) if job.get("pauses_df") is not None else 0,
         "slots_count": len(job["slots_df"]) if job.get("slots_df") is not None else 0,
         "images_count": len(job["scene_images"]) if job.get("scene_images") else 0,
+        
+        # Timeline data
+        "pauses": make_serializable(job.get("pauses_df")),
+        "slots": make_serializable(job.get("slots_df")),
+        "scenes": make_serializable(job.get("scenes_df")),
+        "slot_map": job.get("slot_map_df").to_dict(orient="records") if (job.get("slot_map_df") is not None and not job.get("slot_map_df").empty) else None,
+        "video_path": job.get("video_path"),
+        
         "transcript_meta": job.get("transcript_meta"),
         "quality_report": job.get("quality_report"),
         "output_paths": {k: Path(v).name for k, v in (job.get("output_paths") or {}).items()},
+        "gpt_records": job.get("gpt_records_broadcast", job.get("gpt_records_directors")),
         "links": build_hateoas_links(job, str(request.base_url))
     }
     return out
@@ -701,8 +764,12 @@ def download(job_id: str, file_key: str):
     if not job:
         return JSONResponse({"error": "Unknown job"}, status_code=404)
 
-    paths = job.get("output_paths") or {}
-    file_path = paths.get(file_key)
+    if file_key == "video":
+        file_path = job.get("video_path")
+    else:
+        paths = job.get("output_paths") or {}
+        file_path = paths.get(file_key)
+        
     if not file_path or not Path(file_path).exists():
         return JSONResponse({"error": "File not found"}, status_code=404)
 
@@ -729,7 +796,8 @@ def preview_image(job_id: str, img_name: str):
 
 
 # Mount static files last so it doesn't intercept API routes
-app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+if FRONTEND_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
 
 
 # ── Run Server ─────────────────────────────────────────────────────────────────
