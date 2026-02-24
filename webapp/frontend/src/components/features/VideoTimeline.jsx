@@ -230,6 +230,7 @@ export function VideoTimeline({ videoRef }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [jobData, videoRef, handleUpdateSlotTiming]);
 
+
     // Update zoom when slider changes
     useEffect(() => {
         if (wavesurferRef.current && duration > 0) {
