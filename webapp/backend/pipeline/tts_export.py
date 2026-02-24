@@ -68,11 +68,17 @@ class ExportLogger(ProgressBarLogger):
         self.is_audio = False
         
     def bars_callback(self, bar, attr, value, old_value=None):
-        if bar == "t":
-            total = self.state.bars[bar].get("total", 1)
-            # Differentiate audio and video phases in the UI
-            phase_msg = "Compositing Audio..." if self.is_audio else "Multiplexing Video..."
-            self.on_progress(phase_msg, value, total)
+        if attr == "index":
+            try:
+                # Use dict syntax to avoid AttributeError
+                total = self.state.get("bars", {}).get(bar, {}).get("total", 1)
+                
+                # Differentiate audio and video phases in the UI
+                phase_msg = "Compositing Audio..." if self.is_audio else "Multiplexing Video..."
+                self.on_progress(phase_msg, value, total)
+            except Exception:
+                pass
+
             
     def callback(self, **kw):
         msg = kw.get("message", "")
