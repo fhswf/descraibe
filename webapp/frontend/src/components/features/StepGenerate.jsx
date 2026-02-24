@@ -52,29 +52,28 @@ export function StepGenerate() {
     const progress = progressData?.gpt;
 
     return (
-        <div className="step-content">
-            <div className="step-header">
-                <div className="step-icon">🤖</div>
+        <div className="flex flex-col gap-5">
+            <div className="flex items-start gap-4 pb-4 border-b border-border-subtle">
+                <div className="text-3xl leading-none">🤖</div>
                 <div>
-                    <h2>Audiodeskriptionen generieren</h2>
-                    <p>GPT beschreibt jeden AD-Slot basierend auf Szenenbildern und deinen Prompts.</p>
+                    <h2 className="text-[1.4rem] font-bold mb-1">Audiodeskriptionen generieren</h2>
+                    <p className="text-sm text-text-secondary">GPT beschreibt jeden AD-Slot basierend auf Szenenbildern und deinen Prompts.</p>
                 </div>
             </div>
 
-            <div className="card" id="gpt-config-preview">
-                <p className="card-title">Konfigurationsübersicht</p>
+            <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md" id="gpt-config-preview">
+                <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">Konfigurationsübersicht</p>
                 {gptParams ? (
-                    <div>
+                    <div className="text-sm">
                         <p><strong>Modell:</strong> {gptParams.model}</p>
                         <p><strong>Cut:</strong> {gptParams.cut}</p>
                     </div>
-                ) : <p>Gehe zurück zu Schritt 6 um die Config zu setzen.</p>}
+                ) : <p className="text-sm text-text-secondary">Gehe zurück zu Schritt 6 um die Config zu setzen.</p>}
             </div>
 
-            <div className="btn-row">
+            <div className="flex gap-2.5 items-center flex-wrap">
                 <button
-                    className="btn btn-primary"
-                    style={{ fontSize: '1rem', padding: '14px 28px' }}
+                    className="inline-flex items-center gap-2 px-7 py-3.5 rounded-[10px] font-semibold text-[1rem] transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-br from-violet-500 to-[#7c3aed] text-white shadow-[0_4px_16px_rgba(139,92,246,0.3)] hover:not:disabled:shadow-[0_6px_24px_rgba(139,92,246,0.45)] hover:not:disabled:-translate-y-px"
                     onClick={handleRunGPT}
                     disabled={jobData?.status === 'running'}
                 >
@@ -83,13 +82,15 @@ export function StepGenerate() {
             </div>
 
             {progress && (
-                <div className="card">
-                    <p className="card-title">Fortschritt</p>
-                    <div className="progress-wrap">
-                        <div className="progress-bar-bg">
-                            <div className="progress-bar-fill" style={{ width: `${progress.percent}%` }}></div>
+                <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                    <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">Fortschritt</p>
+                    <div className="flex flex-col gap-2">
+                        <div className="h-1.5 bg-border-subtle rounded-full overflow-hidden">
+                            <div className="h-full bg-gradient-to-r from-violet-500 to-teal-500 rounded-full transition-all duration-400 relative overflow-hidden" style={{ width: `${progress.percent}%` }}>
+                                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-[shimmer_1.4s_infinite]"></div>
+                            </div>
                         </div>
-                        <span className="progress-msg">{progress.msg}</span>
+                        <span className="text-xs text-text-secondary">{progress.msg}</span>
                     </div>
                 </div>
             )}

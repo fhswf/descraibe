@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import PropTypes from 'prop-types';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
@@ -9,7 +10,7 @@ export function VideoTimeline({ videoRef }) {
     const timelineRef = useRef(null);
     const wavesurferRef = useRef(null);
     const regionsRef = useRef(null);
-    const { jobData, focusedSlot } = useJob();
+    const { jobData, focusedSlot, handleUpdateSlotTiming } = useJob();
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
@@ -87,7 +88,7 @@ export function VideoTimeline({ videoRef }) {
             // NOTE: For VAD / Pauses, we draw regions
             if (jobData.pauses && totalDuration > 0) {
                 // First, draw the Pause regions
-                jobData.pauses.forEach((p, idx) => {
+                jobData.pauses.forEach((p) => {
                     wsRegions.addRegion({
                         start: p.start_s,
                         end: p.end_s,
@@ -176,9 +177,10 @@ export function VideoTimeline({ videoRef }) {
                     }
 
                     wsRegions.addRegion({
+                        id: s.slot.toString(),
                         start: s.start_s,
                         end: s.end_s,
-                        color: 'rgba(40, 167, 69, 0.4)', // green with opacity
+                        color: 'rgba(139, 92, 246, 0.25)', // Violet with opacity for AD slots
                         drag: true,
                         resize: true,
                         content: contentDiv,
@@ -189,8 +191,10 @@ export function VideoTimeline({ videoRef }) {
 
         wsRegions.on('region-updated', (region) => {
             console.log('Slot edited:', region.id, 'New start:', region.start, 'New end:', region.end);
-            // In a full implementation, we would dispatch a context update or API call here
-            // to persist the new boundaries of the slot to the backend.
+            const slotId = parseInt(region.id, 10);
+            if (!Number.isNaN(slotId) && handleUpdateSlotTiming) {
+                handleUpdateSlotTiming(slotId, region.start, region.end);
+            }
         });
 
         wavesurferRef.current = ws;
@@ -223,7 +227,9 @@ export function VideoTimeline({ videoRef }) {
             ws.un('interaction');
             ws.destroy();
         };
-    }, [jobData, videoRef]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [jobData, videoRef, handleUpdateSlotTiming]);
+
 
     // Update zoom when slider changes
     useEffect(() => {
@@ -238,64 +244,79 @@ export function VideoTimeline({ videoRef }) {
 
     // Jump to focused slot
     useEffect(() => {
-        if (focusedSlot && wavesurferRef.current && jobData?.slots) {
-            const slotData = jobData.slots.find((s, idx) => s.slot === focusedSlot || (idx + 1) === focusedSlot);
-            if (slotData && videoRef.current) {
-                videoRef.current.currentTime = slotData.start_s;
+        if (focusedSlot != null && wavesurferRef.current) {
+            let startTime = null;
+
+            // Prefer gpt_records because they have stable slot IDs that match what SRTWidget uses
+            if (jobData?.gpt_records?.length > 0) {
+                const rec = jobData.gpt_records.find(r => r.slot === focusedSlot);
+                if (rec) startTime = rec.start_s;
+            }
+
+            // Fallback to raw slots array if gpt_records didn't match
+            if (startTime == null && jobData?.slots?.length > 0) {
+                const slotData = jobData.slots.find(s => s.slot === focusedSlot);
+                if (slotData) startTime = slotData.start_s;
+            }
+
+            if (startTime != null && videoRef.current) {
+                videoRef.current.currentTime = startTime;
+                wavesurferRef.current.setTime(startTime);
             }
         }
-    }, [focusedSlot, jobData]);
+    }, [focusedSlot, jobData, videoRef]);
 
     if (!jobData?.video_path) {
         return null;
     }
 
     return (
-        <div className="timeline-wrapper">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                <h4 style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
-                    Timeline (Sprechpausen & AD-Slots)
-                    {isBuffering && <span style={{ fontSize: '0.8rem', color: '#ffc107', fontWeight: 'bold' }}>⏳ Lade / Puffert...</span>}
-                </h4>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                    <button
-                        className="btn btn-secondary"
-                        style={{ padding: '4px 10px', fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '4px' }}
-                        onClick={() => wavesurferRef.current?.playPause()}
-                        title={isPlaying ? 'Pause' : 'Play'}
-                    >
-                        {isPlaying ? '⏸' : '▶'}
-                    </button>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
-                        {formatTime(currentTime)} / {formatTime(duration)}
+        <div className="flex flex-col border-t border-border-subtle bg-bg-surface mt-2 rounded-t-xl overflow-hidden shadow-md">
+            <div className="flex items-center justify-between px-4 py-2 bg-[#050505] border-b border-border-subtle">
+                <div className="flex items-center gap-6">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
+                        Timeline (Sprechpausen & AD-Slots)
                     </span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <label htmlFor="zoomSlider" style={{ fontSize: '0.85rem', margin: 0 }}>Zoom:</label>
+                    {isBuffering && <span className="text-[10px] text-yellow-500 font-bold tracking-widest uppercase">⏳ Puffert...</span>}
+                    <div className="flex items-center gap-3">
+                        <button
+                            className="material-icons-round text-[1.2rem] hover:text-violet-500 text-text-primary transition-colors flex items-center justify-center p-1 rounded-full hover:bg-white/5"
+                            onClick={() => wavesurferRef.current?.playPause()}
+                            title={isPlaying ? 'Pause' : 'Play'}
+                        >
+                            {isPlaying ? 'pause_circle_filled' : 'play_circle_filled'}
+                        </button>
+                    </div>
+                </div>
+                <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                        <span className="material-icons-round text-text-muted text-[14px]">zoom_in</span>
                         <input
-                            id="zoomSlider"
+                            className="w-24 accent-violet-500 h-1 bg-white/10 rounded appearance-none"
                             type="range"
                             min="10"
                             max="500"
                             value={zoom}
                             onChange={(e) => setZoom(Number(e.target.value))}
-                            style={{ margin: 0 }}
                         />
+                    </div>
+                    <div className="text-[11px] font-mono px-2 py-1 bg-white/5 rounded border border-border-subtle text-text-primary">
+                        {formatTime(currentTime)} / {formatTime(duration)}
                     </div>
                 </div>
             </div>
 
-            {/* 
-               We use a single scrolling container for BOTH wavesurfer and the thumbnails.
-               Because wavesurfer generates an internal wrapper with `width: 100%; overflow: auto` by default,
-               we can instead hide the internal scrollbar via CSS or just attach the thumbnail track structurally
-               so its container matches wavesurfer's.
-               Wait, Wavesurfer 7 internal wrapper handles scroll exclusively.
-               Let's attach a visual exact replica.
-            */}
-
-            <div ref={timelineRef} style={{ height: '30px', marginTop: '10px' }}></div>
-            <div ref={containerRef} style={{ width: '100%', borderBottom: '1px solid var(--border)' }}></div>
+            <div className="bg-[#0a0a0a] p-4 relative pt-2">
+                <div ref={timelineRef} className="h-[25px] mb-2 text-[10px] font-mono opacity-50 text-text-muted w-full" />
+                <div ref={containerRef} className="w-full border-b border-border-subtle pb-2"></div>
+            </div>
         </div>
     );
 }
+
+VideoTimeline.propTypes = {
+    videoRef: PropTypes.shape({
+        current: PropTypes.instanceOf(Element)
+    })
+};
 

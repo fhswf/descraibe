@@ -663,6 +663,88 @@ def update_texts(job_id: str, body: dict = Body(...)):
         return JSONResponse({"error": str(exc)}, status_code=500)
 
 
+@app.put("/api/jobs/{job_id}/slots")
+def update_slots(job_id: str, body: dict = Body(...)):
+    """Update slot timings and implicitly update corresponding gpt_records and output files."""
+    from pipeline import export as export_mod
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
+
+    slots_df = job.get("slots_df")
+    if slots_df is None:
+        return JSONResponse({"error": "No slots found to update"}, status_code=400)
+
+    updates = body.get("slots", [])
+    if not updates:
+        return JSONResponse({"error": "No slot updates provided"}, status_code=400)
+
+    # Determine which cut is present if not explicitly provided
+    cut = body.get("cut")
+    if not cut:
+        if job.get("gpt_records_broadcast"):
+            cut = "broadcast"
+        elif job.get("gpt_records_directors"):
+            cut = "directors"
+        else:
+            cut = "broadcast" # default fallback
+            
+    key = f"gpt_records_{cut}"
+    records = job.get(key, [])
+
+    # Update slots_df inline
+    # For a robust approach we can index by 'slot'
+    slots_updated_count = 0
+    records_updated_count = 0
+    
+    # Create quick lookups
+    # It might be easier to iterate over the provided array
+    for update in updates:
+        s_id = update.get("slot")
+        start_s = update.get("start_s")
+        end_s = update.get("end_s")
+        if s_id is None or start_s is None or end_s is None:
+            continue
+            
+        # 1. Update slots_df
+        # Check if the slot exists in the dataframe
+        if "slot" in slots_df.columns:
+            mask = slots_df["slot"] == s_id
+            if mask.any():
+                slots_df.loc[mask, "start_s"] = float(start_s)
+                slots_df.loc[mask, "end_s"] = float(end_s)
+                slots_updated_count += 1
+        
+        # 2. Update gpt_records if they exist
+        if records:
+            for rec in records:
+                if str(rec.get("slot")) == str(s_id):
+                    rec["start_s"] = float(start_s)
+                    rec["end_s"] = float(end_s)
+                    rec["duration_s"] = rec["end_s"] - rec["start_s"]
+                    records_updated_count += 1
+                    break
+
+    try:
+        paths = job.get("output_paths", {})
+        # Only re-export if we have records to export
+        if records:
+            run_folder = sm.job_dir(job_id) / "output"
+            new_paths = export_mod.write_outputs(run_folder, records, cut)
+            paths.update(new_paths)
+
+        # Update job state
+        sm.update_job(job_id, slots_df=slots_df, **{key: records}, output_paths=paths)
+        
+        return {
+            "status": "success", 
+            "slots_updated": slots_updated_count,
+            "records_updated": records_updated_count
+        }
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
 # ── SSE Progress Stream ────────────────────────────────────────────────────────
 
 @app.get("/api/jobs/{job_id}/stream")

@@ -47,44 +47,47 @@ export function StepTranscribe() {
     const progress = progressData?.transcribe;
 
     return (
-        <div className="step-content">
-            <div className="step-header">
-                <div className="step-icon">📝</div>
+        <div className="flex flex-col gap-5">
+            <div className="flex items-start gap-4 pb-4 border-b border-border-subtle">
+                <div className="text-3xl leading-none">📝</div>
                 <div>
-                    <h2>Transkription</h2>
-                    <p>Faster-Whisper transkribiert die Sprache im Video.</p>
+                    <h2 className="text-[1.4rem] font-bold mb-1">Transkription</h2>
+                    <p className="text-sm text-text-secondary">Faster-Whisper transkribiert die Sprache im Video.</p>
                 </div>
             </div>
 
-            <div className="card">
-                <p className="card-title">Modell & Optionen</p>
-                <div className="form-grid">
-                    <div className="form-group">
-                        <label>Whisper Modell</label>
+            <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">Modell & Optionen</p>
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-[0.8rem] font-medium text-text-secondary">Whisper Modell</label>
                         <select
                             value={params.model_size}
                             onChange={e => setParams({ ...params, model_size: e.target.value })}
+                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                         >
                             <option value="large-v3">large-v3 (beste Qualität)</option>
                             <option value="medium">medium</option>
                             <option value="small">small (schnell)</option>
                         </select>
                     </div>
-                    <div className="form-group">
-                        <label>Sprache</label>
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-[0.8rem] font-medium text-text-secondary">Sprache</label>
                         <select
                             value={params.language}
                             onChange={e => setParams({ ...params, language: e.target.value })}
+                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                         >
                             <option value="de">Deutsch</option>
                             <option value="en">Englisch</option>
                         </select>
                     </div>
-                    <div className="form-group">
-                        <label>Faster-Whisper VAD</label>
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-[0.8rem] font-medium text-text-secondary">Faster-Whisper VAD</label>
                         <select
                             value={params.use_fw_vad.toString()}
                             onChange={e => setParams({ ...params, use_fw_vad: e.target.value === 'true' })}
+                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15"
                         >
                             <option value="true">Ja</option>
                             <option value="false">Nein</option>
@@ -93,10 +96,10 @@ export function StepTranscribe() {
                 </div>
             </div>
 
-            <div className="card">
-                <p className="card-title">Oder: Vorhandenes Transkript hochladen</p>
-                <div className="btn-row">
-                    <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
+            <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">Oder: Vorhandenes Transkript hochladen</p>
+                <div className="flex gap-2.5 items-center flex-wrap">
+                    <label className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] font-semibold text-[0.875rem] transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-bg-card text-text-primary border border-border-subtle hover:not:disabled:border-violet-500 hover:not:disabled:text-violet-500" style={{ cursor: 'pointer' }}>
                         📄 SRT hochladen
                         <input
                             type="file"
@@ -108,9 +111,9 @@ export function StepTranscribe() {
                 </div>
             </div>
 
-            <div className="btn-row">
+            <div className="flex gap-2.5 items-center flex-wrap">
                 <button
-                    className="btn btn-primary"
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[10px] font-semibold text-[0.875rem] transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-br from-violet-500 to-[#7c3aed] text-white shadow-[0_4px_16px_rgba(139,92,246,0.3)] hover:not:disabled:shadow-[0_6px_24px_rgba(139,92,246,0.45)] hover:not:disabled:-translate-y-px"
                     onClick={handleRunTranscribe}
                     disabled={jobData?.status === 'running'}
                 >
@@ -119,12 +122,14 @@ export function StepTranscribe() {
             </div>
 
             {progress && (
-                <div className="card">
-                    <div className="progress-wrap">
-                        <div className="progress-bar-bg">
-                            <div className="progress-bar-fill" style={{ width: `${progress.percent}%` }}></div>
+                <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                    <div className="flex flex-col gap-2">
+                        <div className="h-1.5 bg-border-subtle rounded-full overflow-hidden">
+                            <div className="h-full bg-gradient-to-r from-violet-500 to-teal-500 rounded-full transition-all duration-400 relative overflow-hidden" style={{ width: `${progress.percent}%` }}>
+                                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-[shimmer_1.4s_infinite]"></div>
+                            </div>
                         </div>
-                        <span className="progress-msg">{progress.msg}</span>
+                        <span className="text-xs text-text-secondary">{progress.msg}</span>
                     </div>
                 </div>
             )}
