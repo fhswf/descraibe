@@ -12,6 +12,7 @@ import { StepPrompts } from './components/features/StepPrompts';
 import { StepGenerate } from './components/features/StepGenerate';
 import { StepResults } from './components/features/StepResults';
 import { SRTWidget } from './components/features/SRTWidget';
+import { GlobalProgress } from './components/features/GlobalProgress';
 
 function App() {
   const {
@@ -119,6 +120,8 @@ function App() {
           </div>
         </main>
       </div>
+
+      <GlobalProgress />
     </div>
   );
 }
@@ -152,8 +155,8 @@ function StepNavigation({ currentStep, setCurrentStep, doneSteps }) {
               onClick={() => setCurrentStep(i)}
             >
               <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-colors ${isCurrent ? 'bg-violet-500 text-white' :
-                  isDone ? 'border-2 border-green-500 text-green-500 group-hover:bg-green-500 group-hover:text-white' :
-                    'border-2 border-text-muted text-text-secondary'
+                isDone ? 'border-2 border-green-500 text-green-500 group-hover:bg-green-500 group-hover:text-white' :
+                  'border-2 border-text-muted text-text-secondary'
                 }`}>
                 {s.num}
               </div>

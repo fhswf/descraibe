@@ -77,6 +77,19 @@ export function JobProvider({ children }) {
                     }
                 }
                 setCurrentStep(targetStep);
+
+                // Restore progress if job is running and we have latest progress
+                if (data.status === 'running' && data.latest_progress) {
+                    setProgressData(prev => ({
+                        ...prev,
+                        [data.latest_progress.step]: {
+                            msg: data.latest_progress.message,
+                            percent: data.latest_progress.total
+                                ? Math.round((data.latest_progress.current / data.latest_progress.total) * 100)
+                                : 100
+                        }
+                    }));
+                }
             }
         } catch (err) {
             console.error("Failed to load job:", err);
@@ -136,19 +149,24 @@ export function JobProvider({ children }) {
             if (event === 'vad_done') {
                 setDoneSteps(prev => new Set(prev).add(1));
                 setCurrentStep(2);
+                setProgressData(prev => ({ ...prev, vad: null }));
             } else if (event === 'transcribe_done') {
                 setDoneSteps(prev => new Set(prev).add(2));
                 setCurrentStep(3);
+                setProgressData(prev => ({ ...prev, transcribe: null }));
             } else if (event === 'slots_done') {
                 setDoneSteps(prev => new Set(prev).add(3));
                 setCurrentStep(4);
+                setProgressData(prev => ({ ...prev, slots: null }));
             } else if (event === 'images_done') {
                 setDoneSteps(prev => new Set(prev).add(4));
                 setCurrentStep(5);
+                setProgressData(prev => ({ ...prev, images: null }));
             } else if (event === 'gpt_done') {
                 setDoneSteps(prev => new Set(prev).add(6));
                 setCurrentStep(7);
                 fetchJobData(jobId); // Need full update for outputs
+                setProgressData(prev => ({ ...prev, gpt: null }));
             }
         }
     }, [jobId, fetchJobData, setProgressData, setDoneSteps, setCurrentStep]);
@@ -207,6 +225,7 @@ export function JobProvider({ children }) {
             doneSteps,
             markStepDone,
             progressData,
+            setProgressData,
             focusedSlot,
             setFocusedSlot,
             createJob,

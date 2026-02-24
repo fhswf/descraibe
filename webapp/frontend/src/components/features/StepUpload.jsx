@@ -2,16 +2,15 @@ import React, { useRef, useState } from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
 
 export function StepUpload() {
-    const { jobId, createJob, fetchJobData, currentStep } = useJob();
+    const { jobId, createJob, fetchJobData, currentStep, setProgressData } = useJob();
     const fileInputRef = useRef(null);
     const [uploading, setUploading] = useState(false);
-    const [progress, setProgress] = useState(0);
 
     if (currentStep !== 0) return null;
 
     const handleUpload = async (file) => {
         setUploading(true);
-        setProgress(0);
+        setProgressData(prev => ({ ...prev, upload: { msg: "Starte Upload...", percent: 0 } }));
 
         // Create job if none exists
         let activeJobId = jobId;
@@ -42,7 +41,8 @@ export function StepUpload() {
                 if (!res.ok) throw new Error("Upload failed");
 
                 const data = await res.json();
-                setProgress(Math.round(((i + 1) / totalChunks) * 100));
+                const p = Math.round(((i + 1) / totalChunks) * 100);
+                setProgressData(prev => ({ ...prev, upload: { msg: `Lade Datei hoch...`, percent: p } }));
 
                 if (data.complete) {
                     await fetchJobData(activeJobId);
@@ -54,6 +54,7 @@ export function StepUpload() {
             }
         }
 
+        setProgressData(prev => ({ ...prev, upload: null }));
         setUploading(false);
     };
 
@@ -89,18 +90,6 @@ export function StepUpload() {
                     <p className="text-sm text-text-secondary">oder klicken zum Auswählen</p>
                 </div>
 
-                {uploading && (
-                    <div className="mt-4">
-                        <div className="flex flex-col gap-2">
-                            <div className="h-1.5 bg-border-subtle rounded-full overflow-hidden">
-                                <div className="h-full bg-gradient-to-r from-violet-500 to-teal-500 rounded-full transition-all duration-400 relative overflow-hidden" style={{ width: `${progress}%` }}>
-                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-[shimmer_1.4s_infinite]"></div>
-                                </div>
-                            </div>
-                            <span className="text-xs text-text-secondary">Uploading… {progress}%</span>
-                        </div>
-                    </div>
-                )}
             </div>
         </div>
     );

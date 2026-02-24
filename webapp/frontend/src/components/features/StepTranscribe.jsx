@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
 
 export function StepTranscribe() {
-    const { jobId, jobData, currentStep, progressData } = useJob();
+    const { jobId, jobData, currentStep } = useJob();
 
     const [params, setParams] = useState({
         model_size: "small",
@@ -43,8 +43,6 @@ export function StepTranscribe() {
             alert("SRT Upload error: " + err.message);
         }
     };
-
-    const progress = progressData?.transcribe;
 
     return (
         <div className="flex flex-col gap-5">
@@ -120,19 +118,6 @@ export function StepTranscribe() {
                     ▶ Transkription starten
                 </button>
             </div>
-
-            {progress && (
-                <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
-                    <div className="flex flex-col gap-2">
-                        <div className="h-1.5 bg-border-subtle rounded-full overflow-hidden">
-                            <div className="h-full bg-gradient-to-r from-violet-500 to-teal-500 rounded-full transition-all duration-400 relative overflow-hidden" style={{ width: `${progress.percent}%` }}>
-                                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-[shimmer_1.4s_infinite]"></div>
-                            </div>
-                        </div>
-                        <span className="text-xs text-text-secondary">{progress.msg}</span>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }

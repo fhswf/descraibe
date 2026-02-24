@@ -49,6 +49,7 @@ _max_mb = int(os.environ.get("MAX_UPLOAD_MB", 2048))
 # SSE progress queues per job
 _SSE_QUEUES: Dict[str, queue.Queue] = {}
 _SSE_LOCK = threading.Lock()
+_LATEST_PROGRESS_BY_JOB: Dict[str, dict] = {}
 
 
 def _get_queue(job_id: str) -> queue.Queue:
@@ -59,6 +60,9 @@ def _get_queue(job_id: str) -> queue.Queue:
 
 
 def _push(job_id: str, event: str, data: Any) -> None:
+    if event == "progress":
+        _LATEST_PROGRESS_BY_JOB[job_id] = data
+
     q = _get_queue(job_id)
     q.put({"event": event, "data": data})
 
@@ -810,7 +814,8 @@ def get_job(job_id: str, request: Request):
         "quality_report": job.get("quality_report"),
         "output_paths": {k: Path(v).name for k, v in (job.get("output_paths") or {}).items()},
         "gpt_records": job.get("gpt_records_broadcast", job.get("gpt_records_directors")),
-        "links": build_hateoas_links(job, str(request.base_url))
+        "links": build_hateoas_links(job, str(request.base_url)),
+        "latest_progress": _LATEST_PROGRESS_BY_JOB.get(job_id) if job.get("status") == "running" else None
     }
     return out
 
