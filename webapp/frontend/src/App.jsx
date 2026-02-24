@@ -40,12 +40,10 @@ function App() {
       </header>
 
       <div className="main-layout">
-        <Sidebar currentStep={currentStep} setCurrentStep={setCurrentStep} doneSteps={doneSteps} />
+        <aside className="sidebar">
+          <StepNavigation currentStep={currentStep} setCurrentStep={setCurrentStep} doneSteps={doneSteps} />
 
-        <main className="content">
-          <div className="step-panel visible" style={{ paddingBottom: '2rem' }}>
-
-            {/* Render the active step component */}
+          <div className="step-controls">
             <StepUpload />
             <StepVAD />
             <StepTranscribe />
@@ -54,23 +52,43 @@ function App() {
             <StepPrompts />
             <StepGenerate />
             <StepResults />
+          </div>
+        </aside>
 
-            {/* If video is uploaded, show the player and timeline */}
+        <main className="content">
+          <div className="main-workspace">
             {videoUrl && (
-              <div className="card" style={{ marginTop: '20px' }}>
-                <p className="card-title">Video Vorschau</p>
-                <video
-                  ref={videoRef}
-                  src={videoUrl}
-                  controls
-                  preload="auto"
-                  style={{ width: '100%', maxHeight: '400px', backgroundColor: '#000' }}
-                />
+              <div className="split-view">
+                <div className="video-section" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                  <p className="card-title" style={{ margin: 0, marginBottom: '8px', flexShrink: 0 }}>Video Vorschau</p>
+                  <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', backgroundColor: '#000', borderRadius: '8px', overflow: 'hidden' }}>
+                    <video
+                      ref={videoRef}
+                      src={videoUrl}
+                      controls
+                      preload="auto"
+                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                    />
+                  </div>
+                </div>
+
+                <div className="srt-section">
+                  <SRTWidget />
+                </div>
+              </div>
+            )}
+
+            {videoUrl && (
+              <div className="timeline-section">
                 <VideoTimeline videoRef={videoRef} />
               </div>
             )}
 
-            <SRTWidget />
+            {!videoUrl && (
+              <div className="empty-workspace" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
+                <p>Bitte lade ein Video hoch (Schritt 1), um den Workspace anzuzeigen.</p>
+              </div>
+            )}
           </div>
         </main>
       </div>
@@ -78,7 +96,7 @@ function App() {
   );
 }
 
-function Sidebar({ currentStep, setCurrentStep, doneSteps }) {
+function StepNavigation({ currentStep, setCurrentStep, doneSteps }) {
   const steps = [
     { num: 1, label: 'Video hochladen' },
     { num: 2, label: 'Sprechpausen (VAD)' },
@@ -91,7 +109,7 @@ function Sidebar({ currentStep, setCurrentStep, doneSteps }) {
   ];
 
   return (
-    <nav className="sidebar">
+    <nav className="step-navigation">
       <p className="sidebar-title">Pipeline-Schritte</p>
       <div className="step-nav" id="step-nav">
         {steps.map((s, i) => (

@@ -37,6 +37,23 @@ export function VideoTimeline({ videoRef }) {
         };
     }, [videoRef]);
 
+    const formatTime = (seconds) => {
+        if (!seconds || isNaN(seconds)) seconds = 0;
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        const mm = m.toString().padStart(2, '0');
+        const ss = s.toFixed(2).padStart(5, '0');
+
+        // If duration is less than an hour, don't show hours
+        if (duration < 3600) {
+            return `${mm}:${ss}`;
+        }
+
+        const hh = h.toString().padStart(2, '0');
+        return `${hh}:${mm}:${ss}`;
+    };
+
     useEffect(() => {
         if (!containerRef.current || !jobData?.video_path) return;
 
@@ -45,13 +62,14 @@ export function VideoTimeline({ videoRef }) {
             container: containerRef.current,
             waveColor: '#ced4da',
             progressColor: '#007bff',
-            height: 120,
+            height: 60,
             barWidth: 2,
             normalize: true, // Auto scroll matches the playhead
             minPxPerSec: 50, // Initial zoom
             plugins: [
                 TimelinePlugin.create({
                     container: timelineRef.current,
+                    formatTimeCallback: formatTime,
                 }),
             ],
             media: videoRef.current, // Sync with the video element!
@@ -190,10 +208,19 @@ export function VideoTimeline({ videoRef }) {
             setCurrentTime(ct);
         });
 
+        // Sync video when user clicks or drags the timeline
+        ws.on('interaction', (newTime) => {
+            if (videoRef.current) {
+                videoRef.current.currentTime = newTime;
+            }
+        });
+
         return () => {
             ws.un('ready', onReady);
             ws.un('play', onPlay);
             ws.un('pause', onPause);
+            ws.un('timeupdate');
+            ws.un('interaction');
             ws.destroy();
         };
     }, [jobData, videoRef]);
@@ -213,12 +240,8 @@ export function VideoTimeline({ videoRef }) {
     useEffect(() => {
         if (focusedSlot && wavesurferRef.current && jobData?.slots) {
             const slotData = jobData.slots.find((s, idx) => s.slot === focusedSlot || (idx + 1) === focusedSlot);
-            if (slotData) {
-                try {
-                    wavesurferRef.current.setTime(slotData.start_s);
-                } catch (e) {
-                    console.warn('Wavesurfer setTime error:', e);
-                }
+            if (slotData && videoRef.current) {
+                videoRef.current.currentTime = slotData.start_s;
             }
         }
     }, [focusedSlot, jobData]);
@@ -228,22 +251,36 @@ export function VideoTimeline({ videoRef }) {
     }
 
     return (
-        <div className="timeline-wrapper" style={{ marginTop: '20px', border: '1px solid #ccc', borderRadius: '8px', padding: '10px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+        <div className="timeline-wrapper">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
                 <h4 style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
                     Timeline (Sprechpausen & AD-Slots)
                     {isBuffering && <span style={{ fontSize: '0.8rem', color: '#ffc107', fontWeight: 'bold' }}>⏳ Lade / Puffert...</span>}
                 </h4>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <label htmlFor="zoomSlider" style={{ fontSize: '0.9rem' }}>Zoom:</label>
-                    <input
-                        id="zoomSlider"
-                        type="range"
-                        min="10"
-                        max="500"
-                        value={zoom}
-                        onChange={(e) => setZoom(Number(e.target.value))}
-                    />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                    <button
+                        className="btn btn-secondary"
+                        style={{ padding: '4px 10px', fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '4px' }}
+                        onClick={() => wavesurferRef.current?.playPause()}
+                        title={isPlaying ? 'Pause' : 'Play'}
+                    >
+                        {isPlaying ? '⏸' : '▶'}
+                    </button>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                        {formatTime(currentTime)} / {formatTime(duration)}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <label htmlFor="zoomSlider" style={{ fontSize: '0.85rem', margin: 0 }}>Zoom:</label>
+                        <input
+                            id="zoomSlider"
+                            type="range"
+                            min="10"
+                            max="500"
+                            value={zoom}
+                            onChange={(e) => setZoom(Number(e.target.value))}
+                            style={{ margin: 0 }}
+                        />
+                    </div>
                 </div>
             </div>
 
@@ -257,14 +294,7 @@ export function VideoTimeline({ videoRef }) {
             */}
 
             <div ref={timelineRef} style={{ height: '30px', marginTop: '10px' }}></div>
-            <div ref={containerRef} style={{ width: '100%', borderBottom: '1px solid #eee' }}></div>
-
-            <div className="timeline-controls" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px' }}>
-                <button className="btn btn-secondary" onClick={() => wavesurferRef.current?.playPause()}>
-                    {isPlaying ? 'Pause' : 'Play'}
-                </button>
-                <span>{currentTime.toFixed(2)} / {duration.toFixed(2)} s</span>
-            </div>
+            <div ref={containerRef} style={{ width: '100%', borderBottom: '1px solid var(--border)' }}></div>
         </div>
     );
 }
