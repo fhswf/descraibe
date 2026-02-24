@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.10.0...v0.10.1) (2026-02-24)
+
+
+### Bug Fixes
+
+* downgrade eslint to resolve compatibility issue in build ([0759bc6](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/0759bc6f9348dd16c914ee17f1db64af51ab729f))
+
 ## [0.10.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.9.0...v0.10.0) (2026-02-24)
 
 
