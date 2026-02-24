@@ -177,7 +177,22 @@ def create_job() -> str:
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     with _LOCK:
-        return _STORE.get(job_id)
+        job = _STORE.get(job_id)
+        if job:
+            return job
+            
+    # Fallback to disk if not in memory (e.g. populated externally)
+    job_dir = _BASE_DIR / job_id
+    if job_dir.exists():
+        job = _load_job_from_disk(job_dir)
+        if job:
+            job["job_id"] = job_id
+            job["job_dir"] = str(job_dir)
+            with _LOCK:
+                _STORE[job_id] = job
+            return job
+            
+    return None
 
 
 def update_job(job_id: str, **kwargs) -> None:
