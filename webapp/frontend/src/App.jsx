@@ -10,6 +10,7 @@ import { StepSlots } from './components/features/StepSlots';
 import { StepImages } from './components/features/StepImages';
 import { StepPrompts } from './components/features/StepPrompts';
 import { StepGenerate } from './components/features/StepGenerate';
+import { StepTTS } from './components/features/StepTTS';
 import { StepResults } from './components/features/StepResults';
 import { SRTWidget } from './components/features/SRTWidget';
 import { GlobalProgress } from './components/features/GlobalProgress';
@@ -79,6 +80,7 @@ function App() {
             <StepImages />
             <StepPrompts />
             <StepGenerate />
+            <StepTTS />
             <StepResults />
           </div>
         </aside>
@@ -135,7 +137,8 @@ function StepNavigation({ currentStep, setCurrentStep, doneSteps }) {
     { num: 5, label: 'Bilder extrahieren' },
     { num: 6, label: 'Prompts & Config' },
     { num: 7, label: 'Generieren' },
-    { num: 8, label: 'Ergebnisse & Download' },
+    { num: 8, label: 'Vertonung (TTS)' },
+    { num: 9, label: 'Ergebnisse & Download' },
   ];
 
   return (

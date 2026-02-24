@@ -286,7 +286,14 @@ def run_vad(job_id: str, body: dict = Body(default={})):
             sm.update_job(job_id,
                           pauses_df=pauses_df,
                           speech_df=speech_df,
-                          pauses_srt=srt_str)
+                          pauses_srt=srt_str,
+                          slots_df=None,
+                          quality_report=None,
+                          scene_images=None,
+                          slot_map_df=None,
+                          gpt_records_broadcast=None,
+                          gpt_records_directors=None,
+                          final_mp4_path=None)
             sm.set_status(job_id, "idle")
             _push(job_id, "vad_done", {
                 "pauses_count": len(pauses_df),
@@ -367,7 +374,14 @@ def run_transcribe(job_id: str, body: dict = Body(default={})):
             sm.update_job(job_id,
                           segments_df=seg_df,
                           transcript_srt=srt_str,
-                          transcript_meta=meta)
+                          transcript_meta=meta,
+                          slots_df=None,
+                          quality_report=None,
+                          scene_images=None,
+                          slot_map_df=None,
+                          gpt_records_broadcast=None,
+                          gpt_records_directors=None,
+                          final_mp4_path=None)
             sm.set_status(job_id, "idle")
             _push(job_id, "transcribe_done", {
                 "segment_count": len(seg_df),
@@ -447,7 +461,14 @@ def run_slots(job_id: str, body: dict = Body(default={})):
                 slots_df,
             )
 
-            sm.update_job(job_id, slots_df=slots_df, quality_report=qr)
+            sm.update_job(job_id, 
+                          slots_df=slots_df, 
+                          quality_report=qr,
+                          scene_images=None,
+                          slot_map_df=None,
+                          gpt_records_broadcast=None,
+                          gpt_records_directors=None,
+                          final_mp4_path=None)
             sm.set_status(job_id, "idle")
             _push(job_id, "slots_done", {
                 "slot_count": len(slots_df),
@@ -510,7 +531,10 @@ def run_images(job_id: str, body: dict = Body(default={})):
 
             sm.update_job(job_id,
                           scene_images=all_images,
-                          slot_map_df=slot_map_df)
+                          slot_map_df=slot_map_df,
+                          gpt_records_broadcast=None,
+                          gpt_records_directors=None,
+                          final_mp4_path=None)
             sm.set_status(job_id, "idle")
             _push(job_id, "images_done", {
                 "scene_count": len(scene_images),
@@ -609,7 +633,8 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
 
             key = f"gpt_records_{cut}"
             sm.update_job(job_id, **{key: records},
-                          output_paths={**job.get("output_paths", {}), **paths})
+                          output_paths={**job.get("output_paths", {}), **paths},
+                          final_mp4_path=None)
             sm.set_status(job_id, "idle")
             _push(job_id, "gpt_done", {
                 "total": len(records),
@@ -683,7 +708,12 @@ def update_slots(job_id: str, body: dict = Body(...)):
     if not updates:
         return JSONResponse({"error": "No slot updates provided"}, status_code=400)
 
-    # Determine which cut is present if not explicitly provided
+    # Check if updates is an array (the UI might send it wrapped in `{ slots: [...] }` or natively)
+    if not isinstance(updates, list):
+        keys = list(updates.keys())
+        if keys and isinstance(updates[keys[0]], dict):
+            # Dict mapping of slot ID -> string text maybe? No, this is for /slots
+            pass
     cut = body.get("cut")
     if not cut:
         if job.get("gpt_records_broadcast"):
@@ -747,6 +777,82 @@ def update_slots(job_id: str, body: dict = Body(...)):
         }
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
+# ── TTS & Export ──────────────────────────────────────────────────────────────
+
+@app.post("/api/jobs/{job_id}/tts")
+def run_tts_export(job_id: str, body: dict = Body(default={})):
+    from pipeline import tts_export as tts_mod
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        
+    cut = body.get("cut", "broadcast")
+    key = f"gpt_records_{cut}"
+    records = job.get(key)
+    
+    if not records:
+        return JSONResponse({"error": f"No GPT records found for cut '{cut}'. Run generation first."}, status_code=400)
+        
+    api_key = body.get("api_key") or os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        return JSONResponse({"error": "OpenAI API key required"}, status_code=400)
+        
+    voice = body.get("voice", "alloy")
+    ducking_volume = float(body.get("ducking_volume", 0.4))
+    
+    def run():
+        try:
+            sm.set_status(job_id, "running", "Generating TTS audio...")
+            
+            job_path = sm.job_dir(job_id)
+            tts_dir = job_path / "tts"
+            
+            def cb_tts(msg, cur, total):
+                _push(job_id, "progress", {"step": "tts", "message": msg, "current": cur, "total": total})
+                
+            tts_files = tts_mod.generate_tts(
+                records=records,
+                api_key=api_key,
+                output_dir=tts_dir,
+                voice=voice,
+                progress_cb=cb_tts
+            )
+            
+            _push(job_id, "progress", {"step": "tts", "message": "Mixing audio into MP4...", "current": 0, "total": 100})
+            
+            def cb_export(msg, cur, total):
+                 _push(job_id, "progress", {"step": "tts", "message": msg, "current": cur, "total": total})
+                 
+            final_mp4_path = str(job_path / f"output_{cut}.mp4")
+            
+            tts_mod.mix_audio_and_export(
+                video_path=job["video_path"],
+                records=records,
+                output_path=final_mp4_path,
+                ducking_volume=ducking_volume,
+                progress_cb=cb_export
+            )
+            
+            paths = job.get("output_paths", {})
+            paths["final_mp4"] = final_mp4_path
+            
+            sm.update_job(job_id, 
+                          final_mp4_path=final_mp4_path,
+                          output_paths=paths,
+                          **{key: records})
+            
+            sm.set_status(job_id, "idle")
+            _push(job_id, "tts_done", {
+                "tts_files_count": len(tts_files),
+                "final_mp4": final_mp4_path
+            })
+            
+        except Exception as exc:
+            sm.set_status(job_id, "error", str(exc))
+            _push(job_id, "error", {"step": "tts", "message": str(exc)})
+            
+    threading.Thread(target=run, daemon=True).start()
+    return {"status": "started"}
 
 
 # ── SSE Progress Stream ────────────────────────────────────────────────────────

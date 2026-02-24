@@ -55,6 +55,7 @@ _JSON_FIELDS: List[str] = [
     "scene_images",
     "gpt_records_broadcast",
     "gpt_records_directors",
+    "final_mp4_path",
 ]
 
 # ── Persistence helpers ────────────────────────────────────────────────────────
@@ -162,6 +163,7 @@ def create_job() -> str:
         "slot_map_df": None,
         "gpt_records_broadcast": None,
         "gpt_records_directors": None,
+        "final_mp4_path": None,
         "output_paths": {},
         "config": {},
         "status": "created",

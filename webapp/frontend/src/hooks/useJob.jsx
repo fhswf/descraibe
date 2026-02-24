@@ -66,11 +66,12 @@ export function JobProvider({ children }) {
                 if (data.slots_count > 0) newDone.add(3);
                 if (data.images_count > 0) newDone.add(4);
                 if (data.quality_report) newDone.add(5);
-                // Note: step 6 is GPT generation, step 7 is results
+                if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(6);
+                if (data.final_mp4_path) newDone.add(7);
                 setDoneSteps(newDone);
 
                 let targetStep = 0;
-                for (let i = 0; i <= 7; i++) {
+                for (let i = 0; i <= 8; i++) {
                     if (!newDone.has(i)) {
                         targetStep = i;
                         break;
@@ -142,6 +143,7 @@ export function JobProvider({ children }) {
         } else if (event === 'error') {
             alert(`Error in ${data.step}: ${data.message}`);
             setProgressData(prev => ({ ...prev, [data.step]: null }));
+            fetchJobData(jobId);
         } else {
             // Refresh job data to get the latest state (links, stats, counts)
             fetchJobData(jobId);
@@ -167,6 +169,11 @@ export function JobProvider({ children }) {
                 setCurrentStep(7);
                 fetchJobData(jobId); // Need full update for outputs
                 setProgressData(prev => ({ ...prev, gpt: null }));
+            } else if (event === 'tts_done') {
+                setDoneSteps(prev => new Set(prev).add(7));
+                setCurrentStep(8);
+                fetchJobData(jobId);
+                setProgressData(prev => ({ ...prev, tts: null }));
             }
         }
     }, [jobId, fetchJobData, setProgressData, setDoneSteps, setCurrentStep]);

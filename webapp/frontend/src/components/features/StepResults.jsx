@@ -4,7 +4,7 @@ import { useJob } from '../../hooks/useJob.jsx';
 export function StepResults() {
     const { jobId, jobData, currentStep } = useJob();
 
-    if (currentStep !== 7) return null;
+    if (currentStep !== 8) return null;
 
     const paths = jobData?.output_paths || {};
 
