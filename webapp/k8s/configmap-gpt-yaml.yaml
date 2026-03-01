@@ -21,17 +21,17 @@ data:
     # Each preset defines a model configuration for the GPT description step.
     presets:
       standard:
-        model: gpt-4o
-        temperature: 0.2
+        model: gpt-5-mini-2025-08-07
+        temperature: 1.0
         max_output_tokens: 1024
         detail: high
       fast:
-        model: gpt-4o-mini
-        temperature: 0.3
+        model: gpt-5-nano-2025-08-07
+        temperature: 1.0
         max_output_tokens: 512
         detail: low
       quality:
-        model: gpt-4o
-        temperature: 0.1
+        model: gpt-5.2-2025-12-11
+        temperature: 1.0
         max_output_tokens: 2048
         detail: high
