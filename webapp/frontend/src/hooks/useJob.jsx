@@ -10,7 +10,7 @@ export function JobProvider({ children }) {
     });
     const [jobData, setJobData] = useState(null);
     const [sseConnected, setSseConnected] = useState(false);
-    const [gptRecords, setGptRecords] = useState([]);
+    const [gptRecords, setGptRecords] = useState([]);h
     const [currentStep, setCurrentStep] = useState(0);
     const [doneSteps, setDoneSteps] = useState(new Set());
     const [progressData, setProgressData] = useState({}); // { step: { msg, percent } }
@@ -65,7 +65,7 @@ export function JobProvider({ children }) {
                 if (data.transcript_meta) newDone.add(2);
                 if (data.slots_count > 0) newDone.add(3);
                 if (data.images_count > 0) newDone.add(4);
-                if (data.quality_report) newDone.add(5);
+                        if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(5);
                 if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(6);
                 if (data.final_mp4_path) newDone.add(7);
                 setDoneSteps(newDone);
