@@ -6,6 +6,7 @@ export function StepGenerate() {
     const [gptParams, setGptParams] = useState(null);
 
     useEffect(() => {
+                if (window._gptParams) setGptParams(window._gptParams);
         const handler = (e) => setGptParams(e.detail);
         window.addEventListener('gpt-params-updated', handler);
         return () => window.removeEventListener('gpt-params-updated', handler);
