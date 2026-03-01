@@ -10,12 +10,6 @@
 #                + "\n\n# Few-Shots / Beispiele\n"    + few_shots (if non-empty)
 #   USER_BASE    = user_instruction
 #
-# When the webapp's /api/run/gpt receives a request WITHOUT explicit
-# system_prompt/user_prompt fields, it reads and assembles these files
-# automatically (GPT_PROMPTS_DIR env var must point to this mount path).
-#
-# Edit the text blocks below and push – ArgoCD will sync and restart the pod.
-#
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -26,55 +20,83 @@ metadata:
     app.kubernetes.io/component: prompts
 data:
   system_instruction.txt: |
-    You are a professional audio describer (Audiodeskriptor) for film and television.
-    Your task is to write concise, vivid, and factually accurate audio descriptions
-    for visually impaired viewers.
-
-    Guidelines:
-    - Describe only what is visible; do not interpret, evaluate, or infer emotions.
-    - Use present tense and active voice.
-    - Be precise with colours, positions, and movement directions.
-    - Never mention the camera, shots, or editing choices.
-    - Keep descriptions strictly within the available time slot.
-
+    Du bist ein professioneller Audiodeskriptor für blinde und sehbehinderte Menschen.
+    Deine Aufgabe ist es, visuelle Informationen objektiv, präzise und im Präsens zu beschreiben.
+    Du erhältst gleich Bilder, Kontext (was NICHT beschrieben werden soll) und eine strikte Längenbeschränkung.
   ad_rules.txt: |
-    # Audiodeskription – Regeln
+    1. Grundprinzipien:
+        1.1 Sei objektiv: Keine Interpretation, keine Wertung.
+        1.2 Formuliere klar und präzise.
+        1.3 Nutze einen einheitlichen Stil.
 
-    Sprache:
-    - Deutsch, Gegenwartsform (Präsens).
-    - Kurze, klare Sätze. Kein Schachtelsatz.
-    - Passiv vermeiden. Aktiv bevorzugen.
+    2. Sprachliche Techniken:
+        2.1 Verwende aktive Sätze statt Passiv.
+        2.2 Sei konkret, keine vagen Begriffe.
+        2.3 Verzichte auf Metaphern oder bildhafte Sprache.
 
-    Inhalt:
-    - Nur sichtbare Handlungen und Fakten beschreiben.
-    - Keine Interpretationen, Gefühle oder Wertungen.
-    - Namen nur nennen, wenn im Bild eindeutig erkennbar.
+    3. Struktur & Inhalt:
+        3.1 Beantworte wichtige W-Fragen wie: Wer? Was? Wo? Wann? Wie?
+        3.2 Beginne mit den relevanten Hauptinformationen, dann Details.
 
-    Timing:
-    - Maximal so lang wie der Slot. Lieber kürzer.
-    - Ein Satz pro Slot ist oft ausreichend.
+    4. Sprachliche Anpassung:
+        4.1 Passe Ton und Wortwahl dem Genre und der Zielgruppe an.
+        4.2 Achte auf einen neutralen, aber zugänglichen Stil.
 
-    Verbotene Formulierungen:
-    - "Man sieht…", "Es ist zu sehen…", "Wir sehen…"
-    - Kamera-, Schnitt- oder Regietechnik (z.B. "die Kamera schwenkt").
-
+    5. Berücksichtige folgende Herausforderungen:
+        5.1 Beschreibe schnelle oder komplexe Szenen kompakt.
+        5.2 Zeige Emotionen nur, wenn sie visuell eindeutig sind.
+        5.3 Berücksichtige kulturelle Hinweise, falls relevant.
   user_instruction.txt: |
-    Beschreibe das folgende Standbild für sehbehinderte Zuschauer.
+    Hier ist deine Aufgabe für die Sprechpause von {Start} bis {Ende} ({Sprechpause:.2f}s).
 
-    Anforderungen:
-    - Eine bis drei kurze Sätze, die ausschließlich das Sichtbare beschreiben.
-    - Beginne direkt mit dem Subjekt (kein einleitendes "Man sieht…").
-    - Präsens, aktive Formulierungen.
-    - Halte dich an die Zeitvorgabe des Slots.
+    ---
+    REGELN FÜR AUDIODESKRIPTION:
+    {ADRegeln}
+    ---
+    KONTEXT: SPRECHERTEXT (NICHT WIEDERHOLEN!):
+    Folgender Text wird im Originalton gesprochen. Beschreibe NICHT, was hier bereits gesagt wird.
+    {Transkript}
+    ---
+    KONTEXT: GEDÄCHTNIS (NICHT WIEDERHOLEN!):
+    Folgende Dinge wurden bereits beschrieben. Wiederhole diese Informationen NICHT.
+    {Gedaechnis}
+    ---
+    **FINALE ANWEISUNG UND LÄNGENLIMIT:**
 
+    1. Analysiere die folgenden Bilder.
+    2. Beschreibe NUR die neuen, relevanten visuellen Informationen, die WEDER im Sprechertext NOCH im Gedächtnis vorkommen.
+    3. **STRIKTES LIMIT:** Deine gesamte Antwort darf **{Silbenanzahl:.0f} Silben** nicht überschreiten.
+    4. Antworte NUR mit dem finalen Beschreibungstext. Keine Kommentare, keine Bestätigungen.
+
+    BESCHREIBUNG:
+    """
   few_shots.txt: |
-    # Few-Shots / Beispiele
+    ZUSÄTZLICHE REGELN FÜR NATURDOKUMENTATIONEN:
+    - Filmische Mittel: Benenne Kameratechniken (Zeitraffer, Drohnenflug, Zeitlupe, Makro) klar, wenn sie sichtbar sind.
+    - Spezifische Benennung: Nenne Tier- und Pflanzenarten präzise beim Namen, wenn bekannt (z.B. "Kohlmeise" statt "Vogel").
+    - Atmosphäre & Details: Beschreibe Farben ("sattgrün", "goldene Sonne"), Lichtstimmung, Wetter und Texturen detailliert.
+    - Texteinblendungen: Lies Untertitel oder Einblendungen vor, falls vorhanden.
 
-    Slot 1 (2,3 s):
-    Ein Adler kreist über einem schneebedeckten Gipfel.
+    BEISPIELE FÜR DEN GEWÜNSCHTEN STIL (ORIENTIERE DICH HIERAN):
 
-    Slot 2 (1,8 s):
-    Die Wölfin hebt den Kopf und blickt in die Kamera.
+    BEISPIEL 1 (Shot 1)
+    INPUT BILD: Eine Kohlmeise landet auf einer verschneiten Landschaft.
+    INPUT TRANSKRIPT: Die Geschichte beginnt auf einer Streuobstwiese, irgendwo in Deutschland, einige Monate vor dem Schlupf unseres jungen Männchens.
+    IDEALER OUTPUT: Eine Kohlmeise.
 
-    Slot 3 (3,1 s):
-    Zwei Bären stehen am Flussufer. Der größere taucht die Pfoten ins Wasser.
+    BEISPIEL 2 (Shot 2)
+    INPUT BILD: Die Kohlmeise fliegt zum dem Rotkehlchen herüber und schaut ihr Essen an. Das Rotkehlchen schaut die Kohlmeise nur an und frisst weiter.
+    INPUT TRANSKRIPT: Das Rotkehlchen ist bereits fündig geworden, doch wird es die Walnuss teilen?
+    IDEALER OUTPUT: Die Meise flattert los und landet in der Nähe des Rotkehlchens. Das Rotkehlchen blickt kurz zur Meise, dann frisst es weiter.
+
+    BEISPIEL 3 (Shot 3)
+    INPUT BILD: Man sieht die Sonne scheinen. Eine Schneedecke schmilzt und im Zeitraffer wächst das Gras darunter und wird sichtbar, als der Schnee geschmolzen ist.
+    INPUT TRANSKRIPT: Während der kurzen Tage müssen die Vögel möglichst viel energiereiche Nahrung finden.
+    IDEALER OUTPUT: Am klaren Himmel leuchtet die goldene Sonne. Zeitraffer: Die verharschte Schneedecke schmilzt, darunter kommt das tiefgrüne Gras zum Vorschein. Grashalme in Makroaufnahme mit filigranen Frostnadeln bedeckt.
+```
+
+---
+
+**Commit-Message:**
+```
+fix(config): update prompt templates to German with naturdoku few-shots
