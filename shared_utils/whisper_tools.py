@@ -1,1 +1,0 @@
-# Platzhalter für whisper_tools.py
