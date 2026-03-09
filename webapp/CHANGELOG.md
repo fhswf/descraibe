@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.2](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.12.1...v0.12.2) (2026-03-09)
+
+
+### Bug Fixes
+
+* read gptParams from window on mount to fix race condition in StepGenerate ([9cc05a6](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/9cc05a6a754f2ed4c196300d9f591462fd7203b8))
+
 ## [0.12.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.12.0...v0.12.1) (2026-02-24)
 
 
