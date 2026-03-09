@@ -15,7 +15,7 @@ export function StepGenerate() {
     if (currentStep !== 6) return null;
 
     const handleRunGPT = async () => {
-        if (!gptParams) return alert("Prompts missing. Please go back to step 6.");
+        if (!gptParams) return alert("Prompts fehlen. Bitte zurück zu Schritt 5 gehen.");
 
         // Assemble system prompt exactly the way the backend auto-loader works
         let system_final = gptParams.system_prompt;
@@ -67,7 +67,7 @@ export function StepGenerate() {
                         <p><strong>Modell:</strong> {gptParams.model}</p>
                         <p><strong>Cut:</strong> {gptParams.cut}</p>
                     </div>
-                ) : <p className="text-sm text-text-secondary">Gehe zurück zu Schritt 6 um die Config zu setzen.</p>}
+                ) : <p className="text-sm text-text-secondary">Gehe zurück zu Schritt 5 um die Konfiguration zu setzen.</p>}
             </div>
 
             <div className="flex gap-2.5 items-center flex-wrap">
