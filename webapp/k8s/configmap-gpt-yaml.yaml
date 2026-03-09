@@ -1,37 +1,34 @@
-# GPT Preset Configuration
+# GPT Configuration
 # ArgoCD source: this ConfigMap is mounted into the container at /app/config/gpt_config.yaml
 # The webapp reads OPENAI_API_KEY from the environment (provided by the Secret below).
 #
-# Edit the `presets` block to add or change GPT presets.
-# The webapp's /api/run/gpt endpoint reads model/temperature/max_tokens from the request body;
-# this file is the reference preset store that can be loaded by a future /api/config/gpt_preset
-# endpoint (or directly by the notebook-compatible pipeline run).
+# This file mirrors the gpt_config.yaml used in the notebook pipeline (step 05a).
+# The frontend reads available model names from /api/system_info and populates the dropdown.
+# The backend uses model/temperature/max_tokens from the request body sent by the frontend.
 #
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: gpt-config
-  namespace: audiodeskription
-  labels:
-    app.kubernetes.io/name: audiodeskription
-    app.kubernetes.io/component: config
-data:
-  gpt_config.yaml: |
-    # Audiodeskription GPT presets
-    # Each preset defines a model configuration for the GPT description step.
-    presets:
-      standard:
-        model: gpt-5-mini-2025-08-07
-        temperature: 1.0
-        max_output_tokens: 1024
-        detail: high
-      fast:
-        model: gpt-5-nano-2025-08-07
-        temperature: 1.0
-        max_output_tokens: 512
-        detail: low
-      quality:
-        model: gpt-5.2-2025-12-11
-        temperature: 1.0
-        max_output_tokens: 2048
-        detail: high
+    namespace: audiodeskription
+      labels:
+          app.kubernetes.io/name: audiodeskription
+              app.kubernetes.io/component: config
+              data:
+                gpt_config.yaml: |
+                    environments:
+                          dev:
+                                  model: gpt-4.1-nano-2025-04-14
+                                          temperature: 0.1
+                                                  max_tokens: 150
+                                                          top_p: null
+                                                                  frequency_penalty: 0.0
+                                                                          presence_penalty: 0.0
+                                                                                  detail: low
+
+                                                                                        dev_0:
+                                                                                                model: gpt-4.1-mini-2025-04-14
+                                                                                                        temperature: 1
+                                                                                                                max_tokens: 8000
+                                                                                                                        top_p: null
+                                                                                                                                frequ
