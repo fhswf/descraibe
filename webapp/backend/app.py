@@ -126,6 +126,28 @@ def _load_raw_prompts_from_dir(prompts_dir: str) -> dict[str, str]:
     return res
 
 
+def _load_available_models(config_path: str) -> list[dict]:
+    """Load model list from gpt_config.yaml."""
+    try:
+        import yaml
+        p = Path(config_path)
+        if not p.exists():
+            return []
+        with open(p, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        envs = config.get("environments", {})
+        seen: set = set()
+        models = []
+        for env_name, v in envs.items():
+            m = v.get("model", "")
+            if m and m not in seen:
+                seen.add(m)
+                models.append({"env": env_name, "model": m})
+        return models
+    except Exception:
+        return []
+
+
 # ── Health check (K8s liveness / readiness probe) ─────────────────────────────
 
 @app.get("/api/ping")
@@ -157,18 +179,17 @@ def index():
 
 @app.get("/api/system_info")
 def system_info():
-    """Return backend system information, such as GPU availability and default prompts."""
+    """Return backend system information, such as GPU availability, default prompts and available models."""
     gpu_available = False
     try:
         import torch
         gpu_available = torch.cuda.is_available()
     except ImportError:
         pass
-    
+
     defaults = {}
     prompts_dir = os.environ.get("GPT_PROMPTS_DIR", "")
     if not prompts_dir:
-        # Fallback for dev environments or K8s if env is missing
         potential_dirs = [
             Path("/app/config/prompts"),
             Path(__file__).parent.parent / "config" / "prompts"
@@ -177,15 +198,36 @@ def system_info():
             if d.exists() and d.is_dir():
                 prompts_dir = str(d)
                 break
-                
+
     if prompts_dir:
         defaults = _load_raw_prompts_from_dir(prompts_dir)
-    
+
+    # Load available models from gpt_config.yaml
+    gpt_config_path = os.environ.get("GPT_CONFIG_PATH", "")
+    if not gpt_config_path:
+        potential_configs = [
+            Path("/app/config/gpt_config.yaml"),
+            Path(__file__).parent.parent / "config" / "gpt_config.yaml"
+        ]
+        for p in potential_configs:
+            if p.exists():
+                gpt_config_path = str(p)
+                break
+
+    available_models = _load_available_models(gpt_config_path) if gpt_config_path else []
+
+    # Fallback: if no models found, return sensible defaults
+    if not available_models:
+        available_models = [
+            {"env": "default", "model": "gpt-4o"},
+            {"env": "mini", "model": "gpt-4o-mini"},
+        ]
+
     return {
         "gpu_available": gpu_available,
-        "default_prompts": defaults
+        "default_prompts": defaults,
+        "available_models": available_models,
     }
-
 @app.post("/api/jobs")
 async def create_job():
     job_id = sm.create_job()
