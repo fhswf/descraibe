@@ -69,7 +69,7 @@ data:
     4. Antworte NUR mit dem finalen Beschreibungstext. Keine Kommentare, keine Bestätigungen.
 
     BESCHREIBUNG:
-    """
+
   few_shots.txt: |
     ZUSÄTZLICHE REGELN FÜR NATURDOKUMENTATIONEN:
     - Filmische Mittel: Benenne Kameratechniken (Zeitraffer, Drohnenflug, Zeitlupe, Makro) klar, wenn sie sichtbar sind.
@@ -93,10 +93,4 @@ data:
     INPUT BILD: Man sieht die Sonne scheinen. Eine Schneedecke schmilzt und im Zeitraffer wächst das Gras darunter und wird sichtbar, als der Schnee geschmolzen ist.
     INPUT TRANSKRIPT: Während der kurzen Tage müssen die Vögel möglichst viel energiereiche Nahrung finden.
     IDEALER OUTPUT: Am klaren Himmel leuchtet die goldene Sonne. Zeitraffer: Die verharschte Schneedecke schmilzt, darunter kommt das tiefgrüne Gras zum Vorschein. Grashalme in Makroaufnahme mit filigranen Frostnadeln bedeckt.
-```
 
----
-
-**Commit-Message:**
-```
-fix(config): update prompt templates to German with naturdoku few-shots
