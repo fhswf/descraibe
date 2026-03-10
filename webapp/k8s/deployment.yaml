@@ -21,7 +21,7 @@ spec:
       containers:
         - name: webapp
           # Update image tag to match your registry and CI pipeline tag.
-          image: ghcr.io/fhswf/audiodeskription-webapp:latest
+          image: ghcr.io/fhswf/audiodeskription-webapp:sha-88eb19c
           imagePullPolicy: Always
           ports:
             - name: http
