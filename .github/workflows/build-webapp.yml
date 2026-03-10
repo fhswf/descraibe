@@ -28,7 +28,7 @@ jobs:
     if: "${{ inputs.release_tag != '' || github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore: release') }}"
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       packages: write   # needed to push to ghcr.io
 
     steps:
@@ -81,13 +81,3 @@ jobs:
           # Use GitHub Actions cache to speed up repeat builds
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Update image SHA in deployment.yaml
-        if: github.event_name != 'pull_request'
-        run: |
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          sed -i "s|ghcr.io/fhswf/audiodeskription-webapp:.*|ghcr.io/fhswf/audiodeskription-webapp:sha-${SHORT_SHA}|" webapp/k8s/deployment.yaml
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add webapp/k8s/deployment.yaml
-          git diff --staged --quiet || git commit -m "chore: update image SHA to sha-${SHORT_SHA} [skip ci]"
-          git push

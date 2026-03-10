@@ -51,14 +51,21 @@ WORKDIR /app
 
 # Copy dependency manifest first so Docker can cache the install layer
 COPY webapp/pyproject.toml .
+COPY webapp/requirements_webapp.txt .
 
-# Install Python dependencies (no dev extras, compile bytecode)
-RUN uv pip install --system --no-cache .
+# Install Python dependencies without bursting cache on every source code change
+# We install from the requirements file so versions map cleanly without scanning backend code yet.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system --no-cache -r requirements_webapp.txt
 
 # Copy the rest of the webapp
 COPY webapp/backend ./backend
 # Copy the built frontend from the builder stage
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
+
+# Install the actual project (nearly instant since deps are already there)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system --no-cache --no-deps .
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
 # All values can be overridden at runtime:
