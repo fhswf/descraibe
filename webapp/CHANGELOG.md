@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.13.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.12.2...v0.13.0) (2026-03-10)
+
+
+### Features
+
+* add _load_available_models() and extend /api/system_info endpoint ([c32e5c7](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/c32e5c790b38216ebaad3b4bc20a38908a044b6e))
+
+
+### Bug Fixes
+
+* **config:** replace presets with full environments structure from notebook gpt_config.yaml ([2361ace](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/2361ace7b4b7572ec9dc3e847fdaa93324b3ad39))
+* **config:** replace presets with full environments structure from notebook gpt_config.yaml ([cfba03c](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/cfba03cec73bac53fa2ad4b8887655d2e091eb90))
+* german error message and hint text in StepGenerate (Schritt 5) ([cda6db9](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/cda6db911a0626fb4915b824e697cb95bd50b78e))
+* minor prompt template formatting adjustments. ([acfd245](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/acfd245cec8bdc989b50e7c8a9c9e2a7f365972e))
+* minor prompt template formatting adjustments. ([c8ea022](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/c8ea022e45ecbbb5747d6b0f55b08accc6311e1c))
+
 ## [0.12.2](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.12.1...v0.12.2) (2026-03-09)
 
 
