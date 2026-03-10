@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.13.0...v0.13.1) (2026-03-10)
+
+
+### Bug Fixes
+
+* minor fixes in useJob hook ([c1ea265](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/c1ea265a640a3eb7afb8a2d896a5457061e20ef4))
+
 ## [0.13.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.12.2...v0.13.0) (2026-03-10)
 
 
