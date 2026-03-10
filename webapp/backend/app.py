@@ -127,26 +127,81 @@ def _load_raw_prompts_from_dir(prompts_dir: str) -> dict[str, str]:
 
 
 def _load_available_models(config_path: str) -> list[dict]:
-    """Load model list from gpt_config.yaml."""
+    """Load model list from gpt_config.yaml.
+
+    Unterstützte Formate:
+    1) Direkte YAML-Datei:
+       presets:
+         standard:
+           model: gpt-5-mini-2025-08-07
+         fast:
+           model: gpt-5-nano-2025-08-07
+
+    2) Kubernetes-ConfigMap mit eingebettetem YAML:
+       data:
+         gpt_config.yaml: |
+           presets:
+             standard:
+               model: gpt-5-mini-2025-08-07
+
+    3) Legacy-Format:
+       environments:
+         default:
+           model: gpt-4o
+    """
     try:
         import yaml
+
         p = Path(config_path)
         if not p.exists():
+            print(f"[system_info] GPT config not found: {config_path}")
             return []
-        with open(p, encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-        envs = config.get("environments", {})
-        seen: set = set()
-        models = []
-        for env_name, v in envs.items():
-            m = v.get("model", "")
-            if m and m not in seen:
-                seen.add(m)
-                models.append({"env": env_name, "model": m})
-        return models
-    except Exception:
-        return []
 
+        with open(p, encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+
+        # Falls eine komplette K8s-ConfigMap gelesen wird und der eigentliche
+        # YAML-Inhalt als String unter data["gpt_config.yaml"] liegt:
+        if isinstance(config, dict) and "data" in config and "gpt_config.yaml" in config["data"]:
+            inner_yaml = config["data"]["gpt_config.yaml"]
+            if isinstance(inner_yaml, str) and inner_yaml.strip():
+                config = yaml.safe_load(inner_yaml) or {}
+
+        # Primär aktuelles Format: presets
+        entries = config.get("presets", {})
+
+        # Rückwärtskompatibilität: älteres Format environments
+        if not entries:
+            entries = config.get("environments", {})
+
+        if not isinstance(entries, dict):
+            print(f"[system_info] Invalid GPT config structure in: {config_path}")
+            return []
+
+        seen: set[str] = set()
+        models: list[dict] = []
+
+        for entry_name, values in entries.items():
+            if not isinstance(values, dict):
+                continue
+
+            model = str(values.get("model", "")).strip()
+            if not model:
+                continue
+
+            if model not in seen:
+                seen.add(model)
+                models.append({
+                    "env": str(entry_name),
+                    "model": model
+                })
+
+        print(f"[system_info] Loaded GPT models from {config_path}: {models}")
+        return models
+
+    except Exception as exc:
+        print(f"[system_info] Failed to load GPT models from {config_path}: {exc}")
+        return []
 
 # ── Health check (K8s liveness / readiness probe) ─────────────────────────────
 
