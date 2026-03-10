@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.13.1...v0.14.0) (2026-03-10)
+
+
+### Features
+
+* implement uv-based dependency locking. ([4527471](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/45274717bee6d497b13ecc96d98c0c6624592962))
+
+
+### Bug Fixes
+
+* **ci:** revert updating deployment.yaml ([4527471](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/45274717bee6d497b13ecc96d98c0c6624592962))
+
 ## [0.13.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.13.0...v0.13.1) (2026-03-10)
 
 
