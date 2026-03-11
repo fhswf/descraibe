@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.14.0...v0.14.1) (2026-03-11)
+
+
+### Bug Fixes
+
+* parsing presets ([2191f73](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/2191f73c8676913ac58eccbf29bb4ea28822550b))
+* parsing presets ([b3d183f](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/b3d183f41b7382e3bbc8f69b41e456e6341f3afa))
+
 ## [0.14.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.13.1...v0.14.0) (2026-03-10)
 
 
