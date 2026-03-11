@@ -12,7 +12,7 @@ namespace: audiodeskription
 resources:
   - namespace.yaml
   - pvc.yaml
-  - configmap-gpt-yaml.yaml
+  - configmap-gpt.yaml
   - configmap-prompts.yaml
   - deployment.yaml
   - service.yaml
