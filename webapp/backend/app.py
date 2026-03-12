@@ -34,6 +34,8 @@ FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 
 app = FastAPI(title="Audiodeskription API", docs_url=None)
 
+ERR_UNKNOWN_JOB = "Unknown job"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -298,7 +300,7 @@ def upload_status(job_id: str, filename: str = None):
 
     job_path = sm.job_dir(job_id)
     if not job_path:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
     part_file = job_path / f"{filename}.part"
     if part_file.exists():
@@ -324,7 +326,7 @@ async def upload_chunk(
 
     job_path = sm.job_dir(job_id)
     if not job_path:
-         return JSONResponse({"error": "Unknown job"}, status_code=404)
+         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
     part_file = job_path / f"{filename}.part"
     video_path = job_path / filename
@@ -361,7 +363,7 @@ def run_vad(job_id: str, body: dict = Body(default={})):
     from pipeline import vad_pauses
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
     if not job.get("video_path"):
         return JSONResponse({"error": "No video uploaded"}, status_code=400)
 
@@ -414,7 +416,7 @@ def run_transcribe(job_id: str, body: dict = Body(default={})):
     from pipeline import transcription as trans_mod
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
     params = {
         "model_size": body.get("model_size", "small"),
@@ -503,7 +505,7 @@ async def upload_srt(job_id: str, srt: UploadFile = File(...)):
     from pipeline import transcription as trans_mod
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
     if not srt:
         return JSONResponse({"error": "No SRT file"}, status_code=400)
@@ -590,7 +592,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
     from pipeline import image_extraction as img_mod
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
     if job.get("slots_df") is None:
         return JSONResponse({"error": "Slots not available. Run slot generation first."}, status_code=400)
 
@@ -657,7 +659,7 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
     from pipeline import gpt_description as gpt_mod, export as export_mod
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
     if job.get("slots_df") is None:
         return JSONResponse({"error": "Slots not available"}, status_code=400)
 
@@ -763,7 +765,7 @@ def update_texts(job_id: str, body: dict = Body(...)):
     from pipeline import export as export_mod
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
     cut = body.get("cut", "broadcast")
     key = f"gpt_records_{cut}"
@@ -804,7 +806,7 @@ def update_slots(job_id: str, body: dict = Body(...)):
     from pipeline import export as export_mod
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
     slots_df = job.get("slots_df")
     if slots_df is None:
@@ -890,7 +892,7 @@ def run_tts_export(job_id: str, body: dict = Body(default={})):
     from pipeline import tts_export as tts_mod
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
         
     cut = body.get("cut", "broadcast")
     key = f"gpt_records_{cut}"
@@ -995,7 +997,7 @@ async def status_stream(job_id: str, request: Request):
 def get_job(job_id: str, request: Request):
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
     # Return serialisable subset
     import math
@@ -1061,7 +1063,7 @@ def build_hateoas_links(job: dict, base_url: str):
 def download(job_id: str, file_key: str):
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
     if file_key == "video":
         file_path = job.get("video_path")
@@ -1083,7 +1085,7 @@ def preview_tts(job_id: str, slot_id: int):
     """Serve the per-slot TTS mp3 file for inline browser playback."""
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
     job_path = sm.job_dir(job_id)
     audio_path = job_path / "tts" / f"slot_{slot_id}.mp3"
@@ -1099,7 +1101,7 @@ def preview_tts(job_id: str, slot_id: int):
 def preview_image(job_id: str, img_name: str):
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": "Unknown job"}, status_code=404)
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
     job_path = sm.job_dir(job_id)
     # Restrict to frames / gapfill subdirs

@@ -425,55 +425,75 @@ export function JobProvider({ children }) {
         setIsRunAllActive(false);
     };
 
+    const handleUpdateGPTRecord = useCallback((recordId, updates) => {
+        setGptRecords(prevRecords =>
+            prevRecords.map(record =>
+                record.id === recordId ? { ...record, ...updates } : record
+            )
+        );
+    }, []);
+
+    const contextValue = useMemo(() => ({
+        jobId,
+        setJobId,
+        jobData,
+        sseConnected,
+        gptRecords,
+        setGptRecords,
+        currentStep,
+        setCurrentStep,
+        doneSteps,
+        markStepDone,
+        progressData,
+        setProgressData,
+        focusedSlot,
+        setFocusedSlot,
+        createJob,
+        fetchJobData,
+        srtTexts,
+        setSrtTexts,
+        isSavingSrt,
+        handleSaveSrtTexts,
+        handleUpdateSlotTiming,
+        isConfigModalOpen,
+        setIsConfigModalOpen,
+        gptParams,
+        setGptParams,
+        availableModels,
+        setAvailableModels,
+        vadParams,
+        setVadParams,
+        transcribeParams,
+        setTranscribeParams,
+        slotsParams,
+        setSlotsParams,
+        ttsParams,
+        setTtsParams,
+        imagesParams,
+        setImagesParams,
+        handleRunVAD,
+        handleRunTranscribe,
+        handleRunSlots,
+        handleRunImages,
+        handleRunGPT,
+        handleUpdateGPTRecord,
+        handleRunTTS,
+        runAllSteps,
+        isRunAllActive,
+        stopRunAll
+    }), [
+        jobId, setJobId, jobData, sseConnected, gptRecords, setGptRecords, currentStep, setCurrentStep,
+        doneSteps, markStepDone, progressData, setProgressData, focusedSlot, setFocusedSlot, createJob,
+        fetchJobData, srtTexts, setSrtTexts, isSavingSrt, handleSaveSrtTexts, handleUpdateSlotTiming,
+        isConfigModalOpen, setIsConfigModalOpen, gptParams, setGptParams, availableModels, setAvailableModels,
+        vadParams, setVadParams, transcribeParams, setTranscribeParams, slotsParams, setSlotsParams,
+        ttsParams, setTtsParams, imagesParams, setImagesParams, handleRunVAD, handleRunTranscribe,
+        handleRunSlots, handleRunImages, handleRunGPT, handleUpdateGPTRecord, handleRunTTS, runAllSteps,
+        isRunAllActive, stopRunAll
+    ]);
+
     return (
-        <JobContext.Provider value={{
-            jobId,
-            setJobId,
-            jobData,
-            sseConnected,
-            gptRecords,
-            setGptRecords,
-            currentStep,
-            setCurrentStep,
-            doneSteps,
-            markStepDone,
-            progressData,
-            setProgressData,
-            focusedSlot,
-            setFocusedSlot,
-            createJob,
-            fetchJobData,
-            srtTexts,
-            setSrtTexts,
-            isSavingSrt,
-            handleSaveSrtTexts,
-            handleUpdateSlotTiming,
-            isConfigModalOpen,
-            setIsConfigModalOpen,
-            gptParams,
-            setGptParams,
-            availableModels,
-            setAvailableModels,
-            vadParams,
-            setVadParams,
-            transcribeParams,
-            setTranscribeParams,
-            slotsParams,
-            setSlotsParams,
-            ttsParams,
-            setTtsParams,
-            imagesParams,
-            setImagesParams,
-            handleRunVAD,
-            handleRunTranscribe,
-            handleRunSlots,
-            handleRunImages,
-            handleRunGPT,
-            handleRunTTS,
-            runAllSteps,
-            isRunAllActive,
-            stopRunAll
-        }}>
+        <JobContext.Provider value={contextValue}>
             {children}
         </JobContext.Provider>
     );
