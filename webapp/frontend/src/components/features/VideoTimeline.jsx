@@ -145,7 +145,9 @@ export function VideoTimeline({ videoRef }) {
                     contentDiv.style.height = '100%';
                     contentDiv.style.padding = '2px';
                     contentDiv.style.boxSizing = 'border-box';
-                    contentDiv.style.overflow = 'hidden';
+                    contentDiv.style.overflow = 'hidden'; // Keep hidden by default
+                    // Force marginTop to 0px to override the injected calculation by the Wavesurfer Regions plugin
+                    contentDiv.style.setProperty('margin-top', '0px', 'important');
 
                     const textSpan = document.createElement('span');
                     textSpan.innerText = `AD Slot ${idx + 1}`;
@@ -187,10 +189,19 @@ export function VideoTimeline({ videoRef }) {
                                     imgDom.style.cursor = 'pointer'; // Show it's interactive
                                     imgDom.style.transition = 'all 0.2s ease-in-out';
                                     imgDom.style.zIndex = '10';
+                                    imgDom.style.position = 'relative'; // Need position for z-index to work
+                                    imgDom.style.transformOrigin = 'bottom left'; // Scale outwards and upwards
                                     
                                     // Hover effects
                                     imgDom.addEventListener('mouseenter', () => {
-                                        imgDom.style.transform = 'scale(2) translateY(-25%)';
+                                        contentDiv.style.overflow = 'visible'; // Let it Break out only on hover
+                                        // Also need to allow the actual wavesurfer region parent element to overflow
+                                        if (contentDiv.parentElement) {
+                                              contentDiv.parentElement.style.zIndex = '100';
+                                              contentDiv.parentElement.style.overflow = 'visible';
+                                        }
+
+                                        imgDom.style.transform = 'scale(2)'; // Simpler scale now that origin is bottom left
                                         imgDom.style.zIndex = '50';
                                         imgDom.style.boxShadow = '0 8px 16px rgba(0,0,0,0.8)';
                                         imgDom.style.border = '2px solid rgba(139, 92, 246, 1)'; // Violet border on hover
@@ -201,6 +212,14 @@ export function VideoTimeline({ videoRef }) {
                                         imgDom.style.zIndex = '10';
                                         imgDom.style.boxShadow = '0 2px 4px rgba(0,0,0,0.5)';
                                         imgDom.style.border = '2px solid rgba(255,255,255,0.7)';
+                                        
+                                        // Reset overflow
+                                        contentDiv.style.overflow = 'hidden';
+                                        if (contentDiv.parentElement) {
+                                              contentDiv.parentElement.style.zIndex = '';
+                                              // Wavesurfer handles its own wrapper overflow, resetting to '' is usually safe
+                                              contentDiv.parentElement.style.overflow = '';
+                                        }
                                     });
 
                                     imgContainer.appendChild(imgDom);
