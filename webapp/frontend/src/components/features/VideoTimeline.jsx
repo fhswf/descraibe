@@ -60,10 +60,12 @@ export function VideoTimeline({ videoRef }) {
         // Initialize Wavesurfer
         const ws = WaveSurfer.create({
             container: containerRef.current,
-            waveColor: '#ced4da',
-            progressColor: '#007bff',
-            height: 120, // Increased from 60 to make images more visible
+            waveColor: 'rgba(206, 212, 218, 0.5)',
+            progressColor: 'rgba(0, 123, 255, 0.5)',
+            height: 160,
             barWidth: 2,
+            barAlign: 'top',
+            barHeight: 0.6,
             normalize: true, // Auto scroll matches the playhead
             minPxPerSec: 50, // Initial zoom
             plugins: [
@@ -139,6 +141,7 @@ export function VideoTimeline({ videoRef }) {
                     contentDiv.style.display = 'flex';
                     contentDiv.style.flexDirection = 'column';
                     contentDiv.style.alignItems = 'flex-start';
+                    contentDiv.style.justifyContent = 'space-between';
                     contentDiv.style.height = '100%';
                     contentDiv.style.padding = '2px';
                     contentDiv.style.boxSizing = 'border-box';
@@ -146,11 +149,14 @@ export function VideoTimeline({ videoRef }) {
 
                     const textSpan = document.createElement('span');
                     textSpan.innerText = `AD Slot ${idx + 1}`;
-                    textSpan.style.backgroundColor = 'rgba(255,255,255,0.7)';
-                    textSpan.style.padding = '0 4px';
-                    textSpan.style.borderRadius = '2px';
+                    textSpan.style.backgroundColor = 'rgba(255,255,255,0.85)';
+                    textSpan.style.padding = '2px 6px';
+                    textSpan.style.borderRadius = '4px';
                     textSpan.style.marginBottom = '2px';
                     textSpan.style.fontSize = '0.85rem';
+                    textSpan.style.fontWeight = 'bold';
+                    textSpan.style.color = '#333';
+                    textSpan.style.boxShadow = '0 1px 2px rgba(0,0,0,0.2)';
                     contentDiv.appendChild(textSpan);
 
                     // If we have images for this slot, embed them inside the slot region!
@@ -160,22 +166,43 @@ export function VideoTimeline({ videoRef }) {
                         if (matchingThumbs.length > 0) {
                             const imgContainer = document.createElement('div');
                             imgContainer.style.display = 'flex';
-                            imgContainer.style.gap = '4px';
+                            imgContainer.style.gap = '6px';
                             imgContainer.style.flexWrap = 'nowrap';
                             imgContainer.style.flex = '1';
                             imgContainer.style.minHeight = '0';
                             imgContainer.style.width = '100%';
+                            imgContainer.style.alignItems = 'flex-end'; // Align images to bottom
+                            imgContainer.style.paddingBottom = '2px';
 
                             matchingThumbs.forEach(sm => {
                                 const imgName = sm.img_path ? sm.img_path.split(/[\\/]/).pop() : null;
                                 if (imgName) {
                                     const imgDom = document.createElement('img');
                                     imgDom.src = `/api/jobs/${jobData.job_id}/images/${imgName}`;
-                                    imgDom.style.height = '100%'; // fit inside timeline container
+                                    imgDom.style.height = '60px'; // Fit within the empty bottom 40% of 160px height
                                     imgDom.style.borderRadius = '4px';
-                                    imgDom.style.border = '1px solid #adb5bd';
+                                    imgDom.style.border = '2px solid rgba(255,255,255,0.7)';
+                                    imgDom.style.boxShadow = '0 2px 4px rgba(0,0,0,0.5)';
                                     imgDom.style.objectFit = 'cover';
-                                    imgDom.style.pointerEvents = 'none'; // prevent drag interference
+                                    imgDom.style.cursor = 'pointer'; // Show it's interactive
+                                    imgDom.style.transition = 'all 0.2s ease-in-out';
+                                    imgDom.style.zIndex = '10';
+                                    
+                                    // Hover effects
+                                    imgDom.addEventListener('mouseenter', () => {
+                                        imgDom.style.transform = 'scale(2) translateY(-25%)';
+                                        imgDom.style.zIndex = '50';
+                                        imgDom.style.boxShadow = '0 8px 16px rgba(0,0,0,0.8)';
+                                        imgDom.style.border = '2px solid rgba(139, 92, 246, 1)'; // Violet border on hover
+                                    });
+                                    
+                                    imgDom.addEventListener('mouseleave', () => {
+                                        imgDom.style.transform = 'none';
+                                        imgDom.style.zIndex = '10';
+                                        imgDom.style.boxShadow = '0 2px 4px rgba(0,0,0,0.5)';
+                                        imgDom.style.border = '2px solid rgba(255,255,255,0.7)';
+                                    });
+
                                     imgContainer.appendChild(imgDom);
                                 }
                             });
