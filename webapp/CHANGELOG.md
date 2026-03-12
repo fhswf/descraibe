@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.16.0...v0.16.1) (2026-03-12)
+
+
+### Bug Fixes
+
+* Correct package.json path in Vite config. ([e9ee84a](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/e9ee84a196f09f6f2923681060937c4ee758765d))
+
 ## [0.16.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.15.0...v0.16.0) (2026-03-12)
 
 
