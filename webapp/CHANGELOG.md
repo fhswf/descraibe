@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.17.0...v0.17.1) (2026-03-12)
+
+
+### Bug Fixes
+
+* Adjust image preview styling and hover behavior in VideoTimeline to prevent overflow issues and refine positioning. ([1ca6d8e](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/1ca6d8ef8dadcad47d0fb2bafd76dd8006471e41))
+
 ## [0.17.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.16.1...v0.17.0) (2026-03-12)
 
 
