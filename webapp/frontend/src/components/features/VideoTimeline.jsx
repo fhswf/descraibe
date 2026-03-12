@@ -207,6 +207,7 @@ export function VideoTimeline({ videoRef }) {
             totalDuration = ws.getDuration();
             setDuration(totalDuration);
 
+            // ── Pause / Voice regions ──────────────────────────────────────────
             if (jobData.pauses && totalDuration > 0) {
                 jobData.pauses.forEach((p) => {
                     wsRegions.addRegion({
@@ -245,6 +246,7 @@ export function VideoTimeline({ videoRef }) {
                 }
             }
 
+            // ── AD Slot regions (draggable/resizable) ─────────────────────────
             if (jobData.slots) {
                 jobData.slots.forEach((s, idx) => {
                     const contentDiv = document.createElement('div');
@@ -256,7 +258,7 @@ export function VideoTimeline({ videoRef }) {
                     contentDiv.style.padding = '2px';
                     contentDiv.style.boxSizing = 'border-box';
                     contentDiv.style.overflow = 'hidden';
-                    // marginTop is managed via MutationObserver (pinMarginTop) below
+                    // marginTop is managed via MutationObserver (pinMarginTop) above
 
                     const textSpan = document.createElement('span');
                     textSpan.innerText = `AD Slot ${idx + 1}`;
@@ -285,7 +287,7 @@ export function VideoTimeline({ videoRef }) {
                             imgContainer.style.paddingBottom = '2px';
 
                             matchingThumbs.forEach(sm => {
-                                const imgName = sm.img_path ? sm.img_path.split(/[\\\/]/).pop() : null;
+                                const imgName = sm.img_path ? sm.img_path.split(/[/\\]/).pop() : null;
                                 if (imgName) {
                                     const imgDom = document.createElement('img');
                                     imgDom.src = `/api/jobs/${jobData.job_id}/images/${imgName}`;
@@ -339,6 +341,74 @@ export function VideoTimeline({ videoRef }) {
                         drag: true,
                         resize: true,
                         content: contentDiv,
+                    });
+                });
+            }
+
+            // ── AD audio description regions (non-interactive, below AD slots) ─
+            if (jobData.gpt_records) {
+                jobData.gpt_records.filter(r => r.slot).forEach(rec => {
+                    const contentEl = document.createElement('div');
+                    contentEl.style.display = 'flex';
+                    contentEl.style.alignItems = 'center';
+                    contentEl.style.justifyContent = 'center';
+                    contentEl.style.width = '100%';
+                    contentEl.style.height = '100%';
+                    contentEl.title = rec.text ? rec.text.slice(0, 80) : `AD ${rec.slot}`;
+
+                    const icon = document.createElement('span');
+                    icon.style.fontSize = '1rem';
+                    icon.style.color = 'rgba(167,139,250,0.9)';
+                    icon.style.padding = '4px 8px';
+                    icon.style.borderRadius = '4px';
+                    icon.style.cursor = 'pointer';
+                    icon.style.transition = 'background-color 0.2s';
+                    icon.textContent = '▶';
+
+                    icon.addEventListener('mouseenter', () => {
+                        icon.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+                    });
+                    icon.addEventListener('mouseleave', () => {
+                        icon.style.backgroundColor = 'transparent';
+                    });
+
+                    // Only the icon triggers playback toggle.
+                    // stopPropagation prevents the click from bubbling to WaveSurfer's
+                    // interaction handler, which would seek and immediately call stopAllAd().
+                    icon.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const entry = adAudiosRef.current[rec.slot];
+                        if (!entry) return;
+                        const { el } = entry;
+                        if (el.paused) {
+                            el.currentTime = 0;
+                            el.play().catch(() => {});
+                            icon.textContent = '■';
+                        } else {
+                            el.pause();
+                            el.currentTime = 0;
+                            icon.textContent = '▶';
+                        }
+                    });
+
+                    contentEl.appendChild(icon);
+
+                    // Reset icon when audio finishes or is stopped externally (e.g. stopAllAd)
+                    const entry = adAudiosRef.current[rec.slot];
+                    if (entry) {
+                        const resetIcon = () => { icon.textContent = '▶'; };
+                        entry.el.addEventListener('ended', resetIcon);
+                        entry.el.addEventListener('pause', resetIcon);
+                    }
+
+                    wsRegions.addRegion({
+                        id: `ad-audio-${rec.slot}`,
+                        start: rec.start_s,
+                        end: rec.end_s,
+                        color: 'rgba(109, 40, 217, 0.35)',
+                        drag: false,
+                        resize: false,
+                        content: contentEl,
                     });
                 });
             }
@@ -468,48 +538,7 @@ export function VideoTimeline({ videoRef }) {
             </div>
 
             <div className="bg-[#0a0a0a] p-4 relative pt-2">
-                <div ref={containerRef} className="w-full border-b border-border-subtle pb-2"></div>
-
-                {/* AD Audio strip – shown when TTS records exist */}
-                {hasTtsRecords && (
-                    <div className="mt-3">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-1.5 px-1">
-                            AD-Audiodeskriptionen
-                        </div>
-                        <div className="relative h-9 bg-white/3 rounded-lg overflow-visible border border-border-subtle">
-                            {/* Playhead indicator line mapped to the strip */}
-                            <div
-                                className="absolute top-0 h-full w-px bg-blue-400/60 z-20 pointer-events-none"
-                                style={{ left: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' }}
-                            />
-                            {jobData.gpt_records.filter(r => r.slot).map(rec => {
-                                const leftPct = duration > 0 ? (rec.start_s / duration) * 100 : 0;
-                                const widthPct = duration > 0 ? ((rec.end_s - rec.start_s) / duration) * 100 : 0;
-                                const isActive = currentTime >= rec.start_s && currentTime < rec.end_s;
-                                return (
-                                    <div
-                                        key={rec.slot}
-                                        className={`absolute top-0.5 h-8 rounded flex items-center justify-center overflow-hidden transition-all border cursor-pointer group ${isActive
-                                            ? 'bg-violet-500/40 border-violet-400'
-                                            : 'bg-violet-900/30 border-violet-800/50 hover:bg-violet-600/30 hover:border-violet-500/60'}`}
-                                        style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
-                                        title={rec.text ? rec.text.slice(0, 80) : `Slot ${rec.slot}`}
-                                        onClick={() => playSlotAudio(rec.slot)}
-                                    >
-                                        <span className="material-icons-round text-[1rem] text-violet-300 opacity-70 group-hover:opacity-100 transition-opacity">
-                                            {isActive && adAudioEnabled ? 'graphic_eq' : 'play_arrow'}
-                                        </span>
-                                        {widthPct > 3 && (
-                                            <span className="text-[9px] text-violet-200/70 font-mono ml-0.5 truncate">
-                                                {rec.slot}
-                                            </span>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                )}
+                <div ref={containerRef} className="w-full"></div>
             </div>
         </div>
     );
