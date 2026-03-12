@@ -44,6 +44,18 @@ jobs:
       packages: write   # needed to push to ghcr.io
 
     steps:
+      # ── Free disk space (GitHub-hosted runners ship with ~20 GB of unused tools) ─
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false      # keep tool cache (needed for actions)
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false    # keep swap – removing it can cause OOM kills
+
       # ── Checkout ──────────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -80,10 +92,6 @@ jobs:
             type=sha,prefix=sha-,format=short
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
-
-      # ── Prune dangling Docker data to keep the runner disk healthy ──────────────
-      - name: Free up Docker disk space
-        run: docker system prune -f
 
       # ── Build (and push on non-PR events) ─────────────────────────────────────
       - name: Build and push Docker image
