@@ -193,7 +193,10 @@ def _load_available_models(config_path: str) -> list[dict]:
                 seen.add(model)
                 models.append({
                     "env": str(entry_name),
-                    "model": model
+                    "model": model,
+                    "temperature": float(values.get("temperature", 0.2)),
+                    "max_tokens": int(values.get("max_output_tokens", 1024)),
+                    "detail": str(values.get("detail", "low"))
                 })
 
         print(f"[system_info] Loaded GPT models from {config_path}: {models}")
@@ -686,11 +689,17 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
                     user_prompt = loaded[1]
 
     cut = body.get("cut", "broadcast")
+    model_name = body.get("model", "gpt-4o")
+    
+    # O1/O3/gpt-5 models require temperature = 1.0 exactly
+    raw_temp = float(body.get("temperature", 0.2))
+    is_reasoning = model_name.startswith("o1") or model_name.startswith("o3") or "gpt-5" in model_name
+    temperature = 1.0 if is_reasoning else raw_temp
 
     gpt_params = {
         "api_key": api_key,
-        "model": body.get("model", "gpt-4o"),
-        "temperature": float(body.get("temperature", 0.2)),
+        "model": model_name,
+        "temperature": temperature,
         "max_tokens": int(body.get("max_tokens", 1024)),
         "detail": body.get("detail", "low"),
         "cut": cut,

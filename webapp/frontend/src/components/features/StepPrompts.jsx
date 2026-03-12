@@ -34,7 +34,14 @@ export function StepPrompts() {
         if (data.available_models && data.available_models.length > 0) {
           setAvailableModels(data.available_models);
           // Set default model to first entry
-          setParams(p => ({ ...p, model: data.available_models[0].model }));
+          const firstModel = data.available_models[0];
+          setParams(p => ({
+            ...p,
+            model: firstModel.model,
+            temperature: firstModel.temperature !== undefined ? firstModel.temperature : 0.2,
+            max_tokens: firstModel.max_tokens !== undefined ? firstModel.max_tokens : 1024,
+            detail: firstModel.detail !== undefined ? firstModel.detail : "low"
+          }));
         }
       })
       .catch(console.error);
@@ -52,6 +59,12 @@ export function StepPrompts() {
 
   const inputCls = "resize-y min-h-[100px] bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15";
   const selectCls = "bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15";
+
+  const isFixedTemp = params.model && (
+    params.model.startsWith('o1') || 
+    params.model.startsWith('o3') || 
+    params.model.startsWith('gpt-5')
+  );
 
   return (
     <div className="flex flex-col gap-5">
@@ -108,7 +121,21 @@ export function StepPrompts() {
           <div className="flex flex-col gap-1.5">
             <label className="text-[0.8rem] font-medium text-text-secondary">Modell</label>
             <select value={params.model}
-              onChange={e => setParams({ ...params, model: e.target.value })}
+              onChange={e => {
+                const selectedModel = e.target.value;
+                const modelInfo = availableModels.find(m => m.model === selectedModel);
+                if (modelInfo) {
+                  setParams({
+                    ...params, 
+                    model: modelInfo.model,
+                    temperature: modelInfo.temperature !== undefined ? modelInfo.temperature : params.temperature,
+                    max_tokens: modelInfo.max_tokens !== undefined ? modelInfo.max_tokens : params.max_tokens,
+                    detail: modelInfo.detail !== undefined ? modelInfo.detail : params.detail
+                  });
+                } else {
+                  setParams({ ...params, model: selectedModel });
+                }
+              }}
               className={selectCls}>
               {availableModels.length > 0
                 ? availableModels.map(({ env, model }) => (
@@ -126,11 +153,14 @@ export function StepPrompts() {
 
           {/* Temperature */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-[0.8rem] font-medium text-text-secondary">Temperature: {params.temperature}</label>
+            <label className="text-[0.8rem] font-medium text-text-secondary">
+              Temperature: {params.temperature} {isFixedTemp && "(Fixiert)"}
+            </label>
             <input type="range" min="0" max="1.5" step="0.05"
               value={params.temperature}
+              disabled={isFixedTemp}
               onChange={e => setParams({ ...params, temperature: parseFloat(e.target.value) })}
-              className="accent-violet-500 py-0" />
+              className={`py-0 ${isFixedTemp ? "opacity-50 cursor-not-allowed" : "accent-violet-500"}`} />
           </div>
 
           {/* Max tokens */}
