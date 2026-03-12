@@ -25,9 +25,9 @@ on:
         type: string
 
 concurrency:
-  # Release builds (workflow_call with a release_tag) get their own slot so they
-  # are never cancelled by a concurrent push-to-main build sharing the same ref.
-  group: ${{ github.workflow }}-${{ inputs.release_tag || github.ref }}
+  # Use a more descriptive group name. 
+  # For release-please calls, use the tag name if available to avoid cancellation by a push build.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ inputs.release_tag || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -90,7 +90,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=raw,value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
 
       # ── Build (and push on non-PR events) ─────────────────────────────────────
