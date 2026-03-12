@@ -19,12 +19,10 @@ COPY webapp/frontend/ ./
 RUN npm run build
 
 # ── Base image ─────────────────────────────────────────────────────────────────
-# CPU variant (default – no CUDA runtime required):
-# FROM python:3.11-slim
-
-# GPU variant: uncomment the line below and comment-out the CPU line above.
-# The torch index-url in pyproject.toml must also be set to the matching CUDA wheel.
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+# GPU variant – uses the minimal CUDA base image (driver compat layer only).
+# PyTorch 2.x bundles its own cuDNN and CUDA runtime as Python wheels, so
+# the full cudnn8-runtime (~3.5 GB) is not needed here.
+FROM nvidia/cuda:12.1.1-base-ubuntu22.04
 
 # ── System dependencies ────────────────────────────────────────────────────────
 # ffmpeg   – required by moviepy / scenedetect
