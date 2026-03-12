@@ -15,7 +15,9 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Release builds (workflow_call with a release_tag) get their own slot so they
+  # are never cancelled by a concurrent push-to-main build sharing the same ref.
+  group: ${{ github.workflow }}-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: true
 
 env:
