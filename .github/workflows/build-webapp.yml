@@ -7,14 +7,10 @@ on:
       - "v*.*.*"          # e.g. v1.2.3  → triggers a versioned release build
     paths:
       - "webapp/**"               # any source/backend/frontend change
-      - "webapp/Dockerfile"
-      - ".github/workflows/build-webapp.yml"
   pull_request:
     branches: [main]      # build-only (no push) for PRs
     paths:
       - "webapp/**"
-      - "webapp/Dockerfile"
-      - ".github/workflows/build-webapp.yml"
   workflow_call:
     inputs:
       release_tag:
