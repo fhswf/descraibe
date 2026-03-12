@@ -21,6 +21,12 @@ on:
         description: 'Tag to apply to the image (e.g. v1.0.0)'
         required: false
         type: string
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional: version tag to apply to the image (e.g. v0.18.0)'
+        required: false
+        type: string
 
 concurrency:
   # Release builds (workflow_call with a release_tag) get their own slot so they
