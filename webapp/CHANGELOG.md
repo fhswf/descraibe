@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.15.0...v0.16.0) (2026-03-12)
+
+
+### Features
+
+* Display application version in the UI and update package versions. ([82460dd](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/82460ddfd2284769759dd8d8fe2b6f780c1cab31))
+* Improve video timeline image visibility by increasing component heights. ([760ef5a](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/760ef5a1ce5a9d36dc9bcdf9408fe688369e52f7))
+
 ## [0.15.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.14.1...v0.15.0) (2026-03-12)
 
 
