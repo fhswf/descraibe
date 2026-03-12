@@ -62,7 +62,7 @@ export function VideoTimeline({ videoRef }) {
             container: containerRef.current,
             waveColor: '#ced4da',
             progressColor: '#007bff',
-            height: 60,
+            height: 120, // Increased from 60 to make images more visible
             barWidth: 2,
             normalize: true, // Auto scroll matches the playhead
             minPxPerSec: 50, // Initial zoom
@@ -162,14 +162,16 @@ export function VideoTimeline({ videoRef }) {
                             imgContainer.style.display = 'flex';
                             imgContainer.style.gap = '4px';
                             imgContainer.style.flexWrap = 'nowrap';
-                            imgContainer.style.height = '100%';
+                            imgContainer.style.flex = '1';
+                            imgContainer.style.minHeight = '0';
+                            imgContainer.style.width = '100%';
 
                             matchingThumbs.forEach(sm => {
                                 const imgName = sm.img_path ? sm.img_path.split(/[\\/]/).pop() : null;
                                 if (imgName) {
                                     const imgDom = document.createElement('img');
                                     imgDom.src = `/api/jobs/${jobData.job_id}/images/${imgName}`;
-                                    imgDom.style.height = '60px'; // fit inside timeline
+                                    imgDom.style.height = '100%'; // fit inside timeline container
                                     imgDom.style.borderRadius = '4px';
                                     imgDom.style.border = '1px solid #adb5bd';
                                     imgDom.style.objectFit = 'cover';
