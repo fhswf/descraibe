@@ -1076,6 +1076,23 @@ def download(job_id: str, file_key: str):
     return FileResponse(file_path, filename=filename)
 
 
+# ── TTS Audio Preview ──────────────────────────────────────────────────────────
+
+@app.get("/api/jobs/{job_id}/tts/{slot_id}")
+def preview_tts(job_id: str, slot_id: int):
+    """Serve the per-slot TTS mp3 file for inline browser playback."""
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": "Unknown job"}, status_code=404)
+
+    job_path = sm.job_dir(job_id)
+    audio_path = job_path / "tts" / f"slot_{slot_id}.mp3"
+    if not audio_path.exists():
+        return JSONResponse({"error": f"TTS file for slot {slot_id} not found"}, status_code=404)
+
+    return FileResponse(str(audio_path), media_type="audio/mpeg", filename=audio_path.name)
+
+
 # ── Image Preview ──────────────────────────────────────────────────────────────
 
 @app.get("/api/jobs/{job_id}/images/{img_name:path}")

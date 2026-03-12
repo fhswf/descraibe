@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import PropTypes from 'prop-types';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
@@ -14,8 +14,12 @@ export function VideoTimeline({ videoRef }) {
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
-    const [zoom, setZoom] = useState(50); // Default zoom level
+    const [zoom, setZoom] = useState(50);
     const [isBuffering, setIsBuffering] = useState(false);
+
+    // AD audio state
+    const [adAudioEnabled, setAdAudioEnabled] = useState(false);
+    const adAudiosRef = useRef({}); // slot_id -> HTMLAudioElement
 
     // Track buffering state from the video element
     useEffect(() => {
@@ -45,7 +49,6 @@ export function VideoTimeline({ videoRef }) {
         const mm = m.toString().padStart(2, '0');
         const ss = s.toFixed(2).padStart(5, '0');
 
-        // If duration is less than an hour, don't show hours
         if (duration < 3600) {
             return `${mm}:${ss}`;
         }
@@ -54,10 +57,100 @@ export function VideoTimeline({ videoRef }) {
         return `${hh}:${mm}:${ss}`;
     };
 
+    // ── AD Audio sync ───────────────────────────────────────────────────────────
+    // Preload all TTS audio elements when gpt_records are available
+    useEffect(() => {
+        const records = jobData?.gpt_records;
+        if (!records || records.length === 0) return;
+
+        const newAudios = {};
+        records.forEach(rec => {
+            if (!rec.slot) return;
+            const el = new Audio(`/api/jobs/${jobData.job_id}/tts/${rec.slot}`);
+            el.preload = 'none';
+            newAudios[rec.slot] = { el, start_s: rec.start_s, end_s: rec.end_s };
+        });
+        adAudiosRef.current = newAudios;
+
+        return () => {
+            Object.values(newAudios).forEach(({ el }) => {
+                el.pause();
+                el.src = '';
+            });
+        };
+    }, [jobData?.gpt_records, jobData?.job_id]);
+
+    // Handle AD audio playback in sync with video
+    const stopAllAd = useCallback(() => {
+        Object.values(adAudiosRef.current).forEach(({ el }) => {
+            el.pause();
+            el.currentTime = 0;
+        });
+    }, []);
+
+    const playSlotAudio = useCallback((slotId) => {
+        const entry = adAudiosRef.current[slotId];
+        if (!entry) return;
+        const { el } = entry;
+        el.currentTime = 0;
+        el.play().catch(() => {/* user gesture requirements */});
+    }, []);
+
+    // Poll video time and trigger AD audio clips at their start_s
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+
+        // Track which slots already started in this play session
+        const fired = new Set();
+
+        const onTimeUpdate = () => {
+            if (!adAudioEnabled) return;
+            const t = video.currentTime;
+            Object.entries(adAudiosRef.current).forEach(([slotId, { el, start_s, end_s }]) => {
+                const sid = Number(slotId);
+                if (t >= start_s && t < end_s) {
+                    if (!fired.has(sid)) {
+                        fired.add(sid);
+                        el.currentTime = 0;
+                        el.play().catch(() => {});
+                    }
+                } else if (t < start_s || t >= end_s) {
+                    // reset so it can re-fire if user scrubs back
+                    if (fired.has(sid) && t < start_s) {
+                        fired.delete(sid);
+                        el.pause();
+                        el.currentTime = 0;
+                    }
+                }
+            });
+        };
+
+        const onPause = () => stopAllAd();
+        const onSeeked = () => {
+            fired.clear();
+            stopAllAd();
+        };
+
+        video.addEventListener('timeupdate', onTimeUpdate);
+        video.addEventListener('pause', onPause);
+        video.addEventListener('seeked', onSeeked);
+
+        return () => {
+            video.removeEventListener('timeupdate', onTimeUpdate);
+            video.removeEventListener('pause', onPause);
+            video.removeEventListener('seeked', onSeeked);
+        };
+    }, [videoRef, adAudioEnabled, stopAllAd]);
+
+    // Stop AD audio when disabled
+    useEffect(() => {
+        if (!adAudioEnabled) stopAllAd();
+    }, [adAudioEnabled, stopAllAd]);
+
     useEffect(() => {
         if (!containerRef.current || !jobData?.video_path) return;
 
-        // Initialize Wavesurfer
         const ws = WaveSurfer.create({
             container: containerRef.current,
             waveColor: 'rgba(206, 212, 218, 0.5)',
@@ -66,8 +159,8 @@ export function VideoTimeline({ videoRef }) {
             barWidth: 2,
             barAlign: 'top',
             barHeight: 0.6,
-            normalize: true, // Auto scroll matches the playhead
-            minPxPerSec: 50, // Initial zoom
+            normalize: true,
+            minPxPerSec: 50,
             plugins: [
                 TimelinePlugin.create({
                     insertPosition: 'beforebegin',
@@ -80,40 +173,59 @@ export function VideoTimeline({ videoRef }) {
                     }
                 }),
             ],
-            media: videoRef.current, // Sync with the video element!
+            media: videoRef.current,
         });
 
         const wsRegions = ws.registerPlugin(RegionsPlugin.create());
         regionsRef.current = wsRegions;
+
+        // WaveSurfer's avoidOverlapping() sets marginTop via direct .style assignment
+        // (inside a setTimeout(10ms)), bypassing !important. We use MutationObserver
+        // to watch and reset it immediately whenever it's set.
+        const marginObservers = [];
+        const pinMarginTop = (el) => {
+            if (!el) return;
+            const obs = new MutationObserver(() => {
+                if (el.style.marginTop && el.style.marginTop !== '0px') {
+                    el.style.marginTop = '0px';
+                }
+            });
+            obs.observe(el, { attributes: true, attributeFilter: ['style'] });
+            marginObservers.push(obs);
+        };
+
+        // Pin immediately after each region is saved into the DOM
+        wsRegions.on('region-created', (region) => {
+            // region.content is the DOM element passed via the `content` option
+            if (region.content instanceof HTMLElement) {
+                pinMarginTop(region.content);
+            }
+        });
 
         let totalDuration = 0;
         const onReady = () => {
             totalDuration = ws.getDuration();
             setDuration(totalDuration);
 
-            // Once duration is known, we can calculate voice regions
-            // NOTE: For VAD / Pauses, we draw regions
             if (jobData.pauses && totalDuration > 0) {
-                // First, draw the Pause regions
                 jobData.pauses.forEach((p) => {
                     wsRegions.addRegion({
                         start: p.start_s,
                         end: p.end_s,
-                        color: 'rgba(255, 0, 0, 0.2)', // Red for Pause
+                        color: 'rgba(255, 0, 0, 0.2)',
                         drag: false,
                         resize: false,
                         content: 'Pause',
                     });
                 });
 
-                // Calculate Voice regions (gaps between pauses)
                 let lastEnd = 0;
                 jobData.pauses.forEach((p) => {
                     if (p.start_s > lastEnd) {
                         wsRegions.addRegion({
                             start: lastEnd,
                             end: p.start_s,
-                            color: 'rgba(0, 0, 255, 0.2)', // Blue/Green for Voice
+                            color: 'rgba(0, 0, 255, 0.2)',
                             drag: false,
                             resize: false,
                             content: 'Voice',
@@ -121,7 +233,6 @@ export function VideoTimeline({ videoRef }) {
                     }
                     lastEnd = p.end_s;
                 });
-                // Final voice region if video extends beyond final pause
                 if (totalDuration > lastEnd) {
                     wsRegions.addRegion({
                         start: lastEnd,
@@ -134,7 +245,6 @@ export function VideoTimeline({ videoRef }) {
                 }
             }
 
-            // --- 2. Create Ad-Slots (Interactive Regions) ---
             if (jobData.slots) {
                 jobData.slots.forEach((s, idx) => {
                     const contentDiv = document.createElement('div');
@@ -145,9 +255,8 @@ export function VideoTimeline({ videoRef }) {
                     contentDiv.style.height = '100%';
                     contentDiv.style.padding = '2px';
                     contentDiv.style.boxSizing = 'border-box';
-                    contentDiv.style.overflow = 'hidden'; // Keep hidden by default
-                    // Force marginTop to 0px to override the injected calculation by the Wavesurfer Regions plugin
-                    contentDiv.style.setProperty('margin-top', '0px', 'important');
+                    contentDiv.style.overflow = 'hidden';
+                    // marginTop is managed via MutationObserver (pinMarginTop) below
 
                     const textSpan = document.createElement('span');
                     textSpan.innerText = `AD Slot ${idx + 1}`;
@@ -161,7 +270,6 @@ export function VideoTimeline({ videoRef }) {
                     textSpan.style.boxShadow = '0 1px 2px rgba(0,0,0,0.2)';
                     contentDiv.appendChild(textSpan);
 
-                    // If we have images for this slot, embed them inside the slot region!
                     if (jobData.slot_map) {
                         const matchingThumbs = jobData.slot_map.filter(sm => sm.slot === s.slot || sm.slot === (idx + 1));
 
@@ -173,52 +281,46 @@ export function VideoTimeline({ videoRef }) {
                             imgContainer.style.flex = '1';
                             imgContainer.style.minHeight = '0';
                             imgContainer.style.width = '100%';
-                            imgContainer.style.alignItems = 'flex-end'; // Align images to bottom
+                            imgContainer.style.alignItems = 'flex-end';
                             imgContainer.style.paddingBottom = '2px';
 
                             matchingThumbs.forEach(sm => {
-                                const imgName = sm.img_path ? sm.img_path.split(/[\\/]/).pop() : null;
+                                const imgName = sm.img_path ? sm.img_path.split(/[\\\/]/).pop() : null;
                                 if (imgName) {
                                     const imgDom = document.createElement('img');
                                     imgDom.src = `/api/jobs/${jobData.job_id}/images/${imgName}`;
-                                    imgDom.style.height = '60px'; // Fit within the empty bottom 40% of 160px height
+                                    imgDom.style.height = '60px';
                                     imgDom.style.borderRadius = '4px';
                                     imgDom.style.border = '2px solid rgba(255,255,255,0.7)';
                                     imgDom.style.boxShadow = '0 2px 4px rgba(0,0,0,0.5)';
                                     imgDom.style.objectFit = 'cover';
-                                    imgDom.style.cursor = 'pointer'; // Show it's interactive
+                                    imgDom.style.cursor = 'pointer';
                                     imgDom.style.transition = 'all 0.2s ease-in-out';
                                     imgDom.style.zIndex = '10';
-                                    imgDom.style.position = 'relative'; // Need position for z-index to work
-                                    imgDom.style.transformOrigin = 'bottom left'; // Scale outwards and upwards
-                                    
-                                    // Hover effects
-                                    imgDom.addEventListener('mouseenter', () => {
-                                        contentDiv.style.overflow = 'visible'; // Let it Break out only on hover
-                                        // Also need to allow the actual wavesurfer region parent element to overflow
-                                        if (contentDiv.parentElement) {
-                                              contentDiv.parentElement.style.zIndex = '100';
-                                              contentDiv.parentElement.style.overflow = 'visible';
-                                        }
+                                    imgDom.style.position = 'relative';
+                                    imgDom.style.transformOrigin = 'bottom left';
 
-                                        imgDom.style.transform = 'scale(2)'; // Simpler scale now that origin is bottom left
+                                    imgDom.addEventListener('mouseenter', () => {
+                                        contentDiv.style.overflow = 'visible';
+                                        if (contentDiv.parentElement) {
+                                            contentDiv.parentElement.style.zIndex = '100';
+                                            contentDiv.parentElement.style.overflow = 'visible';
+                                        }
+                                        imgDom.style.transform = 'scale(2)';
                                         imgDom.style.zIndex = '50';
                                         imgDom.style.boxShadow = '0 8px 16px rgba(0,0,0,0.8)';
-                                        imgDom.style.border = '2px solid rgba(139, 92, 246, 1)'; // Violet border on hover
+                                        imgDom.style.border = '2px solid rgba(139, 92, 246, 1)';
                                     });
-                                    
+
                                     imgDom.addEventListener('mouseleave', () => {
                                         imgDom.style.transform = 'none';
                                         imgDom.style.zIndex = '10';
                                         imgDom.style.boxShadow = '0 2px 4px rgba(0,0,0,0.5)';
                                         imgDom.style.border = '2px solid rgba(255,255,255,0.7)';
-                                        
-                                        // Reset overflow
                                         contentDiv.style.overflow = 'hidden';
                                         if (contentDiv.parentElement) {
-                                              contentDiv.parentElement.style.zIndex = '';
-                                              // Wavesurfer handles its own wrapper overflow, resetting to '' is usually safe
-                                              contentDiv.parentElement.style.overflow = '';
+                                            contentDiv.parentElement.style.zIndex = '';
+                                            contentDiv.parentElement.style.overflow = '';
                                         }
                                     });
 
@@ -233,7 +335,7 @@ export function VideoTimeline({ videoRef }) {
                         id: s.slot.toString(),
                         start: s.start_s,
                         end: s.end_s,
-                        color: 'rgba(139, 92, 246, 0.25)', // Violet with opacity for AD slots
+                        color: 'rgba(139, 92, 246, 0.25)',
                         drag: true,
                         resize: true,
                         content: contentDiv,
@@ -255,17 +357,10 @@ export function VideoTimeline({ videoRef }) {
         const onPlay = () => setIsPlaying(true);
         const onPause = () => setIsPlaying(false);
 
-        ws.on('ready', () => {
-            onReady();
-        });
-
+        ws.on('ready', () => { onReady(); });
         ws.on('play', onPlay);
         ws.on('pause', onPause);
-        ws.on('timeupdate', (ct) => {
-            setCurrentTime(ct);
-        });
-
-        // Sync video when user clicks or drags the timeline
+        ws.on('timeupdate', (ct) => { setCurrentTime(ct); });
         ws.on('interaction', (newTime) => {
             if (videoRef.current) {
                 videoRef.current.currentTime = newTime;
@@ -278,13 +373,13 @@ export function VideoTimeline({ videoRef }) {
             ws.un('pause', onPause);
             ws.un('timeupdate');
             ws.un('interaction');
+            marginObservers.forEach(o => o.disconnect());
             ws.destroy();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [jobData, videoRef, handleUpdateSlotTiming]);
 
 
-    // Update zoom when slider changes
     useEffect(() => {
         if (wavesurferRef.current && duration > 0) {
             try {
@@ -295,18 +390,15 @@ export function VideoTimeline({ videoRef }) {
         }
     }, [zoom, duration]);
 
-    // Jump to focused slot
     useEffect(() => {
         if (focusedSlot != null && wavesurferRef.current) {
             let startTime = null;
 
-            // Prefer gpt_records because they have stable slot IDs that match what SRTWidget uses
             if (jobData?.gpt_records?.length > 0) {
                 const rec = jobData.gpt_records.find(r => r.slot === focusedSlot);
                 if (rec) startTime = rec.start_s;
             }
 
-            // Fallback to raw slots array if gpt_records didn't match
             if (startTime == null && jobData?.slots?.length > 0) {
                 const slotData = jobData.slots.find(s => s.slot === focusedSlot);
                 if (slotData) startTime = slotData.start_s;
@@ -323,12 +415,14 @@ export function VideoTimeline({ videoRef }) {
         return null;
     }
 
+    const hasTtsRecords = jobData?.gpt_records?.some(r => r.slot);
+
     return (
         <div className="flex flex-col border-t border-border-subtle bg-bg-surface mt-2 rounded-t-xl overflow-hidden shadow-md">
             <div className="flex items-center justify-between px-4 py-2 bg-[#050505] border-b border-border-subtle">
                 <div className="flex items-center gap-6">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
-                        Timeline (Sprechpausen & AD-Slots)
+                        Timeline (Sprechpausen &amp; AD-Slots)
                     </span>
                     {isBuffering && <span className="text-[10px] text-yellow-500 font-bold tracking-widest uppercase">⏳ Puffert...</span>}
                     <div className="flex items-center gap-3">
@@ -340,6 +434,20 @@ export function VideoTimeline({ videoRef }) {
                             {isPlaying ? 'pause_circle_filled' : 'play_circle_filled'}
                         </button>
                     </div>
+
+                    {/* AD Audio toggle */}
+                    {hasTtsRecords && (
+                        <button
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all border ${adAudioEnabled
+                                ? 'bg-violet-600 text-white border-violet-500 shadow-sm shadow-violet-500/30'
+                                : 'bg-white/5 text-text-muted border-border-subtle hover:border-violet-500/50 hover:text-violet-400'}`}
+                            onClick={() => setAdAudioEnabled(v => !v)}
+                            title={adAudioEnabled ? 'AD-Audio deaktivieren' : 'AD-Audio beim Abspielen ausgeben'}
+                        >
+                            <span className="material-icons-round text-[14px]">{adAudioEnabled ? 'volume_up' : 'volume_off'}</span>
+                            AD-Audio
+                        </button>
+                    )}
                 </div>
                 <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2">
@@ -361,6 +469,47 @@ export function VideoTimeline({ videoRef }) {
 
             <div className="bg-[#0a0a0a] p-4 relative pt-2">
                 <div ref={containerRef} className="w-full border-b border-border-subtle pb-2"></div>
+
+                {/* AD Audio strip – shown when TTS records exist */}
+                {hasTtsRecords && (
+                    <div className="mt-3">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-1.5 px-1">
+                            AD-Audiodeskriptionen
+                        </div>
+                        <div className="relative h-9 bg-white/3 rounded-lg overflow-visible border border-border-subtle">
+                            {/* Playhead indicator line mapped to the strip */}
+                            <div
+                                className="absolute top-0 h-full w-px bg-blue-400/60 z-20 pointer-events-none"
+                                style={{ left: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' }}
+                            />
+                            {jobData.gpt_records.filter(r => r.slot).map(rec => {
+                                const leftPct = duration > 0 ? (rec.start_s / duration) * 100 : 0;
+                                const widthPct = duration > 0 ? ((rec.end_s - rec.start_s) / duration) * 100 : 0;
+                                const isActive = currentTime >= rec.start_s && currentTime < rec.end_s;
+                                return (
+                                    <div
+                                        key={rec.slot}
+                                        className={`absolute top-0.5 h-8 rounded flex items-center justify-center overflow-hidden transition-all border cursor-pointer group ${isActive
+                                            ? 'bg-violet-500/40 border-violet-400'
+                                            : 'bg-violet-900/30 border-violet-800/50 hover:bg-violet-600/30 hover:border-violet-500/60'}`}
+                                        style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                                        title={rec.text ? rec.text.slice(0, 80) : `Slot ${rec.slot}`}
+                                        onClick={() => playSlotAudio(rec.slot)}
+                                    >
+                                        <span className="material-icons-round text-[1rem] text-violet-300 opacity-70 group-hover:opacity-100 transition-opacity">
+                                            {isActive && adAudioEnabled ? 'graphic_eq' : 'play_arrow'}
+                                        </span>
+                                        {widthPct > 3 && (
+                                            <span className="text-[9px] text-violet-200/70 font-mono ml-0.5 truncate">
+                                                {rec.slot}
+                                            </span>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -371,4 +520,3 @@ VideoTimeline.propTypes = {
         current: PropTypes.instanceOf(Element)
     })
 };
-

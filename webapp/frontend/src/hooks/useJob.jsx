@@ -17,6 +17,82 @@ export function JobProvider({ children }) {
     const [focusedSlot, setFocusedSlot] = useState(null);
     const [srtTexts, setSrtTexts] = useState({});
     const [isSavingSrt, setIsSavingSrt] = useState(false);
+    const [isRunAllActive, setIsRunAllActive] = useState(false);
+    
+    // Global Config Modal State
+    const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+    const [availableModels, setAvailableModels] = useState([]);
+    const [gptParams, setGptParams] = useState({
+        system_prompt: "",
+        user_prompt: "",
+        ad_rules: "",
+        few_shots: "",
+        model: "gpt-4o",
+        temperature: 0.2,
+        max_tokens: 1024,
+        detail: "low",
+        cut: "broadcast"
+    });
+
+    const [vadParams, setVadParams] = useState({
+        threshold: 0.5,
+        min_speech_duration_ms: 1500,
+        min_silence_duration_ms: 400,
+        min_pause_duration_s: 0.3
+    });
+
+    const [transcribeParams, setTranscribeParams] = useState({
+        model_size: "small",
+        language: "de",
+        use_fw_vad: true
+    });
+
+    const [slotsParams, setSlotsParams] = useState({
+        min_slot_s: 1.0,
+        pad_in_s: 0.0,
+        pad_out_s: 0.0,
+        filter_whisper: false
+    });
+
+    const [ttsParams, setTtsParams] = useState({
+        apiKey: '',
+        voice: 'alloy',
+        duckingVolume: '0.4'
+    });
+
+    const [imagesParams, setImagesParams] = useState({
+        threshold: 24,
+        blur_threshold: 80,
+        min_scene_length: 20,
+        short_scene_s: 3.0
+    });
+
+    // Populate configuration defaults on mount
+    useEffect(() => {
+        fetch('/api/system_info')
+            .then(res => res.json())
+            .then(data => {
+                setGptParams(p => {
+                    const newP = { ...p };
+                    if (data.default_prompts) {
+                        newP.system_prompt = data.default_prompts.system_instruction || p.system_prompt;
+                        newP.user_prompt = data.default_prompts.user_instruction || p.user_prompt;
+                        newP.ad_rules = data.default_prompts.ad_rules || p.ad_rules;
+                        newP.few_shots = data.default_prompts.few_shots || p.few_shots;
+                    }
+                    if (data.available_models && data.available_models.length > 0) {
+                        setAvailableModels(data.available_models);
+                        const firstModel = data.available_models[0];
+                        newP.model = firstModel.model;
+                        newP.temperature = firstModel.temperature !== undefined ? firstModel.temperature : 0.2;
+                        newP.max_tokens = firstModel.max_tokens !== undefined ? firstModel.max_tokens : 1024;
+                        newP.detail = firstModel.detail !== undefined ? firstModel.detail : "low";
+                    }
+                    return newP;
+                });
+            })
+            .catch(console.error);
+    }, []);
 
     useEffect(() => {
         if (jobData?.gpt_records) {
@@ -66,12 +142,11 @@ export function JobProvider({ children }) {
                 if (data.slots_count > 0) newDone.add(3);
                 if (data.images_count > 0) newDone.add(4);
                 if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(5);
-                if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(6);
-                if (data.final_mp4_path) newDone.add(7);
+                if (data.final_mp4_path) newDone.add(6);
                 setDoneSteps(newDone);
 
                 let targetStep = 0;
-                for (let i = 0; i <= 8; i++) {
+                for (let i = 0; i <= 7; i++) {
                     if (!newDone.has(i)) {
                         targetStep = i;
                         break;
@@ -165,18 +240,36 @@ export function JobProvider({ children }) {
                 setCurrentStep(5);
                 setProgressData(prev => ({ ...prev, images: null }));
             } else if (event === 'gpt_done') {
-                setDoneSteps(prev => new Set(prev).add(6));
-                setCurrentStep(7);
+                setDoneSteps(prev => new Set(prev).add(5));
+                setCurrentStep(6);
                 fetchJobData(jobId); // Need full update for outputs
                 setProgressData(prev => ({ ...prev, gpt: null }));
             } else if (event === 'tts_done') {
-                setDoneSteps(prev => new Set(prev).add(7));
-                setCurrentStep(8);
+                setDoneSteps(prev => new Set(prev).add(6));
+                setCurrentStep(7);
                 fetchJobData(jobId);
                 setProgressData(prev => ({ ...prev, tts: null }));
+                setIsRunAllActive(false); // Finished all automatic steps
+            }
+
+            // Chain reactions if Run All is active
+            if (isRunAllActive) {
+                if (event === 'upload_done' || event === 'upload_success') {
+                    // Start VAD automatically? We assume Run All is triggered AFTER upload, so VAD is the first target.
+                } else if (event === 'vad_done') {
+                    handleRunTranscribe();
+                } else if (event === 'transcribe_done') {
+                    handleRunSlots();
+                } else if (event === 'slots_done') {
+                    handleRunImages();
+                } else if (event === 'images_done') {
+                    handleRunGPT();
+                } else if (event === 'gpt_done') {
+                    handleRunTTS();
+                }
             }
         }
-    }, [jobId, fetchJobData, setProgressData, setDoneSteps, setCurrentStep]);
+    }, [jobId, fetchJobData, setProgressData, setDoneSteps, setCurrentStep, isRunAllActive]);
 
     useEffect(() => {
         if (!jobId) return;
@@ -219,6 +312,119 @@ export function JobProvider({ children }) {
         setDoneSteps(prev => new Set(prev).add(step));
     };
 
+    const handleRunVAD = useCallback(async () => {
+        if (!jobId) return;
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/vad`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(vadParams)
+            });
+            if (!res.ok) throw new Error("Failed to start VAD");
+        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+    }, [jobId, vadParams]);
+
+    const handleRunTranscribe = useCallback(async () => {
+        if (!jobId) return;
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/transcribe`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(transcribeParams)
+            });
+            if (!res.ok) throw new Error("Failed to start transcription");
+        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+    }, [jobId, transcribeParams]);
+
+    const handleRunSlots = useCallback(async () => {
+        if (!jobId) return;
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/slots`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(slotsParams)
+            });
+            if (!res.ok) throw new Error("Failed to generate slots");
+        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+    }, [jobId, slotsParams]);
+
+    const handleRunImages = useCallback(async () => {
+        if (!jobId) return;
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/images`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(imagesParams)
+            });
+            if (!res.ok) throw new Error("Failed to extract images");
+        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+    }, [jobId, imagesParams]);
+
+    const handleRunGPT = useCallback(async () => {
+        if (!jobId) return;
+        if (!gptParams) {
+            setIsRunAllActive(false);
+            return alert("Prompts fehlen. Bitte überprüfen Sie die Konfiguration.");
+        }
+        let system_final = gptParams.system_prompt;
+        if (gptParams.ad_rules) {
+            system_final += "\n\n# Audiodeskription – Regeln\n" + gptParams.ad_rules;
+        }
+        if (gptParams.few_shots) {
+            system_final += "\n\n# Few-Shots / Beispiele\n" + gptParams.few_shots;
+        }
+        const payload = {
+            model: gptParams.model,
+            temperature: gptParams.temperature,
+            max_tokens: gptParams.max_tokens,
+            cut: gptParams.cut,
+            system_prompt: system_final,
+            user_prompt: gptParams.user_prompt || "Erstelle eine AD für diese Frames.",
+        };
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/gpt`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error((await res.json()).error || "Failed to start GPT generation");
+        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+    }, [jobId, gptParams]);
+
+    const handleRunTTS = useCallback(async () => {
+        if (!jobId) return;
+        const payload = {
+            api_key: ttsParams.apiKey,
+            voice: ttsParams.voice,
+            ducking_volume: parseFloat(ttsParams.duckingVolume)
+        };
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/tts`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error((await res.json()).error || "Failed to start TTS");
+        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+    }, [jobId, ttsParams]);
+
+    const runAllSteps = () => {
+        if (!jobId) return alert("Bitte laden Sie zuerst ein Video hoch.");
+        setIsRunAllActive(true);
+        // Determine the next uncompleted step and start there
+        if (!doneSteps.has(1)) handleRunVAD();
+        else if (!doneSteps.has(2)) handleRunTranscribe();
+        else if (!doneSteps.has(3)) handleRunSlots();
+        else if (!doneSteps.has(4)) handleRunImages();
+        else if (!doneSteps.has(5)) handleRunGPT();
+        else if (!doneSteps.has(6)) handleRunTTS();
+        else setIsRunAllActive(false); // all done
+    };
+
+    const stopRunAll = () => {
+        setIsRunAllActive(false);
+    };
+
     return (
         <JobContext.Provider value={{
             jobId,
@@ -241,7 +447,32 @@ export function JobProvider({ children }) {
             setSrtTexts,
             isSavingSrt,
             handleSaveSrtTexts,
-            handleUpdateSlotTiming
+            handleUpdateSlotTiming,
+            isConfigModalOpen,
+            setIsConfigModalOpen,
+            gptParams,
+            setGptParams,
+            availableModels,
+            setAvailableModels,
+            vadParams,
+            setVadParams,
+            transcribeParams,
+            setTranscribeParams,
+            slotsParams,
+            setSlotsParams,
+            ttsParams,
+            setTtsParams,
+            imagesParams,
+            setImagesParams,
+            handleRunVAD,
+            handleRunTranscribe,
+            handleRunSlots,
+            handleRunImages,
+            handleRunGPT,
+            handleRunTTS,
+            runAllSteps,
+            isRunAllActive,
+            stopRunAll
         }}>
             {children}
         </JobContext.Provider>

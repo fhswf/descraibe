@@ -5,7 +5,7 @@ export function GlobalProgress() {
     const { progressData } = useJob();
 
     // Find the first active progress
-    const activeEntries = Object.entries(progressData || {}).filter(([_, data]) => data !== null);
+    const activeEntries = Object.entries(progressData || {}).filter(([, data]) => data !== null);
 
     if (activeEntries.length === 0) return null;
 

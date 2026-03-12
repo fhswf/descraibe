@@ -1,15 +1,13 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef } from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
 
 export function StepUpload() {
     const { jobId, createJob, fetchJobData, currentStep, setProgressData } = useJob();
     const fileInputRef = useRef(null);
-    const [uploading, setUploading] = useState(false);
 
     if (currentStep !== 0) return null;
 
     const handleUpload = async (file) => {
-        setUploading(true);
         setProgressData(prev => ({ ...prev, upload: { msg: "Starte Upload...", percent: 0 } }));
 
         // Create job if none exists
@@ -55,7 +53,6 @@ export function StepUpload() {
         }
 
         setProgressData(prev => ({ ...prev, upload: null }));
-        setUploading(false);
     };
 
     return (
