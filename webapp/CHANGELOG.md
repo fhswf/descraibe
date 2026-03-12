@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.16.1...v0.17.0) (2026-03-12)
+
+
+### Features
+
+* Add GitHub deployment creation for releases and remove ArgoCD deployment notification subscription. ([d2c8961](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/d2c896185528971b8d5c83108b2df3bce0bb1e6f))
+* enhance video timeline UI with updated Wavesurfer styles, improved AD slot appearance, and interactive image thumbnails. ([ad6fac2](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/ad6fac25cca106412e7254c943d6d6e2fe5f758c))
+
 ## [0.16.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.16.0...v0.16.1) (2026-03-12)
 
 
