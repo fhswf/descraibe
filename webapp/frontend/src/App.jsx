@@ -39,7 +39,10 @@ function App() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <img src="/favicon.png" alt="DescrAIbe Logo" className="w-8 h-8 rounded-[8px] object-cover shadow-sm" />
-            <h1 className="font-bold text-lg tracking-tight">Descr<span className="text-violet-500 text-xl">AI</span>be <span className="font-light opacity-60">Pipeline</span></h1>
+            <div className="flex flex-col">
+              <h1 className="font-bold text-lg tracking-tight leading-none">Descr<span className="text-violet-500 text-xl">AI</span>be <span className="font-light opacity-60">Pipeline</span></h1>
+              <span className="text-[10px] text-text-muted mt-0.5">v{import.meta.env.VITE_APP_VERSION}</span>
+            </div>
           </div>
           {jobId && (
             <>
