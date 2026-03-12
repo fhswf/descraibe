@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.17.1...v0.18.0) (2026-03-12)
+
+
+### Features
+
+* introduce a new configuration modal to manage pipeline parameters and models for all steps, replacing the old prompts step. ([a809f50](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/a809f50d069b53ef03411308e43cdb95161d53a1))
+
 ## [0.17.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.17.0...v0.17.1) (2026-03-12)
 
 
