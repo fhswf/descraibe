@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.18.0...v0.19.0) (2026-03-12)
+
+
+### Features
+
+* Replaced the custom AD audio strip UI with interactive WaveSurfer regions for audio descriptions, including playback controls, and refined image path parsing. ([a28f2f3](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/a28f2f30e18c0a6d2b2faf7e229a17f7b5fea861))
+
+
+### Bug Fixes
+
+* use nvidia/cuda base image instead of cudnn8-runtime to reduce size ([fdb27cf](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/fdb27cfecf4ebc74eafad3cc087de0fa81b26116))
+
 ## [0.18.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.17.1...v0.18.0) (2026-03-12)
 
 
