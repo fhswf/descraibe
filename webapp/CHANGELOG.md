@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.14.1...v0.15.0) (2026-03-12)
+
+
+### Features
+
+* Implement model-specific parameters for temperature, max tokens, and detail, including fixed temperature for reasoning models. ([b728d2a](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/b728d2ac87ff2547bf32dcb65112c3808430aeb7))
+
+
+### Bug Fixes
+
+* Update Kustomize configuration. ([ca65644](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/ca65644cadcd40144ad56db61b15018321e62482))
+
 ## [0.14.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.14.0...v0.14.1) (2026-03-11)
 
 
