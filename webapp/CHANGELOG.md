@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.19.0...v0.19.1) (2026-03-13)
+
+
+### Bug Fixes
+
+* Change CSV export time format from milliseconds to frames using a new `_frame_time` function. ([407b6e4](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/407b6e4af45c2fdbae3d291a0dba92341c48d8bd)), closes [#91](https://github.com/fhswf/Audiodeskriptionen_SS25/issues/91)
+
 ## [0.19.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.18.0...v0.19.0) (2026-03-12)
 
 
