@@ -15,6 +15,15 @@ def _srt_time(seconds: float) -> str:
     return f"{hh:02}:{mm:02}:{ss:02},{ms:03}"
 
 
+def _frame_time(seconds: float, fps: int = 25) -> str:
+    s = max(0.0, float(seconds))
+    total_frames = int(round(s * fps))
+    hh, rem = divmod(total_frames, 3600 * fps)
+    mm, rem = divmod(rem, 60 * fps)
+    ss, ff = divmod(rem, fps)
+    return f"{hh:02}:{mm:02}:{ss:02},{ff:02}"
+
+
 def _clean_line(txt: str) -> str:
     return " ".join((txt or "").split())
 
@@ -103,8 +112,8 @@ def _write_frazier(path: Path, records: List[Dict[str, Any]]) -> None:
                 continue
             writer.writerow([
                 rec["slot"],
-                _srt_time(rec["start_s"]),
-                _srt_time(rec["end_s"]),
+                _frame_time(rec["start_s"]),
+                _frame_time(rec["end_s"]),
                 rec["duration_s"],
                 _clean_line(rec.get("text", "")),
             ])
