@@ -376,6 +376,7 @@ def run_vad(job_id: str, body: dict = Body(default={})):
     }
 
     def run():
+        sm.job_id_var.set(job_id)
         try:
             sm.set_status(job_id, "running", "VAD detection started")
 
@@ -432,6 +433,7 @@ def run_transcribe(job_id: str, body: dict = Body(default={})):
     }
 
     def run():
+        sm.job_id_var.set(job_id)
         try:
             sm.set_status(job_id, "running", "Extracting audio…")
             _push(job_id, "progress", {"step": "transcribe", "message": "Extracting audio…"})
@@ -537,6 +539,7 @@ def run_slots(job_id: str, body: dict = Body(default={})):
         return JSONResponse({"error": "Pauses not available. Run VAD first."}, status_code=400)
 
     def run():
+        sm.job_id_var.set(job_id)
         try:
             sm.set_status(job_id, "running", "Generating AD slots…")
             _push(job_id, "progress", {"step": "slots", "message": "Converting pauses to slots…"})
@@ -597,6 +600,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
         return JSONResponse({"error": "Slots not available. Run slot generation first."}, status_code=400)
 
     def run():
+        sm.job_id_var.set(job_id)
         try:
             sm.set_status(job_id, "running", "Extracting scene images…")
             _push(job_id, "progress", {"step": "images", "message": "Starting scene detection…"})
@@ -712,6 +716,7 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
     }
 
     def run():
+        sm.job_id_var.set(job_id)
         try:
             sm.set_status(job_id, "running", "Generating descriptions…")
 
@@ -909,6 +914,7 @@ def run_tts_export(job_id: str, body: dict = Body(default={})):
     ducking_volume = float(body.get("ducking_volume", 0.4))
     
     def run():
+        sm.job_id_var.set(job_id)
         try:
             sm.set_status(job_id, "running", "Generating TTS audio...")
             
@@ -1026,7 +1032,8 @@ def get_job(job_id: str, request: Request):
         
         "transcript_meta": job.get("transcript_meta"),
         "quality_report": job.get("quality_report"),
-        "output_paths": {k: Path(v).name for k, v in (job.get("output_paths") or {}).items()},
+        "output_paths": {**{k: Path(v).name for k, v in (job.get("output_paths") or {}).items()}, 
+                         **({"log": sm.JOB_LOG_FILENAME} if Path(sm.job_dir(job_id) / sm.JOB_LOG_FILENAME).exists() else {})},
         "gpt_records": job.get("gpt_records_broadcast", job.get("gpt_records_directors")),
         "links": build_hateoas_links(job, str(request.base_url)),
         "latest_progress": _LATEST_PROGRESS_BY_JOB.get(job_id) if job.get("status") == "running" else None
@@ -1067,6 +1074,8 @@ def download(job_id: str, file_key: str):
 
     if file_key == "video":
         file_path = job.get("video_path")
+    elif file_key == "log":
+        file_path = str(Path(job["job_dir"]) / sm.JOB_LOG_FILENAME)
     else:
         paths = job.get("output_paths") or {}
         file_path = paths.get(file_key)
@@ -1121,6 +1130,7 @@ if FRONTEND_DIR.exists():
 # ── Run Server ─────────────────────────────────────────────────────────────────
 
 def main():
+    sm.setup_job_logging()
     uvicorn.run("backend.app:app", host="0.0.0.0", port=5000, reload=True)
 
 if __name__ == "__main__":
