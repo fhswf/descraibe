@@ -173,6 +173,7 @@ def describe_slots(
                 messages=messages,
                 temperature=float(temperature),
                 max_completion_tokens=int(max_tokens),
+                store=True,
             )
             txt_final = (resp.choices[0].message.content or "").strip()
             logger.info(f"Slot {slot_id}: Initial GPT response: '{txt_final[:50]}...' ({len(txt_final)} chars)")
@@ -195,6 +196,7 @@ def describe_slots(
                         messages=_build_messages(system_prompt, rewrite, [], detail="low"),
                         temperature=float(temperature),
                         max_completion_tokens=int(max_tokens),
+                        store=True,
                     )
                     txt_final = (rr.choices[0].message.content or "").strip()
                     sylls = _count_syllables(txt_final)
