@@ -47,14 +47,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # ── App source ─────────────────────────────────────────────────────────────────
 WORKDIR /app
 
-# Copy dependency manifest first so Docker can cache the install layer
-COPY webapp/pyproject.toml .
-COPY webapp/requirements_webapp.txt .
+# Copy dependency manifest and lockfile first so Docker can cache the install layer
+COPY webapp/pyproject.toml webapp/uv.lock ./
 
 # Install Python dependencies without bursting cache on every source code change
-# We install from the requirements file so versions map cleanly without scanning backend code yet.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --no-cache -r requirements_webapp.txt
+    uv sync --no-install-project --system --no-cache
 
 # Copy the rest of the webapp
 COPY webapp/backend ./backend
@@ -63,7 +61,7 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 # Install the actual project (nearly instant since deps are already there)
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --no-cache --no-deps .
+    uv sync --system --no-cache
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
 # All values can be overridden at runtime:
