@@ -44,6 +44,12 @@ RUN ln -s /usr/bin/python3.11 /usr/bin/python
 # ── Install uv ─────────────────────────────────────────────────────────────────
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
+# ── Environment variables ──────────────────────────────────────────────────────
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=0 \
+    PATH="/app/.venv/bin:$PATH"
+
 # ── App source ─────────────────────────────────────────────────────────────────
 WORKDIR /app
 
@@ -52,7 +58,7 @@ COPY webapp/pyproject.toml webapp/uv.lock ./
 
 # Install Python dependencies without bursting cache on every source code change
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project --system --no-cache
+    uv sync --no-install-project --frozen --no-cache
 
 # Copy the rest of the webapp
 COPY webapp/backend ./backend
@@ -61,7 +67,7 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 # Install the actual project (nearly instant since deps are already there)
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --system --no-cache
+    uv sync --frozen --no-cache
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
 # All values can be overridden at runtime:
