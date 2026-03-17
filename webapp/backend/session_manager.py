@@ -8,8 +8,10 @@ On startup _scan_jobs_from_disk() reloads every job it finds on disk.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
+import logging.handlers
 import os
 import shutil
 import threading
@@ -20,6 +22,61 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 log = logging.getLogger(__name__)
+
+JOB_LOG_FILENAME = "job.log"
+
+# Context variable to store the current job_id (used for per-job logging)
+job_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("job_id", default=None)
+
+
+class JobLogFilter(logging.Filter):
+    """Filter that only allows records with the current job_id."""
+    def filter(self, record):
+        current_job_id = job_id_var.get()
+        if not current_job_id:
+            return False
+        record.job_id = current_job_id
+        return True
+
+
+class JobLogHandler(logging.Handler):
+    """Handler that writes logs to a job.log file in the job's directory."""
+    def __init__(self):
+        super().__init__()
+        self.addFilter(JobLogFilter())
+        self.setFormatter(logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        ))
+
+    def emit(self, record):
+        jid = getattr(record, "job_id", None)
+        if not jid:
+            return
+        
+        # Determine the log file path
+        # We use _BASE_DIR directly to avoid recursive get_job() calls if logging is inside sm.
+        jdir = _BASE_DIR / jid
+        if not jdir.exists():
+            return
+            
+        log_file = jdir / JOB_LOG_FILENAME
+        try:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(self.format(record) + "\n")
+        except Exception:
+            # Silent fail to avoid infinite recursion / crash during logging
+            pass
+
+
+def setup_job_logging():
+    """Add the JobLogHandler to the root logger."""
+    root = logging.getLogger()
+    # Check if already added
+    for h in root.handlers:
+        if isinstance(h, JobLogHandler):
+            return
+    root.addHandler(JobLogHandler())
+
 
 # Configurable via AD_JOBS_DIR env var so a Docker volume can be mounted.
 _BASE_DIR = Path(os.environ.get("AD_JOBS_DIR", "/tmp/ad_jobs"))

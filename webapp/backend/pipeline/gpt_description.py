@@ -7,7 +7,12 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+import logging
 import pandas as pd
+
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
 
 
 # ── Image helpers ──────────────────────────────────────────────────────────────
@@ -64,7 +69,7 @@ def describe_slots(
     max_tokens: int = 1024,
     detail: str = "low",
     cut: str = "broadcast",
-    syllables_per_second: float = 12.0,
+    syllables_per_second: float = 6.0,
     syl_safety_factor: float = 0.85,
     max_rewrite_attempts: int = 2,
     min_slot_s: float = 0.5,
@@ -168,15 +173,19 @@ def describe_slots(
                 messages=messages,
                 temperature=float(temperature),
                 max_completion_tokens=int(max_tokens),
+                store=True,
             )
             txt_final = (resp.choices[0].message.content or "").strip()
+            logger.info(f"Slot {slot_id}: Initial GPT response: '{txt_final[:50]}...' ({len(txt_final)} chars)")
 
             # Syllable rewrite loop (broadcast only)
             if cut == "broadcast" and syll_limit is not None:
                 attempts = 0
                 sylls = _count_syllables(txt_final)
+                logger.info(f"Slot {slot_id}: Initial syllables: {sylls}, limit: {syll_limit}")
                 while attempts < max_rewrite_attempts and sylls > syll_limit and sylls > 0:
                     attempts += 1
+                    logger.info(f"Slot {slot_id}: Rewrite attempt {attempts}/{max_rewrite_attempts} (syllables: {sylls} > {syll_limit})")
                     rewrite = (
                         f"KÜRZEN: Maximal {syll_limit} Silben, passt in {dur:.2f}s. "
                         "Nur den finalen AD-Text zurückgeben.\n\n"
@@ -187,13 +196,21 @@ def describe_slots(
                         messages=_build_messages(system_prompt, rewrite, [], detail="low"),
                         temperature=float(temperature),
                         max_completion_tokens=int(max_tokens),
+                        store=True,
                     )
                     txt_final = (rr.choices[0].message.content or "").strip()
                     sylls = _count_syllables(txt_final)
+                    logger.info(f"Slot {slot_id}: Attempt {attempts} result: {sylls} syllables")
+
+                if sylls > syll_limit:
+                    logger.warning(f"Slot {slot_id}: Could not meet syllable limit ({sylls} > {syll_limit}) after {attempts} attempts")
+                elif sylls > 0:
+                    logger.info(f"Slot {slot_id}: Syllable limit met: {sylls} <= {syll_limit}")
 
             rec.update({"ok": True, "skipped": False, "text": txt_final})
 
         except Exception as exc:
+            logger.error(f"Slot {slot_id}: GPT error: {exc}")
             rec.update({"ok": False, "reason": f"gpt_error:{exc}", "text": f"[ERROR:{exc}]"})
 
         records.append(rec)

@@ -11,12 +11,15 @@ Fidelity notes (aligned with FINAL notebook step 04):
 """
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 # ── SRT time helper ────────────────────────────────────────────────────────────
@@ -43,9 +46,12 @@ def _get_model(model_size: str, device: str = "cpu", compute_type: str = "int8")
     if key not in _MODEL_CACHE:
         with _MODEL_LOCK:
             if key not in _MODEL_CACHE:
+                logger.info(f"Loading Whisper model: {model_size} (device={device}, compute={compute_type})")
                 _MODEL_CACHE[key] = WhisperModel(
                     model_size, device=device, compute_type=compute_type
                 )
+    else:
+        logger.info(f"Using cached Whisper model: {key}")
     return _MODEL_CACHE[key]
 
 
@@ -132,6 +138,7 @@ def get_silero_vad_intervals(
     if drop_short_s > 0:
         intervals = [(s, e) for s, e in intervals if e - s >= drop_short_s]
 
+    logger.info(f"Silero VAD gate: found {len(intervals)} intervals.")
     return intervals
 
 
@@ -319,6 +326,7 @@ def transcribe(
     if progress_cb:
         progress_cb("Transcribing…")
 
+    logger.info(f"Starting transcription: model={model_size}, language={language}, device={hw_device}, silero_gate={use_silero_gate}")
     try:
         segments, info = model.transcribe(str(p), **kwargs)
     except TypeError as exc:
@@ -413,6 +421,8 @@ def transcribe(
         df["dur_s"] = (df["end_s"] - df["start_s"]).clip(lower=0.0)
         df = df.reset_index(drop=True)
         df["index"] = range(1, len(df) + 1)
+
+    logger.info(f"Transcription complete: generated {len(df)} segments.")
 
     # ── Build SRT ─────────────────────────────────────────────────────────
     lines: list[str] = []

@@ -8,7 +8,10 @@ Fidelity note (aligned with FINAL notebook step 04b):
 from __future__ import annotations
 
 from typing import Optional
+import logging
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def pauses_to_slots(
@@ -51,6 +54,7 @@ def pauses_to_slots(
             keep.append(not has_speech)
         slots = slots[keep].reset_index(drop=True)
         slots["slot"] = range(1, len(slots) + 1)
+        logger.info(f"Filtered slots: {len(keep) - sum(keep)} slots removed due to speech overlap. {len(slots)} slots remaining.")
 
     return slots
 
@@ -123,6 +127,8 @@ def quality_report(
     green = sum(1 for r in rows if r["status"] == "green")
     yellow = sum(1 for r in rows if r["status"] == "yellow")
     red = sum(1 for r in rows if r["status"] == "red")
+
+    logger.info(f"Quality report: total_pauses={len(rows)}, total_slots={len(slots_df)}, green={green}, yellow={yellow}, red={red}")
 
     return {
         "total_pauses": len(rows),

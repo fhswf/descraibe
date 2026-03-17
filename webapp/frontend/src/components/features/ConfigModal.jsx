@@ -300,7 +300,7 @@ export function ConfigModal() {
 
               {/* Model dropdown */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-[0.8rem] font-medium text-text-secondary">Modell</label>
+                <label className="text-[0.8rem] font-medium text-text-secondary min-h-[1.25rem]">Modell</label>
                 <select value={gptParams.model}
                   onChange={e => {
                     const selectedModel = e.target.value;
@@ -334,7 +334,7 @@ export function ConfigModal() {
 
               {/* Temperature */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-[0.8rem] font-medium text-text-secondary">
+                <label className="text-[0.8rem] font-medium text-text-secondary min-h-[1.25rem]">
                   Temperature: {gptParams.temperature} {isFixedTemp && "(Fixiert)"}
                 </label>
                 <input type="range" min="0" max="1.5" step="0.05"
@@ -346,7 +346,7 @@ export function ConfigModal() {
 
               {/* Max tokens */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-[0.8rem] font-medium text-text-secondary">Max. Tokens</label>
+                <label className="text-[0.8rem] font-medium text-text-secondary min-h-[1.25rem]">Max. Tokens</label>
                 <input type="number" min="64" step="64"
                   value={gptParams.max_tokens}
                   onChange={e => setGptParams({ ...gptParams, max_tokens: parseInt(e.target.value) })}
@@ -355,13 +355,22 @@ export function ConfigModal() {
 
               {/* Cut type */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-[0.8rem] font-medium text-text-secondary">Cut-Typ</label>
+                <label className="text-[0.8rem] font-medium text-text-secondary min-h-[1.25rem]">Cut-Typ</label>
                 <select value={gptParams.cut}
                   onChange={e => setGptParams({ ...gptParams, cut: e.target.value })}
                   className={selectCls}>
                   <option value="broadcast">Broadcast (Silbenlimit)</option>
                   <option value="directors">Director's Cut (ausführlich)</option>
                 </select>
+              </div>
+              
+              {/* Syllables per second */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[0.8rem] font-medium text-text-secondary min-h-[1.25rem]">Sprechtempo (Silben/s)</label>
+                <input type="number" min="1" max="20" step="0.5"
+                  value={gptParams.syllables_per_second}
+                  onChange={e => setGptParams({ ...gptParams, syllables_per_second: parseFloat(e.target.value) })}
+                  className={selectCls} />
               </div>
           </div>
         </div>

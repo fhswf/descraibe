@@ -9,6 +9,7 @@ Fidelity notes (aligned with FINAL notebook step 05):
 """
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Callable, Optional
@@ -16,6 +17,8 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 # ── Timestamp helpers ──────────────────────────────────────────────────────────
@@ -59,6 +62,7 @@ def _save_frame(frame: np.ndarray, out_path: Path, jpg_quality: int = 95, min_by
     out_path.write_bytes(buf.tobytes())
     if not out_path.exists() or out_path.stat().st_size < min_bytes:
         raise RuntimeError(f"Saved image too small/missing: {out_path}")
+    logger.info(f"Saved frame: {out_path.name} ({out_path.stat().st_size} bytes)")
 
 
 # ── MidframeExtractor ──────────────────────────────────────────────────────────
@@ -115,8 +119,10 @@ class MidframeExtractor:
             min_scene_len=self.min_scene_length,
         ))
         sm.detect_scenes(video)
+        scenes = sm.get_scene_list()
+        logger.info(f"Scene detection: found {len(scenes)} scenes.")
         return [(float(s[0].get_seconds()), float(s[1].get_seconds()))
-                for s in sm.get_scene_list()]
+                for s in scenes]
 
     # ── frame extraction ────────────────────────────────────────────────────
 
@@ -150,7 +156,10 @@ class MidframeExtractor:
                 ok, frame = self._read_frame_at(cap, ts)
                 if not ok or frame is None:
                     continue
-                frames_data.append((ts, pos_name, frame, self._is_blurry(frame)))
+                is_blurry = self._is_blurry(frame)
+                if is_blurry:
+                    logger.info(f"Slot {scene_no}: Frame at {ts:.2f}s is blurry, skipping.")
+                frames_data.append((ts, pos_name, frame, is_blurry))
 
             if not frames_data:
                 continue
@@ -378,6 +387,7 @@ def gapfill_images_for_ad_slots(
             })
 
     cap.release()
+    logger.info(f"Gapfill complete: mapped {len(slot_map)} slots to images, extracted {len(added)} new gapfill frames.")
 
     # Deduplicate all_images preserving order
     seen: set[str] = set()

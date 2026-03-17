@@ -1,12 +1,15 @@
 """vad_pauses.py – Silero VAD speech-pause detection (Step 02)."""
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 # ── SRT helpers ───────────────────────────────────────────────────────────────
@@ -40,6 +43,7 @@ def extract_pauses(
         speech_df   – DataFrame(start_s, end_s, dur_s)
         srt_str     – SRT string of pauses
     """
+    logger.info(f"Extracting pauses from {video_path}")
     import torch
     import soundfile as sf
     from moviepy import VideoFileClip
@@ -68,6 +72,7 @@ def extract_pauses(
             onnx=False,
         )
         (get_speech_timestamps, *_) = utils
+        logger.info("Silero VAD model loaded.")
 
         # Read audio with soundfile instead of Silero's read_audio utility,
         # which relies on torchaudio.load() – broken in torchaudio >= 2.9
@@ -83,6 +88,7 @@ def extract_pauses(
         if progress_cb:
             progress_cb("Running VAD…")
 
+        logger.info(f"Running VAD (SR={sample_rate_hz}, threshold={threshold}, min_speech={min_speech_duration_ms}ms, min_silence={min_silence_duration_ms}ms)")
         speech_ts = get_speech_timestamps(
             audio,
             model,
@@ -139,6 +145,7 @@ def extract_pauses(
         pause_rows if pause_rows else [],
         columns=["slot", "start_s", "end_s", "dur_s"],
     )
+    logger.info(f"VAD complete: detected {len(speech_rows)} speech segments and {len(pause_rows)} pauses.")
 
     # SRT string
     srt_lines = []
