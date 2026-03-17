@@ -705,7 +705,7 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
         "max_tokens": int(body.get("max_tokens", 1024)),
         "detail": body.get("detail", "low"),
         "cut": cut,
-        "syllables_per_second": float(body.get("syllables_per_second", 12.0)),
+        "syllables_per_second": float(body.get("syllables_per_second", 6.0)),
         "syl_safety_factor": float(body.get("syl_safety_factor", 0.85)),
         "max_rewrite_attempts": int(body.get("max_rewrite_attempts", 2)),
         "min_slot_s": float(body.get("min_slot_s", 0.5)),

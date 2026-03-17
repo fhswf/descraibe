@@ -31,7 +31,8 @@ export function JobProvider({ children }) {
         temperature: 0.2,
         max_tokens: 1024,
         detail: "low",
-        cut: "broadcast"
+        cut: "broadcast",
+        syllables_per_second: 6.0
     });
 
     const [vadParams, setVadParams] = useState({
@@ -378,6 +379,7 @@ export function JobProvider({ children }) {
             temperature: gptParams.temperature,
             max_tokens: gptParams.max_tokens,
             cut: gptParams.cut,
+            syllables_per_second: gptParams.syllables_per_second || 6.0,
             system_prompt: system_final,
             user_prompt: gptParams.user_prompt || "Erstelle eine AD für diese Frames.",
         };

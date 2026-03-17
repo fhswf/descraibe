@@ -64,7 +64,7 @@ def describe_slots(
     max_tokens: int = 1024,
     detail: str = "low",
     cut: str = "broadcast",
-    syllables_per_second: float = 12.0,
+    syllables_per_second: float = 6.0,
     syl_safety_factor: float = 0.85,
     max_rewrite_attempts: int = 2,
     min_slot_s: float = 0.5,
