@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.21.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.20.0...v0.21.0) (2026-03-17)
+
+
+### Features
+
+* Add `store=True` to `llm.generate` calls to enable response storage. ([fcefe7c](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/fcefe7c6e0d093dd4dffb8b5858a3fc6f53ce44f))
+* Add configurable syllables per second parameter to the UI and update its default value to 6.0 across the application. ([b25fa9e](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/b25fa9e7518df98d25136ce99d6f6d6e0c076f46))
+* implement per-job logging to a dedicated file and expose it via API. ([58c8434](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/58c8434cf1e197dd2b0ef66225331316cfe3970d))
+
 ## [0.20.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.19.1...v0.20.0) (2026-03-13)
 
 
