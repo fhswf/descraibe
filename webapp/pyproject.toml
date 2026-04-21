@@ -23,7 +23,7 @@ dependencies = [
     "pyphen",
     "tqdm",
     "pyyaml",
-    "python-dotenv>=1.2.1",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]
