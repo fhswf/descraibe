@@ -520,6 +520,8 @@ def run_transcribe(job_id: str, body: dict = Body(default={})):
             sm.set_status(job_id, "error", str(exc))
             _push(job_id, "error", {"step": "transcribe", "message": str(exc)})
 
+    sm.set_status(job_id, "running", "Transcription queued…")
+    _push(job_id, "progress", {"step": "transcribe", "message": "Transcription queued…", "current": 0, "total": 100})
     threading.Thread(target=run, daemon=True).start()
     return {"status": "started"}
 
@@ -1079,11 +1081,20 @@ def get_job(job_id: str, request: Request):
         df_clean = df.replace({float('nan'): None})
         return df_clean.to_dict(orient="records")
 
+    segments = make_serializable(job.get("segments_df")) or []
+    transcript_preview = "\n".join(
+        str(segment.get("text", "")).strip()
+        for segment in segments[:5]
+        if str(segment.get("text", "")).strip()
+    )
+
     out = {
         "job_id": job_id,
         "status": job.get("status"),
         "video_stats": job.get("video_stats"),
         "pauses_count": len(job["pauses_df"]) if job.get("pauses_df") is not None else 0,
+        "transcript_segments_count": len(segments),
+        "transcript_preview": transcript_preview,
         "slots_count": len(job["slots_df"]) if job.get("slots_df") is not None else 0,
         "images_count": len(job["scene_images"]) if job.get("scene_images") else 0,
         
@@ -1095,6 +1106,7 @@ def get_job(job_id: str, request: Request):
         "video_path": job.get("video_path"),
         
         "transcript_meta": job.get("transcript_meta"),
+        "segments": segments,
         "quality_report": job.get("quality_report"),
         "output_paths": {**{k: Path(v).name for k, v in (job.get("output_paths") or {}).items()}, 
                          **({"log": sm.JOB_LOG_FILENAME} if Path(sm.job_dir(job_id) / sm.JOB_LOG_FILENAME).exists() else {})},

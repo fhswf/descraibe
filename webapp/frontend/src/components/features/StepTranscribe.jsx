@@ -2,9 +2,14 @@ import React from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
 
 export function StepTranscribe() {
-    const { jobId, currentStep } = useJob();
+    const { jobId, jobData, currentStep } = useJob();
 
     if (currentStep !== 2) return null;
+
+    const segmentCount = jobData?.transcript_segments_count ?? jobData?.segments?.length ?? 0;
+    const hasTranscriptMeta = Boolean(jobData?.transcript_meta);
+    const hasTranscriptText = segmentCount > 0;
+    const isRunning = jobData?.status === 'running';
 
     const handleUploadSrt = async (e) => {
         const file = e.target.files?.[0];
@@ -35,6 +40,37 @@ export function StepTranscribe() {
                         <p className="text-sm text-text-secondary">Erstelle ein genaues Transkript der Sprachphasen mit Whisper.</p>
                     </div>
                 </div>
+            </div>
+
+            <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">
+                <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">Status</p>
+                {isRunning ? (
+                    <div className="flex items-center gap-3 text-sm text-violet-300">
+                        <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse"></span>
+                        Transkription läuft...
+                    </div>
+                ) : hasTranscriptText ? (
+                    <div className="flex flex-col gap-3">
+                        <div className="flex items-center gap-2 text-sm text-green-400">
+                            <span className="material-icons-round text-[1.1rem]">check_circle</span>
+                            Transkription erfolgreich: {segmentCount} Segment{segmentCount === 1 ? '' : 'e'}
+                        </div>
+                        {jobData?.transcript_preview && (
+                            <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg border border-border-subtle bg-black/20 p-3 text-xs text-text-secondary">
+                                {jobData.transcript_preview}
+                            </pre>
+                        )}
+                    </div>
+                ) : hasTranscriptMeta ? (
+                    <div className="flex items-start gap-2 text-sm text-amber-300">
+                        <span className="material-icons-round text-[1.1rem]">warning</span>
+                        Transkription wurde abgeschlossen, aber es wurden keine Textsegmente gefunden.
+                    </div>
+                ) : (
+                    <div className="text-sm text-text-secondary">
+                        Noch keine Transkription vorhanden.
+                    </div>
+                )}
             </div>
 
             <div className="bg-bg-card border border-border-subtle rounded-2xl p-5 backdrop-blur-md">

@@ -5,7 +5,7 @@ import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
 import { useJob } from '../../hooks/useJob.jsx';
 
-export function VideoTimeline({ videoRef }) {
+export function VideoTimeline({ videoRef, videoUrl }) {
     const containerRef = useRef(null);
     const wavesurferRef = useRef(null);
     const regionsRef = useRef(null);
@@ -149,10 +149,11 @@ export function VideoTimeline({ videoRef }) {
     }, [adAudioEnabled, stopAllAd]);
 
     useEffect(() => {
-        if (!containerRef.current || !jobData?.video_path) return;
+        if (!containerRef.current || !jobData?.video_path || !videoUrl) return;
 
         const ws = WaveSurfer.create({
             container: containerRef.current,
+            url: videoUrl,
             waveColor: 'rgba(206, 212, 218, 0.5)',
             progressColor: 'rgba(0, 123, 255, 0.5)',
             height: 160,
@@ -174,6 +175,9 @@ export function VideoTimeline({ videoRef }) {
                 }),
             ],
             media: videoRef.current,
+            fetchParams: {
+                cache: 'force-cache',
+            },
         });
 
         const wsRegions = ws.registerPlugin(RegionsPlugin.create());
@@ -244,6 +248,97 @@ export function VideoTimeline({ videoRef }) {
                         content: 'Voice',
                     });
                 }
+            }
+
+            // ── Transcript regions (hoverable text popovers) ──────────────────
+            if (jobData.segments) {
+                jobData.segments.forEach((segment, idx) => {
+                    const text = String(segment.text || '').trim();
+                    const start = Number(segment.start_s);
+                    const end = Number(segment.end_s);
+                    if (!text || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+
+                    const contentDiv = document.createElement('div');
+                    contentDiv.style.position = 'relative';
+                    contentDiv.style.display = 'flex';
+                    contentDiv.style.alignItems = 'flex-end';
+                    contentDiv.style.justifyContent = 'flex-start';
+                    contentDiv.style.width = '100%';
+                    contentDiv.style.height = '100%';
+                    contentDiv.style.padding = '2px';
+                    contentDiv.style.boxSizing = 'border-box';
+                    contentDiv.style.overflow = 'visible';
+                    contentDiv.style.cursor = 'pointer';
+
+                    const badge = document.createElement('span');
+                    badge.textContent = 'TXT';
+                    badge.style.backgroundColor = 'rgba(20, 184, 166, 0.9)';
+                    badge.style.color = '#031b18';
+                    badge.style.borderRadius = '4px';
+                    badge.style.padding = '1px 5px';
+                    badge.style.fontSize = '0.65rem';
+                    badge.style.fontWeight = '800';
+                    badge.style.lineHeight = '1.4';
+                    badge.style.boxShadow = '0 1px 3px rgba(0,0,0,0.35)';
+                    badge.title = text;
+
+                    const popover = document.createElement('div');
+                    popover.textContent = text.length > 500 ? `${text.slice(0, 500)}...` : text;
+                    popover.style.display = 'none';
+                    popover.style.position = 'absolute';
+                    popover.style.left = '0';
+                    popover.style.bottom = '24px';
+                    popover.style.width = 'min(320px, 70vw)';
+                    popover.style.maxHeight = '160px';
+                    popover.style.overflow = 'auto';
+                    popover.style.padding = '10px 12px';
+                    popover.style.borderRadius = '8px';
+                    popover.style.border = '1px solid rgba(20,184,166,0.55)';
+                    popover.style.background = 'rgba(9, 17, 24, 0.96)';
+                    popover.style.color = '#e2e8f0';
+                    popover.style.fontSize = '0.75rem';
+                    popover.style.lineHeight = '1.4';
+                    popover.style.whiteSpace = 'pre-wrap';
+                    popover.style.boxShadow = '0 12px 30px rgba(0,0,0,0.45)';
+                    popover.style.zIndex = '120';
+                    popover.style.pointerEvents = 'none';
+
+                    contentDiv.addEventListener('mouseenter', () => {
+                        popover.style.display = 'block';
+                        if (contentDiv.parentElement) {
+                            contentDiv.parentElement.style.zIndex = '120';
+                            contentDiv.parentElement.style.overflow = 'visible';
+                        }
+                    });
+
+                    contentDiv.addEventListener('mouseleave', () => {
+                        popover.style.display = 'none';
+                        if (contentDiv.parentElement) {
+                            contentDiv.parentElement.style.zIndex = '';
+                            contentDiv.parentElement.style.overflow = '';
+                        }
+                    });
+
+                    contentDiv.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if (videoRef.current) {
+                            videoRef.current.currentTime = start;
+                        }
+                    });
+
+                    contentDiv.appendChild(badge);
+                    contentDiv.appendChild(popover);
+
+                    wsRegions.addRegion({
+                        id: `transcript-${segment.index ?? idx}`,
+                        start,
+                        end,
+                        color: 'rgba(20, 184, 166, 0.12)',
+                        drag: false,
+                        resize: false,
+                        content: contentDiv,
+                    });
+                });
             }
 
             // ── AD Slot regions (draggable/resizable) ─────────────────────────
@@ -447,7 +542,7 @@ export function VideoTimeline({ videoRef }) {
             ws.destroy();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [jobData, videoRef, handleUpdateSlotTiming]);
+    }, [jobData, videoRef, videoUrl, handleUpdateSlotTiming]);
 
 
     useEffect(() => {
@@ -547,5 +642,6 @@ export function VideoTimeline({ videoRef }) {
 VideoTimeline.propTypes = {
     videoRef: PropTypes.shape({
         current: PropTypes.instanceOf(Element)
-    })
+    }),
+    videoUrl: PropTypes.string.isRequired
 };

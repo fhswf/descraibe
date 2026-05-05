@@ -212,7 +212,7 @@ function App() {
 
             {videoUrl && (
               <div className="shrink-0">
-                <VideoTimeline videoRef={videoRef} />
+                <VideoTimeline videoRef={videoRef} videoUrl={videoUrl} />
               </div>
             )}
 
@@ -339,18 +339,21 @@ function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJ
 }
 
 function StepNavigation({ currentStep, setCurrentStep, doneSteps }) {
-  const { jobData, handleRunVAD, handleRunTranscribe, handleRunSlots, handleRunImages, handleRunGPT, handleRunTTS } = useJob();
+  const { jobData, progressData, handleRunVAD, handleRunTranscribe, handleRunSlots, handleRunImages, handleRunGPT, handleRunTTS } = useJob();
   
   const steps = [
     { num: 1, label: 'Video hochladen' },
-    { num: 2, label: 'Sprechpausen (VAD)', action: handleRunVAD },
-    { num: 3, label: 'Transkription', action: handleRunTranscribe },
-    { num: 4, label: 'AD-Slots', action: handleRunSlots },
-    { num: 5, label: 'Bilder extrahieren', action: handleRunImages },
-    { num: 6, label: 'Generieren', action: handleRunGPT },
-    { num: 7, label: 'Vertonung (TTS)', action: handleRunTTS },
+    { num: 2, key: 'vad', label: 'Sprechpausen (VAD)', action: handleRunVAD },
+    { num: 3, key: 'transcribe', label: 'Transkription', action: handleRunTranscribe },
+    { num: 4, key: 'slots', label: 'AD-Slots', action: handleRunSlots },
+    { num: 5, key: 'images', label: 'Bilder extrahieren', action: handleRunImages },
+    { num: 6, key: 'gpt', label: 'Generieren', action: handleRunGPT },
+    { num: 7, key: 'tts', label: 'Vertonung (TTS)', action: handleRunTTS },
     { num: 8, label: 'Ergebnisse & Download' },
   ];
+  const runningStep = jobData?.status === 'running'
+    ? jobData?.latest_progress?.step || Object.entries(progressData || {}).find(([, data]) => data !== null)?.[0]
+    : null;
 
   return (
     <nav className="p-4 space-y-1 mt-[-1rem]">
@@ -359,23 +362,29 @@ function StepNavigation({ currentStep, setCurrentStep, doneSteps }) {
         {steps.map((s, i) => {
           const isCurrent = currentStep === i;
           const isDone = doneSteps.has(i);
+          const isRunning = s.key && runningStep === s.key;
           return (
             <button
               key={i}
-              className={`flex items-center gap-3 p-2 rounded-lg transition-all group ${isCurrent
-                ? 'bg-violet-500/10 text-violet-500'
+              className={`flex items-center gap-3 p-2 rounded-lg transition-all group ${isRunning
+                ? 'bg-amber-500/10 text-amber-300 border border-amber-500/20'
+                : isCurrent
+                  ? 'bg-violet-500/10 text-violet-500'
                 : 'hover:bg-bg-card text-text-primary'
-                } ${!isCurrent && !isDone ? 'opacity-50' : ''}`}
+                } ${!isCurrent && !isDone && !isRunning ? 'opacity-50' : ''}`}
               onClick={() => setCurrentStep(i)}
             >
-              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-colors ${isCurrent ? 'bg-violet-500 text-white' :
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-colors ${isRunning ? 'bg-amber-500 text-black' :
+                isCurrent ? 'bg-violet-500 text-white' :
                 isDone ? 'border-2 border-green-500 text-green-500 group-hover:bg-green-500 group-hover:text-white' :
                   'border-2 border-text-muted text-text-secondary'
                 }`}>
-                {s.num}
+                {isRunning ? <span className="material-icons-round text-[0.95rem] animate-spin">progress_activity</span> : s.num}
               </div>
-              <span className={`text-sm font-medium ${isDone && !isCurrent ? 'opacity-60' : ''}`}>{s.label}</span>
-              {isCurrent && s.action ? (
+              <span className={`text-sm font-medium ${isDone && !isCurrent && !isRunning ? 'opacity-60' : ''}`}>{s.label}</span>
+              {isRunning ? (
+                <span className="ml-auto text-[10px] font-bold uppercase tracking-wider text-amber-300 shrink-0">läuft</span>
+              ) : isCurrent && s.action ? (
                 <button
                    className="w-6 h-6 flex shrink-0 items-center justify-center rounded-full bg-violet-600 hover:bg-violet-500 text-white ml-auto shadow-sm shadow-violet-500/20 disabled:opacity-50 transition-all hover:scale-110"
                    onClick={(e) => { e.stopPropagation(); s.action(); }}

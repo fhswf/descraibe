@@ -497,6 +497,54 @@ export function JobProvider({ children }) {
         setDoneSteps(prev => new Set(prev).add(step));
     };
 
+    const markJobStarted = useCallback((step, message) => {
+        if (!jobId) return;
+        const stepIndexes = {
+            vad: 1,
+            transcribe: 2,
+            slots: 3,
+            images: 4,
+            gpt: 5,
+            tts: 6
+        };
+        const startedStepIndex = stepIndexes[step];
+        if (startedStepIndex !== undefined) {
+            setDoneSteps(prev => {
+                const next = new Set(prev);
+                for (let i = startedStepIndex; i <= 7; i += 1) {
+                    next.delete(i);
+                }
+                return next;
+            });
+            setCurrentStep(startedStepIndex);
+        }
+        updateSavedJobMeta(jobId, {
+            status: 'running',
+            progressPercent: 0,
+            progressMessage: message
+        });
+        setJobData(prev => prev?.job_id === jobId
+            ? {
+                ...prev,
+                status: 'running',
+                latest_progress: {
+                    step,
+                    message,
+                    current: 0,
+                    total: 100
+                }
+            }
+            : prev
+        );
+        setProgressData(prev => ({
+            ...prev,
+            [step]: {
+                msg: message,
+                percent: 0
+            }
+        }));
+    }, [jobId, updateSavedJobMeta]);
+
     const handleRunVAD = useCallback(async () => {
         if (!jobId) return;
         try {
@@ -506,8 +554,9 @@ export function JobProvider({ children }) {
                 body: JSON.stringify(vadParams)
             });
             if (!res.ok) throw new Error("Failed to start VAD");
+            markJobStarted('vad', 'Sprechpausen erkennen...');
         } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
-    }, [jobId, vadParams]);
+    }, [jobId, vadParams, markJobStarted]);
 
     const handleRunTranscribe = useCallback(async () => {
         if (!jobId) return;
@@ -518,8 +567,9 @@ export function JobProvider({ children }) {
                 body: JSON.stringify(transcribeParams)
             });
             if (!res.ok) throw new Error("Failed to start transcription");
+            markJobStarted('transcribe', 'Transkription starten...');
         } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
-    }, [jobId, transcribeParams]);
+    }, [jobId, transcribeParams, markJobStarted]);
 
     const handleRunSlots = useCallback(async () => {
         if (!jobId) return;
@@ -530,8 +580,9 @@ export function JobProvider({ children }) {
                 body: JSON.stringify(slotsParams)
             });
             if (!res.ok) throw new Error("Failed to generate slots");
+            markJobStarted('slots', 'AD-Slots generieren...');
         } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
-    }, [jobId, slotsParams]);
+    }, [jobId, slotsParams, markJobStarted]);
 
     const handleRunImages = useCallback(async () => {
         if (!jobId) return;
@@ -542,8 +593,9 @@ export function JobProvider({ children }) {
                 body: JSON.stringify(imagesParams)
             });
             if (!res.ok) throw new Error("Failed to extract images");
+            markJobStarted('images', 'Bilder extrahieren...');
         } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
-    }, [jobId, imagesParams]);
+    }, [jobId, imagesParams, markJobStarted]);
 
     const handleRunGPT = useCallback(async () => {
         if (!jobId) return;
@@ -574,8 +626,9 @@ export function JobProvider({ children }) {
                 body: JSON.stringify(payload)
             });
             if (!res.ok) throw new Error((await res.json()).error || "Failed to start GPT generation");
+            markJobStarted('gpt', 'Beschreibungen generieren...');
         } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
-    }, [jobId, gptParams]);
+    }, [jobId, gptParams, markJobStarted]);
 
     const handleRunTTS = useCallback(async () => {
         if (!jobId) return;
@@ -591,8 +644,9 @@ export function JobProvider({ children }) {
                 body: JSON.stringify(payload)
             });
             if (!res.ok) throw new Error((await res.json()).error || "Failed to start TTS");
+            markJobStarted('tts', 'Vertonung starten...');
         } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
-    }, [jobId, ttsParams]);
+    }, [jobId, ttsParams, markJobStarted]);
 
     const runAllSteps = () => {
         if (!jobId) return alert("Bitte laden Sie zuerst ein Video hoch.");
