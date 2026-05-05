@@ -7,7 +7,7 @@ dependencies = [
     # Web framework
     "fastapi>=0.100.0",
     "uvicorn>=0.30.0",
-    "python-multipart>=0.0.9",
+    "python-multipart>=0.0.26",
     # Pipeline dependencies (same as notebook)
     "moviepy>=2.0",
     "torch",
