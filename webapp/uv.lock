@@ -78,7 +78,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "faster-whisper", specifier = ">=1.0" },
-    { name = "moviepy", specifier = ">=2.0" },
+    { name = "moviepy", specifier = ">=2.2" },
     { name = "numpy" },
     { name = "openai", specifier = ">=1.0" },
     { name = "opencv-python-headless" },

@@ -9,7 +9,7 @@ dependencies = [
     "uvicorn>=0.30.0",
     "python-multipart>=0.0.26",
     # Pipeline dependencies (same as notebook)
-    "moviepy>=2.0",
+    "moviepy>=2.2",
     "torch",
     "torchaudio",
     "pyarrow",
