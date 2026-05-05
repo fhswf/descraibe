@@ -101,8 +101,8 @@ Applications then deploy staging and release into their own target namespaces.
 ### Sealed OpenAI secrets
 
 The app reads `OPENAI_API_KEY` from a Kubernetes Secret. The overlays include
-Bitnami SealedSecret placeholders that must be replaced with values encrypted
-for your cluster:
+Bitnami SealedSecret manifests. To create or rotate the encrypted values for
+your cluster:
 
 ```bash
 # Staging: creates Secret openai-secret-staging in audiodeskription-staging
@@ -118,7 +118,7 @@ printf '%s' 'sk-...' \
       --namespace audiodeskription
 ```
 
-Paste the resulting ciphertext into:
+Paste the resulting ciphertext as `spec.encryptedData.OPENAI_API_KEY` in:
 
 - `k8s/overlays/staging/openai-sealedsecret.yaml`
 - `k8s/overlays/release/openai-sealedsecret.yaml`
