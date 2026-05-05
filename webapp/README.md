@@ -56,7 +56,7 @@ spec:
 
 ```bash
 # Apply once – ArgoCD takes it from there
-kubectl apply -f k8s/argocd-app.yaml -n argocd
+kubectl apply -k k8s/argocd/root -n argocd
 ```
 
 ### Pre-flight checklist
@@ -64,26 +64,39 @@ kubectl apply -f k8s/argocd-app.yaml -n argocd
 > [!IMPORTANT]
 > Complete these steps **before** applying the Application manifest:
 >
-> 1. **Image** — set your real image reference in `k8s/deployment.yaml` and `k8s/kustomization.yaml`:
+> 1. **Image** — set your real image reference in `k8s/base/deployment.yaml` and the relevant `k8s/overlays/*/kustomization.yaml`:
 >    `ghcr.io/YOUR_ORG/audiodeskription-webapp:latest`
-> 2. **Domain** — replace `audiodeskription.example.com` in `k8s/ingress.yaml`.
+> 2. **Domain** — replace `audiodeskription.example.com` in `k8s/base/ingress.yaml`.
 > 3. **OpenAI API key** — inject the real key via External Secrets Operator or ArgoCD Vault Plugin
 >    instead of committing it in `k8s/secret.yaml`.
-> 4. **Storage class** — update `storageClassName` in `k8s/pvc.yaml` to match your cluster
+> 4. **Storage class** — update `storageClassName` in `k8s/base/pvc.yaml` to match your cluster
 >    (e.g. `gp2`, `longhorn`, `ceph-rbd`).
 
-### What ArgoCD deploys (`k8s/` directory)
+### What ArgoCD deploys (`k8s/overlays/staging`)
+
+The recommended setup uses the App of Apps pattern:
+
+| Path | Purpose |
+|------|---------|
+| `k8s/argocd/root` | Root ArgoCD Application. Points to `k8s/argocd/apps`. |
+| `k8s/argocd/apps` | Child ArgoCD Applications for staging and release. |
+| `k8s/overlays/staging` | Staging deployment in `audiodeskription-staging`, pinned by CI to a `sha-*` image tag. |
+| `k8s/overlays/release` | Release deployment in `audiodeskription`, pinned by release-please to a version tag. |
+
+If you manage the root ArgoCD Application outside this repository, point it to
+`webapp/k8s/argocd/apps` and deploy it into the `argocd` namespace. The child
+Applications then deploy staging and release into their own target namespaces.
 
 | File | Resource | Purpose |
 |------|----------|---------|
-| `namespace.yaml` | Namespace | `audiodeskription` |
-| `configmap-gpt-yaml.yaml` | ConfigMap `gpt-config` | GPT model presets → `/app/config/gpt_config.yaml` |
-| `configmap-prompts.yaml` | ConfigMap `prompts-config` | Prompt `.txt` files → `/app/config/prompts/` |
+| `base/namespace.yaml` | Namespace | `audiodeskription` |
+| `base/configmap-gpt.yaml` | ConfigMap `gpt-config` | GPT model presets → `/app/config/gpt_config.yaml` |
+| `base/configmap-prompts.yaml` | ConfigMap `prompts-config` | Prompt `.txt` files → `/app/config/prompts/` |
 | `secret.yaml` | Secret `openai-secret` | OpenAI API key (use ESO in production) |
-| `pvc.yaml` | PVC `audiodeskription-jobs` | 50 Gi scratch space for `/app/jobs` |
-| `deployment.yaml` | Deployment | Single-replica Flask/Gunicorn app |
-| `service.yaml` | Service | ClusterIP, port 80 → 5000 |
-| `ingress.yaml` | Ingress | Nginx, 4 GB body limit, cert-manager TLS |
+| `base/pvc.yaml` | PVC `audiodeskription-jobs` | 50 Gi scratch space for `/app/jobs` |
+| `base/deployment.yaml` | Deployment | Single-replica Flask/Gunicorn app |
+| `base/service.yaml` | Service | ClusterIP, port 80 → 5000 |
+| `base/ingress.yaml` | Ingress | Nginx, 4 GB body limit, cert-manager TLS |
 
 ### Updating prompts or GPT config
 
@@ -91,7 +104,7 @@ Edit the relevant ConfigMap file and push to `main` — ArgoCD syncs within ≈3
 
 ```bash
 # Example: update the AD rules
-vim k8s/configmap-prompts.yaml
+vim k8s/base/configmap-prompts.yaml
 git commit -am "chore: update AD rules"
 git push
 ```
@@ -156,7 +169,7 @@ docker run \
 
 ### Kubernetes / ArgoCD
 
-In K8s, the file is stored as the `gpt-config` ConfigMap and mounted read-only at `/app/config/`. To add or update presets, edit [`k8s/configmap-gpt-yaml.yaml`](../k8s/configmap-gpt-yaml.yaml) and push — ArgoCD will sync the change and restart the pod automatically.
+In K8s, the file is stored as the `gpt-config` ConfigMap and mounted read-only at `/app/config/`. To add or update presets, edit [`k8s/base/configmap-gpt.yaml`](k8s/base/configmap-gpt.yaml) and push — ArgoCD will sync the change and restart the pod automatically.
 
 ---
 
@@ -227,10 +240,10 @@ docker run \
 
 #### Kubernetes / ArgoCD
 
-The prompts are stored in [`k8s/configmap-prompts.yaml`](../k8s/configmap-prompts.yaml) and
+The prompts are stored in [`k8s/base/configmap-prompts.yaml`](k8s/base/configmap-prompts.yaml) and
 mounted read-only at `/app/config/prompts/`. Edit the file and push — ArgoCD will sync and
 restart the pod. The `GPT_PROMPTS_DIR=/app/config/prompts` env var is already set in
-[`k8s/deployment.yaml`](../k8s/deployment.yaml).
+[`k8s/base/deployment.yaml`](k8s/base/deployment.yaml).
 
 ---
 

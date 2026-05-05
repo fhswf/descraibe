@@ -1,12 +1,9 @@
 name: Build & Push Webapp Container
 
 on:
-  pull_request:
-    types: [closed]
-    branches: [main]
-    paths:
-      - "webapp/**"
   push:
+    branches:
+      - main              # merged PRs, including Dependabot security updates, update staging
     tags:
       - "v*.*.*"          # e.g. v1.2.3  → triggers a versioned release build
     paths:
@@ -36,16 +33,14 @@ env:
 
 jobs:
   build:
-    # Skip if this is a PR event but it wasn't merged.
-    # Also skip if this is a push event (not a tag) and the commit message is a release-please commit (though we removed push: main, tags still trigger)
+    # Pushes to main publish the staging image; tags publish release images.
     if: |
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))) ||
       (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'workflow_call')
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # needed to update the staging overlay with the built sha tag
       packages: write   # needed to push to ghcr.io
 
     steps:
@@ -70,32 +65,53 @@ jobs:
 
       # ── Derive image tags & labels (OCI standard) ─────────────────────────────
       # docker/metadata-action handles:
-      #   • branch pushes  → :latest  +  :<sha>
+      #   • main pushes    → :staging +  :<sha> (overlay is pinned to :<sha>)
       #   • semver tags    → :1.2.3   +  :1.2  +  :1  +  :latest
-      #   • pull requests  → :pr-<n>  (not pushed)
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=raw,value=staging,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
 
-      # ── Build (and push on non-PR events) ─────────────────────────────────────
+      # ── Build and push ────────────────────────────────────────────────────────
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: webapp/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Use the registry as a cache backend (much faster for large layers in GHCR)
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      # ── Pin staging overlay to the immutable image tag ───────────────────────
+      - name: Update staging overlay image tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA::7}"
+          tag="sha-${short_sha}"
+          file="webapp/k8s/overlays/staging/kustomization.yaml"
+
+          sed -i -E "s/newTag: .*/newTag: ${tag}/" "$file"
+
+          if git diff --quiet -- "$file"; then
+            echo "Staging overlay already points to ${tag}."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$file"
+          git commit -m "chore: pin staging webapp image to ${tag} [skip ci]"
+          git push origin HEAD:main

@@ -9,7 +9,7 @@
             "changelog-path": "CHANGELOG.md",
             "include-component-in-tag": false,
             "extra-files": [
-                "k8s/kustomization.yaml",
+                "k8s/overlays/release/kustomization.yaml",
                 "package.json",
                 "frontend/package.json"
             ]

@@ -1,25 +1,8 @@
-# kustomization.yaml – ArgoCD-friendly entrypoint
-# ArgoCD Application should point to this directory with:
-#   spec.source.repoURL: <your-repo>
-#   spec.source.path: k8s
-#   spec.source.targetRevision: main
+# kustomization.yaml – base resources.
+# Environment-specific image tags live in overlays/staging and overlays/release.
 #
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: audiodeskription
-
 resources:
-  - namespace.yaml
-  - pvc.yaml
-  - configmap-gpt.yaml
-  - configmap-prompts.yaml
-  - deployment.yaml
-  - service.yaml
-  - ingress.yaml
-
-# ── Image overrides ──────────────────────────────────────────────────────────
-# ArgoCD Image Updater or CI can update the newTag field automatically.
-images:
-  - name: ghcr.io/fhswf/audiodeskription-webapp
-    newTag: v0.21.0 # x-release-please-version
+  - base

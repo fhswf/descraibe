@@ -3,14 +3,14 @@
 # Apply this once to your ArgoCD namespace (not to the app namespace):
 #   kubectl apply -f k8s/argocd-app.yaml -n argocd
 #
-# After applying, ArgoCD will sync the k8s/ directory and create all resources
+# After applying, ArgoCD will sync the staging overlay and create all resources
 # (Namespace, ConfigMaps, Secret placeholder, PVC, Deployment, Service, Ingress).
 #
 # Pre-requisites:
 #   1. Set your real OpenAI API key in the `openai-secret` Secret
 #      (use External Secrets Operator or Vault instead of committing it).
-#   2. Replace REPO_URL, TARGET_REVISION, and the domain in k8s/ingress.yaml.
-#   3. Replace the image tag in k8s/deployment.yaml and k8s/kustomization.yaml.
+#   2. Replace REPO_URL, TARGET_REVISION, and the domain in k8s/base/ingress.yaml.
+#   3. Use overlays/release for release-tag based deployments.
 #
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -29,7 +29,7 @@ spec:
   source:
     repoURL: git@github.com:fhswf/Audiodeskriptionen_SS25.git
     targetRevision: main
-    path: webapp/k8s
+    path: webapp/k8s/overlays/staging
 
   destination:
     server: https://kubernetes.default.svc
