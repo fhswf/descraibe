@@ -64,6 +64,17 @@ function jobMetaFromData(data) {
     };
 }
 
+function mergeSummaryMeta(existing, summary) {
+    const incoming = jobMetaFromData(summary);
+    if (existing?.status === 'uploading' && !summary.video_path && summary.status !== 'error') {
+        return {
+            ...existing,
+            updatedAt: new Date().toISOString()
+        };
+    }
+    return incoming;
+}
+
 export function JobProvider({ children }) {
     const [jobId, setJobId] = useState(() => {
         const params = new URLSearchParams(window.location.search);
@@ -318,8 +329,13 @@ export function JobProvider({ children }) {
                 const summaries = JSON.parse(ev.data);
                 if (!Array.isArray(summaries)) return;
 
-                summaries.forEach(summary => {
-                    updateSavedJobMeta(summary.job_id, jobMetaFromData(summary));
+                setSavedJobMeta(prev => {
+                    const next = { ...prev };
+                    summaries.forEach(summary => {
+                        next[summary.job_id] = mergeSummaryMeta(prev[summary.job_id], summary);
+                    });
+                    writeSavedJobMeta(next);
+                    return next;
                 });
             } catch (err) {
                 console.error("Summary stream parsing error", err);
@@ -336,7 +352,7 @@ export function JobProvider({ children }) {
             source.removeEventListener('summaries', handleSummaries);
             source.close();
         };
-    }, [savedJobIds, updateSavedJobMeta]);
+    }, [savedJobIds]);
 
     const handleUpdateSlotTiming = useCallback(async (slotId, start_s, end_s) => {
         if (!jobId) return;

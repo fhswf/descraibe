@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import { useJob } from './hooks/useJob.jsx';
 import { useCachedVideoUrl } from './hooks/useCachedVideoUrl.jsx';
 import { VideoTimeline } from './components/features/VideoTimeline';
+import { uploadVideoInChunks } from './utils/uploadVideo.js';
 import './index.css';
 
 
@@ -51,39 +52,39 @@ function App() {
       progressPercent: 0,
       progressMessage: 'Upload'
     });
-    const CHUNK_SIZE = 5 * 1024 * 1024;
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const chunk = file.slice(start, Math.min(file.size, start + CHUNK_SIZE));
-      const formData = new FormData();
-      formData.append('filename', file.name);
-      formData.append('chunkIndex', i);
-      formData.append('totalChunks', totalChunks);
-      formData.append('chunk', chunk);
-      try {
-        const res = await fetch(`/api/jobs/${activeJobId}/video`, { method: 'POST', body: formData });
-        if (!res.ok) throw new Error('Upload failed');
-        const data = await res.json();
-        const uploadPercent = Math.round(((i + 1) / totalChunks) * 100);
-        setProgressData(prev => ({ ...prev, upload: { msg: 'Lade Datei hoch...', percent: uploadPercent } }));
+    try {
+      const data = await uploadVideoInChunks({
+        jobId: activeJobId,
+        file,
+        onProgress: ({ percent, chunkIndex, totalChunks }) => {
+          const msg = `Lade Datei hoch... (${chunkIndex + 1}/${totalChunks})`;
+          setProgressData(prev => ({ ...prev, upload: { msg, percent } }));
+          updateSavedJobMeta(activeJobId, {
+            name: file.name,
+            status: 'uploading',
+            progressPercent: percent,
+            progressMessage: 'Upload'
+          });
+        }
+      });
+
+      if (data?.complete) {
         updateSavedJobMeta(activeJobId, {
           name: file.name,
-          status: data.complete ? 'idle' : 'uploading',
-          progressPercent: data.complete ? null : uploadPercent,
-          progressMessage: data.complete ? null : 'Upload'
-        });
-        if (data.complete) await fetchJobData(activeJobId);
-      } catch (err) {
-        console.error(err);
-        updateSavedJobMeta(activeJobId, {
-          status: 'error',
+          status: 'idle',
           progressPercent: null,
-          progressMessage: err.message
+          progressMessage: null
         });
-        alert('Upload error: ' + err.message);
-        break;
+        await fetchJobData(activeJobId);
       }
+    } catch (err) {
+      console.error(err);
+      updateSavedJobMeta(activeJobId, {
+        status: 'error',
+        progressPercent: null,
+        progressMessage: err.message
+      });
+      alert('Upload error: ' + err.message);
     }
     setProgressData(prev => ({ ...prev, upload: null }));
   };
@@ -291,7 +292,9 @@ function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJ
             const displayName = isActive
               ? activeName || meta.name || `Job ${savedJobId.slice(0, 8)}`
               : meta.name || `Job ${savedJobId.slice(0, 8)}`;
-            const status = isActive ? activeStatus || meta.status : meta.status;
+            const status = isActive && meta.status === 'uploading'
+              ? meta.status
+              : isActive ? activeStatus || meta.status : meta.status;
             const percent = Number.isFinite(meta.progressPercent) ? meta.progressPercent : null;
             const showPercent = (status === 'running' || status === 'uploading') && percent !== null;
             const showProgress = status === 'running' || status === 'uploading';
