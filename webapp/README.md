@@ -279,21 +279,19 @@ Each uploaded video creates a **job directory** under `$AD_JOBS_DIR/<uuid>/` con
 
 ## GPU Support
 
-By default the image uses the CPU-only PyTorch wheels and a slim Python base image. To enable GPU (CUDA) support:
+The image is GPU-first. It is based on the official PyTorch runtime image with
+CUDA 12.8 and cuDNN 9 preinstalled, so the Docker build does not download the
+large `torch`/CUDA Python wheels again. The Kubernetes GPU Operator must still
+provide the node driver, device plugin and NVIDIA container runtime hooks.
 
-1. In `webapp/Dockerfile`, swap the base image:
-   ```dockerfile
-   # FROM python:3.11-slim
-   FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
-   ```
+Run locally with:
 
-2. In `webapp/pyproject.toml`, uncomment the PyTorch CUDA index:
-   ```toml
-   [tool.uv]
-   index-url = "https://download.pytorch.org/whl/cu121"
-   ```
+```bash
+docker run --gpus all -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-webapp
+```
 
-3. Rebuild the image and run with `--gpus all`.
+When changing the PyTorch version, keep the Docker base image tag aligned with
+the `torch`/`torchaudio` versions in `uv.lock`.
 
 ---
 

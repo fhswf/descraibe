@@ -5,10 +5,11 @@
 # Build:
 #   docker build -t audiodeskription-webapp webapp/
 #
-# Run (CPU-only, pass your OpenAI API key at runtime):
+# Run (GPU image, pass your OpenAI API key at runtime):
 #   docker run -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-webapp
 #
-# For GPU support, use the CUDA base image variant instead (see comment below).
+# The runtime image already includes PyTorch, CUDA and cuDNN. The Kubernetes
+# GPU Operator still provides the host driver, device plugin and runtime hooks.
 
 # ── Frontend Build ─────────────────────────────────────────────────────────────
 FROM node:20-slim AS frontend-builder
@@ -19,27 +20,20 @@ COPY webapp/frontend/ ./
 RUN npm run build
 
 # ── Base image ─────────────────────────────────────────────────────────────────
-# GPU variant – uses the minimal CUDA base image (driver compat layer only).
-# PyTorch 2.x bundles its own cuDNN and CUDA runtime as Python wheels, so
-# the full cudnn8-runtime (~3.5 GB) is not needed here.
-FROM nvidia/cuda:12.1.1-base-ubuntu22.04
+# GPU-first runtime: PyTorch, CUDA 12.8 and cuDNN 9 are preinstalled in
+# /opt/conda, which avoids re-downloading the large torch/nvidia wheels in CI.
+FROM pytorch/pytorch:2.10.0-cuda12.8-cudnn9-runtime
 
 # ── System dependencies ────────────────────────────────────────────────────────
 # ffmpeg   – required by moviepy / scenedetect
 # libsm6 / libxext6 / libglib2.0-0 – required by opencv-python-headless
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-venv \
-    python3-pip \
     ffmpeg \
     libsm6 \
     libxext6 \
     libglib2.0-0 \
     curl \
     && rm -rf /var/lib/apt/lists/*
-
-# Make python3.11 the default python
-RUN ln -s /usr/bin/python3.11 /usr/bin/python
 
 # ── Install uv ─────────────────────────────────────────────────────────────────
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -48,7 +42,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0 \
-    PATH="/app/.venv/bin:$PATH"
+    UV_SYSTEM_PYTHON=1 \
+    PATH="/opt/conda/bin:$PATH"
 
 # ── App source ─────────────────────────────────────────────────────────────────
 WORKDIR /app
@@ -56,9 +51,15 @@ WORKDIR /app
 # Copy dependency manifest and lockfile first so Docker can cache the install layer
 COPY webapp/pyproject.toml webapp/uv.lock ./
 
-# Install Python dependencies without bursting cache on every source code change
+# Install Python dependencies without bursting cache on every source code change.
+# torch/torchaudio and their CUDA libraries come from the PyTorch base image.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project --frozen --no-cache
+    uv export --no-dev --frozen --no-emit-project \
+    --prune torch \
+    --prune torchaudio \
+    --output-file /tmp/requirements-runtime.txt \
+    && uv pip install --requirements /tmp/requirements-runtime.txt \
+    && rm /tmp/requirements-runtime.txt
 
 # Copy the rest of the webapp
 COPY webapp/backend ./backend
@@ -67,7 +68,8 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 # Install the actual project (nearly instant since deps are already there)
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-cache
+    uv pip install --no-deps . \
+    && python -c "import torch, torchaudio; assert torch.version.cuda, 'PyTorch CUDA runtime is missing'; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'torchaudio', torchaudio.__version__)"
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
 # All values can be overridden at runtime:

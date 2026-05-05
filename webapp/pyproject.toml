@@ -29,11 +29,6 @@ dependencies = [
 [project.scripts]
 webapp = "backend.app:main"
 
-[tool.uv]
-# Use the PyTorch CUDA index for GPU-accelerated torch builds.
-# Switch to "cpu" or remove the override for a CPU-only image.
-# index-url = "https://download.pytorch.org/whl/cu121"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
