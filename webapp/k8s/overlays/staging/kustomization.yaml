@@ -12,7 +12,7 @@ resources:
 # the immutable sha-* image tag that it just built and commits the change.
 images:
   - name: ghcr.io/fhswf/audiodeskription-webapp
-    newTag: sha-478e7b4
+    newTag: sha-e42205a
 
 patches:
   - target:
