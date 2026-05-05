@@ -12,7 +12,7 @@
 # GPU Operator still provides the host driver, device plugin and runtime hooks.
 
 # ── Frontend Build ─────────────────────────────────────────────────────────────
-FROM node:20-slim AS frontend-builder
+FROM node:24-slim AS frontend-builder
 WORKDIR /app/frontend
 COPY webapp/frontend/package*.json ./
 RUN npm install
@@ -43,6 +43,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0 \
     UV_SYSTEM_PYTHON=1 \
+    UV_BREAK_SYSTEM_PACKAGES=1 \
     PATH="/opt/conda/bin:$PATH"
 
 # ── App source ─────────────────────────────────────────────────────────────────
@@ -54,11 +55,11 @@ COPY webapp/pyproject.toml webapp/uv.lock ./
 # Install Python dependencies without bursting cache on every source code change.
 # torch/torchaudio and their CUDA libraries come from the PyTorch base image.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv export --no-dev --frozen --no-emit-project \
+    uv export --quiet --no-dev --frozen --no-emit-project \
     --prune torch \
     --prune torchaudio \
     --output-file /tmp/requirements-runtime.txt \
-    && uv pip install --requirements /tmp/requirements-runtime.txt \
+    && uv pip install --break-system-packages --requirements /tmp/requirements-runtime.txt \
     && rm /tmp/requirements-runtime.txt
 
 # Copy the rest of the webapp
@@ -68,7 +69,7 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 # Install the actual project (nearly instant since deps are already there)
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --no-deps . \
+    uv pip install --break-system-packages --no-deps . \
     && python -c "import torch, torchaudio; assert torch.version.cuda, 'PyTorch CUDA runtime is missing'; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'torchaudio', torchaudio.__version__)"
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
