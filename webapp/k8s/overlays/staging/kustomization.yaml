@@ -6,6 +6,7 @@ namespace: audiodeskription-staging
 
 resources:
   - ../../base
+  - openai-sealedsecret.yaml
 
 # Bootstrap value. After every successful push to main, CI replaces this with
 # the immutable sha-* image tag that it just built and commits the change.
@@ -21,3 +22,10 @@ patches:
       - op: replace
         path: /spec/rules/0/host
         value: descraibe.gawron.cloud
+  - target:
+      kind: Deployment
+      name: audiodeskription
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/envFrom/0/secretRef/name
+        value: openai-secret-staging

@@ -92,11 +92,39 @@ Applications then deploy staging and release into their own target namespaces.
 | `base/namespace.yaml` | Namespace | `audiodeskription` |
 | `base/configmap-gpt.yaml` | ConfigMap `gpt-config` | GPT model presets → `/app/config/gpt_config.yaml` |
 | `base/configmap-prompts.yaml` | ConfigMap `prompts-config` | Prompt `.txt` files → `/app/config/prompts/` |
-| `secret.yaml` | Secret `openai-secret` | OpenAI API key (use ESO in production) |
+| `overlays/*/openai-sealedsecret.yaml` | SealedSecret | OpenAI API key for staging/release |
 | `base/pvc.yaml` | PVC `audiodeskription-jobs` | 50 Gi scratch space for `/app/jobs` |
 | `base/deployment.yaml` | Deployment | Single-replica Flask/Gunicorn app |
 | `base/service.yaml` | Service | ClusterIP, port 80 → 5000 |
 | `base/ingress.yaml` | Ingress | Nginx, 4 GB body limit, cert-manager TLS |
+
+### Sealed OpenAI secrets
+
+The app reads `OPENAI_API_KEY` from a Kubernetes Secret. The overlays include
+Bitnami SealedSecret placeholders that must be replaced with values encrypted
+for your cluster:
+
+```bash
+# Staging: creates Secret openai-secret-staging in audiodeskription-staging
+printf '%s' 'sk-...' \
+  | kubeseal --raw \
+      --name openai-secret-staging \
+      --namespace audiodeskription-staging
+
+# Release/prod: creates Secret openai-secret in audiodeskription
+printf '%s' 'sk-...' \
+  | kubeseal --raw \
+      --name openai-secret \
+      --namespace audiodeskription
+```
+
+Paste the resulting ciphertext into:
+
+- `k8s/overlays/staging/openai-sealedsecret.yaml`
+- `k8s/overlays/release/openai-sealedsecret.yaml`
+
+Keep the names and namespaces unchanged; SealedSecrets are namespace/name bound
+unless you deliberately use a different sealing scope.
 
 ### Updating prompts or GPT config
 
