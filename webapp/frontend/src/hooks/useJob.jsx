@@ -2,12 +2,75 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 
 const JobContext = createContext();
+const SAVED_JOBS_STORAGE_KEY = 'descrAIbe.savedJobIds';
+const SAVED_JOB_META_STORAGE_KEY = 'descrAIbe.savedJobMeta';
+
+function readSavedJobIds() {
+    try {
+        const raw = window.localStorage.getItem(SAVED_JOBS_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string' && id.trim()) : [];
+    } catch (err) {
+        console.warn("Could not read saved jobs from localStorage:", err);
+        return [];
+    }
+}
+
+function writeSavedJobIds(jobIds) {
+    try {
+        window.localStorage.setItem(SAVED_JOBS_STORAGE_KEY, JSON.stringify(jobIds));
+    } catch (err) {
+        console.warn("Could not write saved jobs to localStorage:", err);
+    }
+}
+
+function readSavedJobMeta() {
+    try {
+        const raw = window.localStorage.getItem(SAVED_JOB_META_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (err) {
+        console.warn("Could not read saved job metadata from localStorage:", err);
+        return {};
+    }
+}
+
+function writeSavedJobMeta(meta) {
+    try {
+        window.localStorage.setItem(SAVED_JOB_META_STORAGE_KEY, JSON.stringify(meta));
+    } catch (err) {
+        console.warn("Could not write saved job metadata to localStorage:", err);
+    }
+}
+
+function basename(path) {
+    if (!path) return '';
+    return String(path).split(/[\\/]/).filter(Boolean).pop() || '';
+}
+
+function progressPercent(progress) {
+    if (!progress?.total) return null;
+    return Math.max(0, Math.min(100, Math.round((progress.current / progress.total) * 100)));
+}
+
+function jobMetaFromData(data) {
+    const percent = data.status === 'running' ? progressPercent(data.latest_progress) : null;
+    return {
+        name: basename(data.video_path) || `Job ${String(data.job_id || '').slice(0, 8)}`,
+        status: data.status || null,
+        progressPercent: percent,
+        progressMessage: data.latest_progress?.message || null,
+        updatedAt: new Date().toISOString()
+    };
+}
 
 export function JobProvider({ children }) {
     const [jobId, setJobId] = useState(() => {
         const params = new URLSearchParams(window.location.search);
         return params.get('job') || null;
     });
+    const [savedJobIds, setSavedJobIds] = useState(readSavedJobIds);
+    const [savedJobMeta, setSavedJobMeta] = useState(readSavedJobMeta);
     const [jobData, setJobData] = useState(null);
     const [sseConnected, setSseConnected] = useState(false);
     const [gptRecords, setGptRecords] = useState([]);
@@ -67,6 +130,75 @@ export function JobProvider({ children }) {
         min_scene_length: 20,
         short_scene_s: 3.0
     });
+
+    const addSavedJobId = useCallback((id) => {
+        if (!id) return;
+        setSavedJobIds(prev => {
+            const next = prev.includes(id) ? prev : [id, ...prev];
+            writeSavedJobIds(next);
+            return next;
+        });
+    }, []);
+
+    const updateSavedJobMeta = useCallback((id, updates) => {
+        if (!id) return;
+        setSavedJobMeta(prev => {
+            const next = {
+                ...prev,
+                [id]: {
+                    ...(prev[id] || {}),
+                    ...updates,
+                    updatedAt: new Date().toISOString()
+                }
+            };
+            writeSavedJobMeta(next);
+            return next;
+        });
+    }, []);
+
+    const removeSavedJobId = useCallback((id) => {
+        setSavedJobIds(prev => {
+            const next = prev.filter(savedId => savedId !== id);
+            writeSavedJobIds(next);
+            return next;
+        });
+        setSavedJobMeta(prev => {
+            const next = { ...prev };
+            delete next[id];
+            writeSavedJobMeta(next);
+            return next;
+        });
+    }, []);
+
+    const resetJobView = useCallback(() => {
+        setJobData(null);
+        setDoneSteps(new Set());
+        setCurrentStep(0);
+        setProgressData({});
+        setFocusedSlot(null);
+        setSrtTexts({});
+    }, []);
+
+    const selectJob = useCallback((id) => {
+        if (!id) return;
+        addSavedJobId(id);
+        resetJobView();
+        setJobId(id);
+        window.history.pushState({}, '', `?job=${id}`);
+    }, [addSavedJobId, resetJobView]);
+
+    useEffect(() => {
+        const handlePopState = () => {
+            const params = new URLSearchParams(window.location.search);
+            const nextJobId = params.get('job') || null;
+            resetJobView();
+            setJobId(nextJobId);
+            if (nextJobId) addSavedJobId(nextJobId);
+        };
+
+        window.addEventListener('popstate', handlePopState);
+        return () => window.removeEventListener('popstate', handlePopState);
+    }, [addSavedJobId, resetJobView]);
 
     // Populate configuration defaults on mount
     useEffect(() => {
@@ -128,12 +260,14 @@ export function JobProvider({ children }) {
 
     const fetchJobData = useCallback(async (id) => {
         try {
-            // Add a cache-busting timestamp to ensure we get fresh data
-            const res = await fetch(`/api/jobs/${id}?t=${Date.now()}`, {
+            const res = await fetch(`/api/jobs/${id}`, {
+                cache: 'no-store',
                 headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
             });
             if (res.ok) {
                 const data = await res.json();
+                addSavedJobId(id);
+                updateSavedJobMeta(id, jobMetaFromData(data));
                 setJobData(data);
 
                 const newDone = new Set();
@@ -171,7 +305,38 @@ export function JobProvider({ children }) {
         } catch (err) {
             console.error("Failed to load job:", err);
         }
-    }, [setJobData, setDoneSteps, setCurrentStep]);
+    }, [addSavedJobId, updateSavedJobMeta, setJobData, setDoneSteps, setCurrentStep]);
+
+    useEffect(() => {
+        if (savedJobIds.length === 0) return;
+
+        const params = new URLSearchParams({ job_ids: savedJobIds.join(',') });
+        const source = new EventSource(`/api/jobs/summary_stream?${params.toString()}`);
+
+        const handleSummaries = (ev) => {
+            try {
+                const summaries = JSON.parse(ev.data);
+                if (!Array.isArray(summaries)) return;
+
+                summaries.forEach(summary => {
+                    updateSavedJobMeta(summary.job_id, jobMetaFromData(summary));
+                });
+            } catch (err) {
+                console.error("Summary stream parsing error", err);
+            }
+        };
+
+        source.addEventListener('summaries', handleSummaries);
+
+        source.onerror = () => {
+            // EventSource reconnects automatically; keep this quiet unless parsing fails.
+        };
+
+        return () => {
+            source.removeEventListener('summaries', handleSummaries);
+            source.close();
+        };
+    }, [savedJobIds, updateSavedJobMeta]);
 
     const handleUpdateSlotTiming = useCallback(async (slotId, start_s, end_s) => {
         if (!jobId) return;
@@ -209,14 +374,25 @@ export function JobProvider({ children }) {
         if (event === 'ping' || event === 'connected') return;
 
         if (event === 'progress') {
+            const percent = progressPercent(data);
+            updateSavedJobMeta(jobId, {
+                status: 'running',
+                progressPercent: percent,
+                progressMessage: data.message || null
+            });
             setProgressData(prev => ({
                 ...prev,
                 [data.step]: {
                     msg: data.message,
-                    percent: data.total ? Math.round((data.current / data.total) * 100) : 100
+                    percent: percent ?? 100
                 }
             }));
         } else if (event === 'error') {
+            updateSavedJobMeta(jobId, {
+                status: 'error',
+                progressPercent: null,
+                progressMessage: data.message || null
+            });
             alert(`Error in ${data.step}: ${data.message}`);
             setProgressData(prev => ({ ...prev, [data.step]: null }));
             fetchJobData(jobId);
@@ -270,7 +446,7 @@ export function JobProvider({ children }) {
                 }
             }
         }
-    }, [jobId, fetchJobData, setProgressData, setDoneSteps, setCurrentStep, isRunAllActive]);
+    }, [jobId, fetchJobData, updateSavedJobMeta, setProgressData, setDoneSteps, setCurrentStep, isRunAllActive]);
 
     useEffect(() => {
         if (!jobId) return;
@@ -301,6 +477,14 @@ export function JobProvider({ children }) {
         try {
             const res = await fetch('/api/jobs', { method: 'POST' });
             const data = await res.json();
+            resetJobView();
+            addSavedJobId(data.job_id);
+            updateSavedJobMeta(data.job_id, {
+                name: `Job ${String(data.job_id).slice(0, 8)}`,
+                status: 'created',
+                progressPercent: null,
+                progressMessage: null
+            });
             setJobId(data.job_id);
             window.history.pushState({}, '', `?job=${data.job_id}`);
             return data.job_id;
@@ -438,6 +622,11 @@ export function JobProvider({ children }) {
     const contextValue = useMemo(() => ({
         jobId,
         setJobId,
+        savedJobIds,
+        savedJobMeta,
+        selectJob,
+        removeSavedJobId,
+        updateSavedJobMeta,
         jobData,
         sseConnected,
         gptRecords,
@@ -484,7 +673,7 @@ export function JobProvider({ children }) {
         isRunAllActive,
         stopRunAll
     }), [
-        jobId, setJobId, jobData, sseConnected, gptRecords, setGptRecords, currentStep, setCurrentStep,
+        jobId, setJobId, savedJobIds, savedJobMeta, selectJob, removeSavedJobId, updateSavedJobMeta, jobData, sseConnected, gptRecords, setGptRecords, currentStep, setCurrentStep,
         doneSteps, markStepDone, progressData, setProgressData, focusedSlot, setFocusedSlot, createJob,
         fetchJobData, srtTexts, setSrtTexts, isSavingSrt, handleSaveSrtTexts, handleUpdateSlotTiming,
         isConfigModalOpen, setIsConfigModalOpen, gptParams, setGptParams, availableModels, setAvailableModels,

@@ -13,7 +13,6 @@ import { StepGenerate } from './components/features/StepGenerate';
 import { StepTTS } from './components/features/StepTTS';
 import { StepResults } from './components/features/StepResults';
 import { SRTWidget } from './components/features/SRTWidget';
-import { GlobalProgress } from './components/features/GlobalProgress';
 
 function App() {
   const {
@@ -31,7 +30,12 @@ function App() {
     stopRunAll,
     createJob,
     fetchJobData,
-    setProgressData
+    setProgressData,
+    savedJobIds,
+    savedJobMeta,
+    selectJob,
+    removeSavedJobId,
+    updateSavedJobMeta
   } = useJob();
 
   const uploadInputRef = useRef(null);
@@ -40,6 +44,12 @@ function App() {
     setProgressData(prev => ({ ...prev, upload: { msg: 'Starte Upload...', percent: 0 } }));
     let activeJobId = jobId;
     if (!activeJobId) activeJobId = await createJob();
+    updateSavedJobMeta(activeJobId, {
+      name: file.name,
+      status: 'uploading',
+      progressPercent: 0,
+      progressMessage: 'Upload'
+    });
     const CHUNK_SIZE = 5 * 1024 * 1024;
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     for (let i = 0; i < totalChunks; i++) {
@@ -54,10 +64,22 @@ function App() {
         const res = await fetch(`/api/jobs/${activeJobId}/video`, { method: 'POST', body: formData });
         if (!res.ok) throw new Error('Upload failed');
         const data = await res.json();
-        setProgressData(prev => ({ ...prev, upload: { msg: 'Lade Datei hoch...', percent: Math.round(((i + 1) / totalChunks) * 100) } }));
+        const uploadPercent = Math.round(((i + 1) / totalChunks) * 100);
+        setProgressData(prev => ({ ...prev, upload: { msg: 'Lade Datei hoch...', percent: uploadPercent } }));
+        updateSavedJobMeta(activeJobId, {
+          name: file.name,
+          status: data.complete ? 'idle' : 'uploading',
+          progressPercent: data.complete ? null : uploadPercent,
+          progressMessage: data.complete ? null : 'Upload'
+        });
         if (data.complete) await fetchJobData(activeJobId);
       } catch (err) {
         console.error(err);
+        updateSavedJobMeta(activeJobId, {
+          status: 'error',
+          progressPercent: null,
+          progressMessage: err.message
+        });
         alert('Upload error: ' + err.message);
         break;
       }
@@ -113,6 +135,16 @@ function App() {
 
       <div className="grid grid-cols-[380px_1fr] gap-0 h-[calc(100vh-88px)]">
         <aside className="bg-bg-surface border-r border-border-subtle p-6 px-4 overflow-y-auto flex flex-col gap-6">
+          <JobList
+            jobId={jobId}
+            jobData={jobData}
+            savedJobIds={savedJobIds}
+            savedJobMeta={savedJobMeta}
+            createJob={createJob}
+            selectJob={selectJob}
+            removeSavedJobId={removeSavedJobId}
+          />
+
           <StepNavigation currentStep={currentStep} setCurrentStep={setCurrentStep} doneSteps={doneSteps} />
 
           <div className="flex flex-col gap-2 mt-[-1rem] px-2">
@@ -208,8 +240,101 @@ function App() {
       </div>
 
       <ConfigModal />
-      <GlobalProgress />
     </div>
+  );
+}
+
+function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJob, removeSavedJobId }) {
+  const activeName = jobData?.video_path?.split(/[\\/]/).filter(Boolean).pop();
+  const activeStatus = jobData?.status || (jobId ? 'lädt...' : null);
+
+  return (
+    <section className="px-2 mt-[-0.5rem]">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Jobs</div>
+        <button
+          className="w-7 h-7 flex items-center justify-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-card transition-colors"
+          onClick={createJob}
+          title="Neuen Job erstellen"
+        >
+          <span className="material-icons-round text-[1.1rem]">add</span>
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-1" aria-label="Gespeicherte Jobs">
+        {savedJobIds.length === 0 ? (
+          <div className="rounded-lg border border-border-subtle bg-white/5 px-3 py-2 text-xs text-text-secondary">
+            Noch keine Jobs gespeichert.
+          </div>
+        ) : (
+          savedJobIds.map(savedJobId => {
+            const isActive = savedJobId === jobId;
+            const meta = savedJobMeta[savedJobId] || {};
+            const displayName = isActive
+              ? activeName || meta.name || `Job ${savedJobId.slice(0, 8)}`
+              : meta.name || `Job ${savedJobId.slice(0, 8)}`;
+            const status = isActive ? activeStatus || meta.status : meta.status;
+            const percent = Number.isFinite(meta.progressPercent) ? meta.progressPercent : null;
+            const showPercent = (status === 'running' || status === 'uploading') && percent !== null;
+            const showProgress = status === 'running' || status === 'uploading';
+            return (
+              <div
+                key={savedJobId}
+                className={`group flex items-start gap-1 rounded-lg border transition-all ${isActive
+                  ? 'border-violet-500/50 bg-violet-500/10 text-text-primary'
+                  : 'border-transparent hover:border-border-subtle hover:bg-bg-card text-text-secondary'
+                  }`}
+              >
+                <button
+                  className="min-w-0 flex flex-1 items-start gap-2 px-3 py-2 text-left"
+                  onClick={() => selectJob(savedJobId)}
+                  title={savedJobId}
+                >
+                  <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-violet-500' : 'bg-text-muted'}`}></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="block min-w-0 flex-1 truncate text-sm font-medium">{displayName}</span>
+                      {status && (
+                        <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${showProgress
+                          ? 'bg-violet-500/15 text-violet-300'
+                          : status === 'error'
+                            ? 'bg-red-500/15 text-red-300'
+                            : 'bg-white/5 text-text-secondary'
+                          }`}>
+                          {showPercent ? `${percent}%` : status}
+                        </span>
+                      )}
+                    </span>
+                    <span className="block truncate font-mono text-[10px] text-text-muted">{savedJobId}</span>
+                    {showProgress && (
+                      <span className="mt-1.5 block">
+                        <span className="flex items-center justify-between gap-2 text-[10px] text-text-muted">
+                          <span className="truncate">{meta.progressMessage || (status === 'uploading' ? 'Upload' : 'In Bearbeitung')}</span>
+                          {showPercent && <span className="shrink-0 font-mono">{percent}%</span>}
+                        </span>
+                        <span className="mt-1 block h-1.5 overflow-hidden rounded-full bg-white/10">
+                          <span
+                            className={`block h-full rounded-full ${showPercent ? 'bg-violet-400' : 'bg-violet-400/60'}`}
+                            style={{ width: showPercent ? `${percent}%` : '100%' }}
+                          ></span>
+                        </span>
+                      </span>
+                    )}
+                  </span>
+                </button>
+                <button
+                  className="mr-1 mt-2 w-6 h-6 shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 flex items-center justify-center rounded-md text-text-muted hover:text-red-400 hover:bg-red-500/10 transition-all"
+                  onClick={() => removeSavedJobId(savedJobId)}
+                  title="Aus Liste entfernen"
+                >
+                  <span className="material-icons-round text-[1rem]">close</span>
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </section>
   );
 }
 

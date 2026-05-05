@@ -2,7 +2,7 @@ import React, { useRef } from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
 
 export function StepUpload() {
-    const { jobId, createJob, fetchJobData, currentStep, setProgressData } = useJob();
+    const { jobId, createJob, fetchJobData, currentStep, setProgressData, updateSavedJobMeta } = useJob();
     const fileInputRef = useRef(null);
 
     if (currentStep !== 0) return null;
@@ -15,6 +15,12 @@ export function StepUpload() {
         if (!activeJobId) {
             activeJobId = await createJob();
         }
+        updateSavedJobMeta(activeJobId, {
+            name: file.name,
+            status: 'uploading',
+            progressPercent: 0,
+            progressMessage: 'Upload'
+        });
 
         const CHUNK_SIZE = 5 * 1024 * 1024;
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
@@ -41,12 +47,23 @@ export function StepUpload() {
                 const data = await res.json();
                 const p = Math.round(((i + 1) / totalChunks) * 100);
                 setProgressData(prev => ({ ...prev, upload: { msg: `Lade Datei hoch...`, percent: p } }));
+                updateSavedJobMeta(activeJobId, {
+                    name: file.name,
+                    status: data.complete ? 'idle' : 'uploading',
+                    progressPercent: data.complete ? null : p,
+                    progressMessage: data.complete ? null : 'Upload'
+                });
 
                 if (data.complete) {
                     await fetchJobData(activeJobId);
                 }
             } catch (err) {
                 console.error(err);
+                updateSavedJobMeta(activeJobId, {
+                    status: 'error',
+                    progressPercent: null,
+                    progressMessage: err.message
+                });
                 alert("Upload error: " + err.message);
                 break;
             }

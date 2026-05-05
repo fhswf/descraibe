@@ -50,6 +50,7 @@ _max_mb = int(os.environ.get("MAX_UPLOAD_MB", 2048))
 
 # SSE progress queues per job
 _SSE_QUEUES: Dict[str, queue.Queue] = {}
+_SUMMARY_STREAMS: list[dict[str, Any]] = []
 _SSE_LOCK = threading.Lock()
 _LATEST_PROGRESS_BY_JOB: Dict[str, dict] = {}
 
@@ -67,6 +68,29 @@ def _push(job_id: str, event: str, data: Any) -> None:
 
     q = _get_queue(job_id)
     q.put({"event": event, "data": data})
+    _push_summary_update(job_id)
+
+
+def _push_summary_update(job_id: str) -> None:
+    with _SSE_LOCK:
+        subscribers = list(_SUMMARY_STREAMS)
+
+    for subscriber in subscribers:
+        if job_id in subscriber["job_ids"]:
+            subscriber["queue"].put(job_id)
+
+
+def _job_summary_payload(job_id: str) -> Optional[dict]:
+    job = sm.get_job(job_id)
+    if not job:
+        return None
+
+    return {
+        "job_id": job_id,
+        "status": job.get("status"),
+        "video_path": job.get("video_path"),
+        "latest_progress": _LATEST_PROGRESS_BY_JOB.get(job_id) if job.get("status") == "running" else None,
+    }
 
 
 # ── Prompt auto-loader (GPT_PROMPTS_DIR) ──────────────────────────────────────
@@ -997,6 +1021,46 @@ async def status_stream(job_id: str, request: Request):
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.get("/api/jobs/summary_stream")
+async def job_summary_stream(request: Request, job_ids: str = ""):
+    ids = [job_id.strip() for job_id in job_ids.split(",") if job_id.strip()]
+    subscriber = {"job_ids": set(ids), "queue": queue.Queue()}
+
+    def summaries_event() -> str:
+        summaries = [
+            summary
+            for job_id in ids
+            if (summary := _job_summary_payload(job_id)) is not None
+        ]
+        return f"event: summaries\ndata: {json.dumps(summaries)}\n\n"
+
+    async def generate():
+        with _SSE_LOCK:
+            _SUMMARY_STREAMS.append(subscriber)
+
+        loop = asyncio.get_running_loop()
+        try:
+            yield summaries_event()
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                try:
+                    await loop.run_in_executor(None, subscriber["queue"].get, True, 2.0)
+                except queue.Empty:
+                    pass
+
+                yield summaries_event()
+                yield "event: ping\ndata: {}\n\n"
+        finally:
+            with _SSE_LOCK:
+                if subscriber in _SUMMARY_STREAMS:
+                    _SUMMARY_STREAMS.remove(subscriber)
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 # ── Results ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/jobs/{job_id}")
@@ -1039,6 +1103,14 @@ def get_job(job_id: str, request: Request):
         "latest_progress": _LATEST_PROGRESS_BY_JOB.get(job_id) if job.get("status") == "running" else None
     }
     return out
+
+@app.get("/api/jobs/{job_id}/summary")
+def get_job_summary(job_id: str):
+    summary = _job_summary_payload(job_id)
+    if summary is None:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+
+    return summary
 
 def build_hateoas_links(job: dict, base_url: str):
     """Dynamically generate valid next actions for a single job."""
@@ -1084,6 +1156,14 @@ def download(job_id: str, file_key: str):
         return JSONResponse({"error": "File not found"}, status_code=404)
 
     filename = Path(file_path).name
+    if file_key == "video":
+        return FileResponse(
+            file_path,
+            filename=filename,
+            headers={"Cache-Control": "private, max-age=604800, immutable"},
+            content_disposition_type="inline",
+        )
+
     return FileResponse(file_path, filename=filename)
 
 
@@ -1131,7 +1211,14 @@ if FRONTEND_DIR.exists():
 
 def main():
     sm.setup_job_logging()
-    uvicorn.run("backend.app:app", host="0.0.0.0", port=5000, reload=True)
+    graceful_timeout = int(os.environ.get("UVICORN_GRACEFUL_TIMEOUT", "1"))
+    uvicorn.run(
+        "backend.app:app",
+        host="0.0.0.0",
+        port=5000,
+        reload=True,
+        timeout_graceful_shutdown=graceful_timeout,
+    )
 
 if __name__ == "__main__":
     main()

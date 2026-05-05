@@ -93,7 +93,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # Keep workers=1: the pipeline holds large in-memory state per job.
     UVICORN_WORKERS=1 \
     # Keep-alive timeout (seconds). Uvicorn does not have a hard request timeout like Gunicorn.
-    UVICORN_TIMEOUT=600
+    UVICORN_TIMEOUT=600 \
+    # Graceful shutdown timeout (seconds), relevant for open SSE/video connections.
+    UVICORN_GRACEFUL_TIMEOUT=30
 
 VOLUME ["/app/jobs"]
 
@@ -104,4 +106,5 @@ CMD ["sh", "-c", \
     --host 0.0.0.0 \
     --port 5000 \
     --workers $UVICORN_WORKERS \
-    --timeout-keep-alive $UVICORN_TIMEOUT"]
+    --timeout-keep-alive $UVICORN_TIMEOUT \
+    --timeout-graceful-shutdown $UVICORN_GRACEFUL_TIMEOUT"]

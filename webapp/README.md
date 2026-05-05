@@ -293,6 +293,12 @@ uv run python -m backend.app     # or: flask --app backend.app run --debug
 ```
 
 The dev server starts on [http://localhost:5000](http://localhost:5000).
+For local reloads, the backend uses a short graceful-shutdown timeout so open
+SSE connections do not block code updates for long. Override it if needed:
+
+```bash
+UVICORN_GRACEFUL_TIMEOUT=5 uv run python -m backend.app
+```
 
 ---
 
