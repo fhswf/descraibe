@@ -20,4 +20,4 @@ patches:
     patch: |-
       - op: replace
         path: /spec/rules/0/host
-        value: staging.descraibe.fh-swf.cloud
+        value: descraibe.gawron.cloud
