@@ -21,6 +21,18 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def _emit_progress(progress_cb, message: str, current: Optional[int] = None, total: Optional[int] = None) -> None:
+    if not progress_cb:
+        return
+    try:
+        if current is None or total is None:
+            progress_cb(message)
+        else:
+            progress_cb(message, current, total)
+    except TypeError:
+        progress_cb(message)
+
+
 # ── Timestamp helpers ──────────────────────────────────────────────────────────
 
 _TS_RE = re.compile(r"^(\d{2})-(\d{2})-(\d{2})-(\d{3})$")
@@ -130,6 +142,7 @@ class MidframeExtractor:
         self,
         video_path: str,
         scene_timestamps: list[tuple[float, float]],
+        progress_cb: Optional[Callable[..., None]] = None,
     ) -> list[str]:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -138,11 +151,13 @@ class MidframeExtractor:
 
         extracted: list[str] = []
         video_stem = Path(video_path).stem
+        total_scenes = len(scene_timestamps)
 
         for scene_no, (start_s, end_s) in enumerate(scene_timestamps, start=1):
             start_s, end_s = float(start_s), float(end_s)
             dur = max(0.0, end_s - start_s)
             if dur <= 0:
+                _emit_progress(progress_cb, f"Skipping empty scene {scene_no}/{total_scenes}…", scene_no, total_scenes)
                 continue
 
             if dur < self.short_scene_s:
@@ -162,6 +177,7 @@ class MidframeExtractor:
                 frames_data.append((ts, pos_name, frame, is_blurry))
 
             if not frames_data:
+                _emit_progress(progress_cb, f"No readable frames for scene {scene_no}/{total_scenes}…", scene_no, total_scenes)
                 continue
 
             if dur < self.short_scene_s:
@@ -196,6 +212,8 @@ class MidframeExtractor:
                     _save_frame(frame, out_path, self.jpg_quality, self.min_bytes)
                     extracted.append(str(out_path))
 
+            _emit_progress(progress_cb, f"Extracted frames for scene {scene_no}/{total_scenes}…", scene_no, total_scenes)
+
         cap.release()
         return extracted
 
@@ -207,10 +225,9 @@ class MidframeExtractor:
         *,
         window_start_s: float = 0.0,
         window_end_s: Optional[float] = None,
-        progress_cb: Optional[Callable[[str], None]] = None,
+        progress_cb: Optional[Callable[..., None]] = None,
     ) -> tuple[list[str], list[tuple[float, float]]]:
-        if progress_cb:
-            progress_cb("Detecting scenes…")
+        _emit_progress(progress_cb, "Detecting scenes…")
         scenes = self.detect_scenes(video_path)
 
         # Window filter
@@ -225,9 +242,8 @@ class MidframeExtractor:
                 if not (s1 < ws or s0 > we)
             ]
 
-        if progress_cb:
-            progress_cb(f"Extracting frames from {len(scenes)} scenes…")
-        images = self.extract_frames(video_path, scenes)
+        _emit_progress(progress_cb, f"Extracting frames from {len(scenes)} scenes…", 0, max(len(scenes), 1))
+        images = self.extract_frames(video_path, scenes, progress_cb=progress_cb)
         return images, scenes
 
 
@@ -246,6 +262,7 @@ def gapfill_images_for_ad_slots(
     *,
     window_start_s: Optional[float] = None,
     window_end_s: Optional[float] = None,
+    progress_cb: Optional[Callable[..., None]] = None,
 ) -> tuple[list[str], pd.DataFrame]:
     """Map existing scene images to AD slots; extract new frames for uncovered slots.
 
@@ -318,7 +335,8 @@ def gapfill_images_for_ad_slots(
     added: list[str] = []
     slot_map: list[dict] = []
 
-    for _, r in df.iterrows():
+    total_slots = len(df)
+    for idx, (_, r) in enumerate(df.iterrows(), start=1):
         slot_id = int(r["slot"])
         s0 = float(r["start_s"])
         s1 = float(r["end_s"])
@@ -340,6 +358,7 @@ def gapfill_images_for_ad_slots(
                     "img_path": str(im["img_path"]),
                     "source": "scene",
                 })
+            _emit_progress(progress_cb, f"Mapped slot {idx}/{total_slots} from scene images…", idx, total_slots)
             continue  # slot covered by existing scene image
 
         # Gapfill: try blur-retrying offsets from midpoint
@@ -385,6 +404,8 @@ def gapfill_images_for_ad_slots(
                 "img_path": str(out_path),
                 "source": "gapfill",
             })
+
+        _emit_progress(progress_cb, f"Gapfilled slot {idx}/{total_slots}…", idx, total_slots)
 
     cap.release()
     logger.info(f"Gapfill complete: mapped {len(slot_map)} slots to images, extracted {len(added)} new gapfill frames.")

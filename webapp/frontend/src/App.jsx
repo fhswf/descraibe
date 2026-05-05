@@ -1,5 +1,6 @@
 import React, { useRef } from 'react';
 import { useJob } from './hooks/useJob.jsx';
+import { useCachedVideoUrl } from './hooks/useCachedVideoUrl.jsx';
 import { VideoTimeline } from './components/features/VideoTimeline';
 import './index.css';
 
@@ -89,9 +90,15 @@ function App() {
 
   const videoRef = useRef(null);
 
-  // We need to serve the video file.
-  // Let's construct a video URL requesting the explicit 'video' key.
-  const videoUrl = jobData?.video_path ? `/api/jobs/${jobId}/downloads/video` : null;
+  const videoVersion = jobData?.video_cache_key ? encodeURIComponent(jobData.video_cache_key) : null;
+  const remoteVideoUrl = jobData?.video_path
+    ? `/api/jobs/${jobId}/downloads/video${videoVersion ? `?v=${videoVersion}` : ''}`
+    : null;
+  const { videoUrl, cacheStatus } = useCachedVideoUrl(
+    remoteVideoUrl,
+    jobId && jobData?.video_cache_key ? `${jobId}-${jobData.video_cache_key}` : null
+  );
+  const hasVideo = Boolean(remoteVideoUrl);
 
   return (
     <div className="grid grid-rows-[auto_1fr_auto] min-h-screen">
@@ -189,18 +196,29 @@ function App() {
 
         <main className="overflow-hidden p-6 flex flex-col gap-6">
           <div className="flex flex-col gap-5 h-full flex-1 min-h-0">
-            {videoUrl && (
+            {hasVideo && (
               <div className="grid grid-cols-2 gap-6 flex-1 min-h-0">
                 <div className="flex flex-col h-full min-h-0">
-                  <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-2 shrink-0">Video Vorschau</p>
+                  <div className="mb-2 flex shrink-0 items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider">Video Vorschau</p>
+                    <span className="rounded-md bg-white/5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                      {cacheStatus === 'opfs' ? 'OPFS Cache' : cacheStatus === 'loading' ? 'Caching...' : 'Netzwerk'}
+                    </span>
+                  </div>
                   <div className="flex-1 min-h-0 flex justify-center bg-black rounded-lg overflow-hidden">
-                    <video
-                      ref={videoRef}
-                      src={videoUrl}
-                      controls
-                      preload="auto"
-                      className="w-full h-full object-contain"
-                    />
+                    {videoUrl ? (
+                      <video
+                        ref={videoRef}
+                        src={videoUrl}
+                        controls
+                        preload="auto"
+                        className="w-full h-full object-contain"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-sm text-text-muted">
+                        Video wird gecacht...
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -216,7 +234,7 @@ function App() {
               </div>
             )}
 
-            {!videoUrl && (
+            {!hasVideo && (
               <div
                 className="flex-1 flex flex-col items-center justify-center h-full border-2 border-dashed border-border-subtle rounded-2xl transition-all hover:border-violet-500 hover:bg-violet-500/5 group cursor-pointer"
                 onClick={() => uploadInputRef.current?.click()}

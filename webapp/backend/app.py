@@ -629,7 +629,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
         sm.job_id_var.set(job_id)
         try:
             sm.set_status(job_id, "running", "Extracting scene images…")
-            _push(job_id, "progress", {"step": "images", "message": "Starting scene detection…"})
+            _push(job_id, "progress", {"step": "images", "message": "Starting scene detection…", "current": 0, "total": 100})
 
             job_path = sm.job_dir(job_id)
             frames_dir = str(job_path / "frames")
@@ -643,15 +643,39 @@ def run_images(job_id: str, body: dict = Body(default={})):
                 short_scene_s=float(body.get("short_scene_s", 3.0)),
             )
 
-            _push(job_id, "progress", {"step": "images", "message": "Detecting scenes…"})
+            def cb_scene(msg: str, current: int | None = None, total: int | None = None):
+                if total:
+                    percent = 20 + round((max(0, min(current or 0, total)) / total) * 50)
+                else:
+                    percent = 10
+                _push(job_id, "progress", {
+                    "step": "images",
+                    "message": msg,
+                    "current": percent,
+                    "total": 100,
+                })
+
             scene_images, scene_timestamps = extractor.process_video(
                 job["video_path"],
                 window_start_s=float(body.get("window_start_s", 0.0)),
                 window_end_s=float(body.get("window_end_s", 0)) or None,
+                progress_cb=cb_scene,
             )
 
-            _push(job_id, "progress", {"step": "images", "message": "Gapfill for AD slots…"})
+            _push(job_id, "progress", {"step": "images", "message": "Gapfill for AD slots…", "current": 70, "total": 100})
             slots_df: pd.DataFrame = job["slots_df"]
+
+            def cb_gapfill(msg: str, current: int | None = None, total: int | None = None):
+                if total:
+                    percent = 70 + round((max(0, min(current or 0, total)) / total) * 30)
+                else:
+                    percent = 70
+                _push(job_id, "progress", {
+                    "step": "images",
+                    "message": msg,
+                    "current": percent,
+                    "total": 100,
+                })
 
             all_images, slot_map_df = img_mod.gapfill_images_for_ad_slots(
                 video_path=job["video_path"],
@@ -659,6 +683,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
                 existing_images=scene_images,
                 output_dir=gap_dir,
                 blur_threshold=float(body.get("blur_threshold", 80.0)),
+                progress_cb=cb_gapfill,
             )
 
             sm.update_job(job_id,
@@ -668,6 +693,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
                           gpt_records_directors=None,
                           final_mp4_path=None)
             sm.set_status(job_id, "idle")
+            _push(job_id, "progress", {"step": "images", "message": "Image extraction complete.", "current": 100, "total": 100})
             _push(job_id, "images_done", {
                 "scene_count": len(scene_images),
                 "total_images": len(all_images),
@@ -1087,6 +1113,11 @@ def get_job(job_id: str, request: Request):
         for segment in segments[:5]
         if str(segment.get("text", "")).strip()
     )
+    video_path = job.get("video_path")
+    video_cache_key = None
+    if video_path and Path(video_path).exists():
+        stat = Path(video_path).stat()
+        video_cache_key = f"{stat.st_size}-{stat.st_mtime_ns}"
 
     out = {
         "job_id": job_id,
@@ -1103,7 +1134,8 @@ def get_job(job_id: str, request: Request):
         "slots": make_serializable(job.get("slots_df")),
         "scenes": make_serializable(job.get("scenes_df")),
         "slot_map": job.get("slot_map_df").to_dict(orient="records") if (job.get("slot_map_df") is not None and not job.get("slot_map_df").empty) else None,
-        "video_path": job.get("video_path"),
+        "video_path": video_path,
+        "video_cache_key": video_cache_key,
         
         "transcript_meta": job.get("transcript_meta"),
         "segments": segments,

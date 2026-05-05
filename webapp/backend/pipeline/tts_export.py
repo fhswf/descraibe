@@ -57,7 +57,7 @@ def generate_tts(
     if progress_cb:
         progress_cb("TTS Generation completed", total, total)
         
-    logger.info(f"TTS generation complete: {len(tts_files)} files generated.")
+    log.info("TTS generation complete: %s files generated.", len(tts_files))
     return tts_files
 
 
@@ -110,7 +110,7 @@ def mix_audio_and_export(
         ducking_volume: Volume multiplier for the original audio track
         progress_cb: Callback (message, current, total)
     """
-    logger.info(f"Mixing and exporting AD: video={video_path}, records={len(records)}, output={output_path}")
+    log.info("Mixing and exporting AD: video=%s, records=%s, output=%s", video_path, len(records), output_path)
     if progress_cb:
         progress_cb("Loading video and audio tracks...", 0, 100)
         
@@ -139,12 +139,12 @@ def mix_audio_and_export(
         if progress_cb:
             progress_cb(msg, cur, total)
 
-    logger = ExportLogger(cb)
+    export_logger = ExportLogger(cb)
     
     final_video.write_videofile(
         output_path, 
         audio_codec="aac",
-        logger=logger
+        logger=export_logger
     )
     
     video.close()
@@ -154,5 +154,5 @@ def mix_audio_and_export(
     if progress_cb:
         progress_cb("Export completed", 100, 100)
     
-    logger.info(f"Export complete: {output_path}")
+    log.info("Export complete: %s", output_path)
     return output_path
