@@ -301,7 +301,7 @@ export function ConfigModal() {
               {/* Model dropdown */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-[0.8rem] font-medium text-text-secondary min-h-[1.25rem]">Modell</label>
-                <select id="gpt-model" value={gptParams.model}
+                <select id="gpt-model" value={gptParams.model || availableModels[0]?.model || ""}
                   onChange={e => {
                     const selectedModel = e.target.value;
                     const modelInfo = availableModels.find(m => m.model === selectedModel);

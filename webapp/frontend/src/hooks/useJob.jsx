@@ -512,6 +512,20 @@ export function JobProvider({ children }) {
             setIsRunAllActive(false);
             return alert("Prompts fehlen. Bitte überprüfen Sie die Konfiguration.");
         }
+        const selectedModelInfo = availableModels.find(m => m.model === gptParams.model) || (!gptParams.model ? availableModels[0] : null);
+        const modelWasImplicit = !gptParams.model && selectedModelInfo;
+        const effectiveModel = gptParams.model || selectedModelInfo?.model || "";
+
+        if (modelWasImplicit) {
+            setGptParams(prev => ({
+                ...prev,
+                model: selectedModelInfo.model,
+                temperature: selectedModelInfo.temperature !== undefined ? selectedModelInfo.temperature : prev.temperature,
+                max_tokens: selectedModelInfo.max_tokens !== undefined ? selectedModelInfo.max_tokens : prev.max_tokens,
+                detail: selectedModelInfo.detail !== undefined ? selectedModelInfo.detail : prev.detail
+            }));
+        }
+
         let system_final = gptParams.system_prompt;
         if (gptParams.ad_rules) {
             system_final += "\n\n# Audiodeskription – Regeln\n" + gptParams.ad_rules;
@@ -520,9 +534,10 @@ export function JobProvider({ children }) {
             system_final += "\n\n# Few-Shots / Beispiele\n" + gptParams.few_shots;
         }
         const payload = {
-            model: gptParams.model,
-            temperature: gptParams.temperature,
-            max_tokens: gptParams.max_tokens,
+            model: effectiveModel,
+            temperature: modelWasImplicit && selectedModelInfo.temperature !== undefined ? selectedModelInfo.temperature : gptParams.temperature,
+            max_tokens: modelWasImplicit && selectedModelInfo.max_tokens !== undefined ? selectedModelInfo.max_tokens : gptParams.max_tokens,
+            detail: modelWasImplicit && selectedModelInfo.detail !== undefined ? selectedModelInfo.detail : gptParams.detail,
             cut: gptParams.cut,
             syllables_per_second: gptParams.syllables_per_second || 6.0,
             system_prompt: system_final,
@@ -538,7 +553,7 @@ export function JobProvider({ children }) {
             if (!res.ok) throw new Error((await res.json()).error || "Failed to start GPT generation");
             markJobStarted('gpt', 'Beschreibungen generieren...');
         } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
-    }, [jobId, gptParams, markJobStarted]);
+    }, [jobId, gptParams, availableModels, markJobStarted]);
 
     const handleRunTTS = useCallback(async () => {
         if (!jobId) return;

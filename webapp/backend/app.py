@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import errno
@@ -40,6 +41,7 @@ FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 app = FastAPI(title="Audiodeskription API", docs_url=None)
 
 ERR_UNKNOWN_JOB = "Unknown job"
+logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1099,11 +1101,13 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
         "max_rewrite_attempts": int(body.get("max_rewrite_attempts", 2)),
         "min_slot_s": float(body.get("min_slot_s", 0.5)),
     }
+    gpt_run_config = {k: v for k, v in gpt_params.items() if k != "api_key"}
 
     def run():
         sm.job_id_var.set(job_id)
         try:
             _mark_step_running(job_id, "gpt", "Generating descriptions…")
+            logger.info("Starting GPT description generation with config: %s", gpt_run_config)
 
             slots_df: pd.DataFrame = job["slots_df"]
             slot_map_df = job.get("slot_map_df")
@@ -1125,7 +1129,9 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
             paths = export_mod.write_outputs(run_folder, records, cut)
 
             key = f"gpt_records_{cut}"
+            job_config = job.get("config") or {}
             sm.update_job(job_id, **{key: records},
+                          config={**job_config, "gpt": gpt_run_config},
                           output_paths={**job.get("output_paths", {}), **paths},
                           final_mp4_path=None)
             sm.set_status(job_id, "idle")
@@ -1135,6 +1141,8 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
                 "ok_count": sum(1 for r in records if r.get("ok") and not r.get("skipped")),
                 "skip_count": sum(1 for r in records if r.get("skipped")),
                 "error_count": sum(1 for r in records if not r.get("ok")),
+                "model": model_name,
+                "gpt_config": gpt_run_config,
                 "output_files": list(paths.keys()),
                 "records": records,
             })
@@ -1531,6 +1539,7 @@ def get_job(job_id: str, request: Request):
         "transcript_meta": job.get("transcript_meta"),
         "segments": segments,
         "quality_report": job.get("quality_report"),
+        "config": job.get("config"),
         "output_paths": {**{k: Path(v).name for k, v in (job.get("output_paths") or {}).items()}, 
                          **({"log": sm.JOB_LOG_FILENAME} if Path(sm.job_dir(job_id) / sm.JOB_LOG_FILENAME).exists() else {})},
         "gpt_records": job.get("gpt_records_broadcast", job.get("gpt_records_directors")),
