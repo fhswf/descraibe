@@ -4,7 +4,11 @@ from __future__ import annotations
 import json
 import os
 import queue
+import errno
+import hashlib
+import shutil
 import threading
+import time
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -23,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
+from event_bus import BusEvent, event_bus
 import session_manager as sm
 
 # Pipeline modules are imported lazily inside route handlers to avoid
@@ -48,26 +53,175 @@ app.add_middleware(
 _max_mb = int(os.environ.get("MAX_UPLOAD_MB", 2048))
 # FastAPI uses starlette.requests.Request, which streams large files automatically.
 
-# SSE progress queues per job
-_SSE_QUEUES: Dict[str, queue.Queue] = {}
 _SUMMARY_STREAMS: list[dict[str, Any]] = []
 _SSE_LOCK = threading.Lock()
 _LATEST_PROGRESS_BY_JOB: Dict[str, dict] = {}
+_WORKERS: Dict[str, dict[str, Any]] = {}
+_WORKER_LOCK = threading.Lock()
+_WORKER_MONITOR_STARTED = False
+_WORKER_STALE_SECONDS = float(os.environ.get("AD_WORKER_STALE_SECONDS", 30))
+_WORKER_MONITOR_INTERVAL_SECONDS = float(os.environ.get("AD_WORKER_MONITOR_INTERVAL_SECONDS", 5))
+
+_STORAGE_ERROR_ERRNOS = {
+    errno.ENOSPC,
+    errno.EDQUOT,
+    errno.EFBIG,
+}
 
 
-def _get_queue(job_id: str) -> queue.Queue:
-    with _SSE_LOCK:
-        if job_id not in _SSE_QUEUES:
-            _SSE_QUEUES[job_id] = queue.Queue()
-        return _SSE_QUEUES[job_id]
+def _progress_payload(
+    step: str,
+    message: str,
+    current: int | float | None = None,
+    total: int | float | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "step": step,
+        "message": message,
+    }
+    if current is not None:
+        payload["current"] = current
+    if total is not None:
+        payload["total"] = total
+    return payload
+
+
+def _push_progress(
+    job_id: str,
+    step: str,
+    message: str,
+    current: int | float | None = None,
+    total: int | float | None = None,
+) -> None:
+    _push(job_id, "progress", _progress_payload(step, message, current, total))
+    _touch_worker_progress(job_id, message, current, total)
+
+
+def _mark_step_running(job_id: str, step: str, message: str) -> None:
+    sm.set_status(job_id, "running", message)
+    _push_progress(job_id, step, message, 0, 100)
+
+
+def _touch_worker_progress(
+    job_id: str,
+    message: str,
+    current: int | float | None = None,
+    total: int | float | None = None,
+) -> None:
+    now = time.monotonic()
+    with _WORKER_LOCK:
+        worker = _WORKERS.get(job_id)
+        if not worker:
+            return
+        worker["last_progress_at"] = now
+        worker["last_notice_at"] = now
+        worker["last_message"] = message
+        worker["last_current"] = current
+        worker["last_total"] = total
+
+
+def _ensure_worker_monitor() -> None:
+    global _WORKER_MONITOR_STARTED
+    with _WORKER_LOCK:
+        if _WORKER_MONITOR_STARTED:
+            return
+        _WORKER_MONITOR_STARTED = True
+
+    threading.Thread(target=_worker_monitor_loop, name="ad-worker-monitor", daemon=True).start()
+
+
+def _start_worker(job_id: str, step: str, target) -> None:
+    _ensure_worker_monitor()
+
+    def supervised_target():
+        try:
+            target()
+        finally:
+            with _WORKER_LOCK:
+                worker = _WORKERS.get(job_id)
+                if worker and worker.get("thread") is threading.current_thread():
+                    worker["finished_at"] = time.monotonic()
+
+    thread = threading.Thread(target=supervised_target, name=f"ad-{step}-{job_id[:8]}", daemon=True)
+    now = time.monotonic()
+    with _WORKER_LOCK:
+        _WORKERS[job_id] = {
+            "thread": thread,
+            "step": step,
+            "started_at": now,
+            "last_progress_at": now,
+            "last_notice_at": now,
+            "last_message": "queued",
+            "last_current": 0,
+            "last_total": 100,
+            "finished_at": None,
+        }
+    thread.start()
+
+
+def _worker_monitor_loop() -> None:
+    while True:
+        time.sleep(_WORKER_MONITOR_INTERVAL_SECONDS)
+        now = time.monotonic()
+        with _WORKER_LOCK:
+            items = list(_WORKERS.items())
+
+        for job_id, worker in items:
+            thread = worker.get("thread")
+            step = worker.get("step")
+            job = sm.get_job(job_id)
+            status = job.get("status") if job else None
+
+            if status != "running":
+                with _WORKER_LOCK:
+                    current = _WORKERS.get(job_id)
+                    if current is worker:
+                        _WORKERS.pop(job_id, None)
+                continue
+
+            if thread is not None and not thread.is_alive():
+                sm.set_status(job_id, "error", f"{step} worker stopped unexpectedly")
+                _push(job_id, "error", {
+                    "step": step,
+                    "message": f"{step} worker stopped unexpectedly. Check the job log for details.",
+                })
+                with _WORKER_LOCK:
+                    current = _WORKERS.get(job_id)
+                    if current is worker:
+                        _WORKERS.pop(job_id, None)
+                continue
+
+            last_progress_at = float(worker.get("last_progress_at") or now)
+            last_notice_at = float(worker.get("last_notice_at") or last_progress_at)
+            if now - last_progress_at < _WORKER_STALE_SECONDS or now - last_notice_at < _WORKER_STALE_SECONDS:
+                continue
+
+            current = worker.get("last_current")
+            total = worker.get("last_total")
+            base_message = worker.get("last_message") or "Still running"
+            elapsed = int(now - last_progress_at)
+            with _WORKER_LOCK:
+                current_worker = _WORKERS.get(job_id)
+                if current_worker is worker:
+                    current_worker["last_notice_at"] = now
+            _push(
+                job_id,
+                "progress",
+                _progress_payload(
+                    step,
+                    f"{base_message} (still running, no new progress for {elapsed}s)",
+                    current,
+                    total,
+                ),
+            )
 
 
 def _push(job_id: str, event: str, data: Any) -> None:
     if event == "progress":
         _LATEST_PROGRESS_BY_JOB[job_id] = data
+        sm.update_job(job_id, progress=data)
 
-    q = _get_queue(job_id)
-    q.put({"event": event, "data": data})
+    event_bus.publish(f"job:{job_id}", event, data)
     _push_summary_update(job_id)
 
 
@@ -80,6 +234,33 @@ def _push_summary_update(job_id: str) -> None:
             subscriber["queue"].put(job_id)
 
 
+def _latest_progress_for_job(job_id: str, job: dict) -> Optional[dict]:
+    if job.get("status") != "running":
+        return None
+    return _LATEST_PROGRESS_BY_JOB.get(job_id) or job.get("progress")
+
+
+def _job_sidecar_snapshot(job_id: str) -> Optional[dict]:
+    job = sm.get_job(job_id)
+    job_dir = Path(job["job_dir"]) if job and job.get("job_dir") else Path(os.environ.get("AD_JOBS_DIR", "/tmp/ad_jobs")) / job_id
+    sidecar_path = job_dir / "job.json"
+    if not sidecar_path.exists():
+        return None
+    try:
+        return json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _stable_json_key(data: Any) -> str:
+    return json.dumps(data, sort_keys=True, default=str, ensure_ascii=False)
+
+
+def _sse_message(item: BusEvent) -> str:
+    payload = {"event": item.event, "data": item.data}
+    return f"id: {item.seq}\ndata: {json.dumps(payload)}\n\n"
+
+
 def _job_summary_payload(job_id: str) -> Optional[dict]:
     job = sm.get_job(job_id)
     if not job:
@@ -89,8 +270,100 @@ def _job_summary_payload(job_id: str) -> Optional[dict]:
         "job_id": job_id,
         "status": job.get("status"),
         "video_path": job.get("video_path"),
-        "latest_progress": _LATEST_PROGRESS_BY_JOB.get(job_id) if job.get("status") == "running" else None,
+        "original_video_filename": job.get("original_video_filename"),
+        "latest_progress": _latest_progress_for_job(job_id, job),
     }
+
+
+def _format_bytes(num_bytes: int | None) -> str:
+    if num_bytes is None:
+        return "unknown"
+
+    units = ["B", "KB", "MB", "GB", "TB"]
+    value = float(num_bytes)
+    unit_idx = 0
+    while value >= 1024 and unit_idx < len(units) - 1:
+        value /= 1024
+        unit_idx += 1
+
+    precision = 0 if value >= 10 or unit_idx == 0 else 1
+    return f"{value:.{precision}f} {units[unit_idx]}"
+
+
+def _disk_usage_for(path: Path) -> dict[str, Any]:
+    probe = path
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+
+    usage = shutil.disk_usage(probe)
+    return {
+        "path": str(probe),
+        "total_bytes": usage.total,
+        "used_bytes": usage.used,
+        "free_bytes": usage.free,
+        "free": _format_bytes(usage.free),
+    }
+
+
+def _upload_os_error_response(exc: OSError, job_path: Path, phase: str) -> JSONResponse:
+    disk = _disk_usage_for(job_path)
+    if exc.errno in _STORAGE_ERROR_ERRNOS:
+        return JSONResponse(
+            {
+                "error": (
+                    f"Upload failed while {phase}: backend storage is full or the upload exceeds the "
+                    f"filesystem quota. Free space on {disk['path']}: {disk['free']}."
+                ),
+                "code": "backend_storage_full",
+                "phase": phase,
+                "errno": exc.errno,
+                "free_bytes": disk["free_bytes"],
+                "storage_path": disk["path"],
+            },
+            status_code=507,
+        )
+
+    if isinstance(exc, PermissionError):
+        return JSONResponse(
+            {
+                "error": f"Upload failed while {phase}: backend cannot write to {job_path}.",
+                "code": "backend_storage_permission_denied",
+                "phase": phase,
+                "errno": exc.errno,
+                "storage_path": str(job_path),
+            },
+            status_code=500,
+        )
+
+    return JSONResponse(
+        {
+            "error": f"Upload failed while {phase}: {exc.strerror or str(exc)}",
+            "code": "backend_storage_error",
+            "phase": phase,
+            "errno": exc.errno,
+            "storage_path": str(job_path),
+        },
+        status_code=500,
+    )
+
+
+def _safe_video_extension(filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    if 1 < len(suffix) <= 12 and suffix[1:].replace("-", "").replace("_", "").isalnum():
+        return suffix
+    return ".mp4"
+
+
+def _original_upload_filename(filename: str) -> str:
+    return str(filename).replace("\\", "/").split("/")[-1] or "video"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 # ── Prompt auto-loader (GPT_PROMPTS_DIR) ──────────────────────────────────────
@@ -326,7 +599,7 @@ def upload_status(job_id: str, filename: str = None):
     if not job_path:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
-    part_file = job_path / f"{filename}.part"
+    part_file = job_path / "upload.part"
     if part_file.exists():
         return {"uploaded_bytes": part_file.stat().st_size}
     
@@ -338,6 +611,7 @@ async def upload_chunk(
     filename: str = Form(...),
     chunkIndex: int = Form(0),
     totalChunks: int = Form(1),
+    totalBytes: int = Form(0),
     chunk: UploadFile = File(...)
 ):
     from pipeline import video_utils
@@ -348,33 +622,85 @@ async def upload_chunk(
     if not chunk:
         return JSONResponse({"error": "No chunk data provided"}, status_code=400)
 
+    if totalChunks < 1 or chunkIndex < 0 or chunkIndex >= totalChunks:
+        return JSONResponse(
+            {
+                "error": f"Invalid upload chunk index {chunkIndex} for {totalChunks} total chunks.",
+                "code": "invalid_upload_chunk",
+            },
+            status_code=400,
+        )
+
+    max_upload_bytes = _max_mb * 1024 * 1024
+    if totalBytes and totalBytes > max_upload_bytes:
+        return JSONResponse(
+            {
+                "error": (
+                    f"Upload is too large: {_format_bytes(totalBytes)} exceeds the backend limit "
+                    f"of {_format_bytes(max_upload_bytes)}. Increase MAX_UPLOAD_MB to allow this file."
+                ),
+                "code": "upload_too_large",
+                "max_upload_mb": _max_mb,
+                "max_upload_bytes": max_upload_bytes,
+                "total_bytes": totalBytes,
+            },
+            status_code=413,
+        )
+
     job_path = sm.job_dir(job_id)
     if not job_path:
          return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
-    part_file = job_path / f"{filename}.part"
-    video_path = job_path / filename
+    original_filename = _original_upload_filename(filename)
+    part_file = job_path / "upload.part"
 
     # Append the chunk
-    with open(part_file, "ab") as f:
-        # We process in chunks to avoid blowing up memory
-        while True:
-            data = await chunk.read(1024 * 1024)
-            if not data:
-                break
-            f.write(data)
+    try:
+        with open(part_file, "ab") as f:
+            # We process in chunks to avoid blowing up memory
+            while True:
+                data = await chunk.read(1024 * 1024)
+                if not data:
+                    break
+                f.write(data)
+    except OSError as exc:
+        return _upload_os_error_response(exc, job_path, "writing upload chunk")
 
     # If it's the final chunk
     if chunkIndex == totalChunks - 1:
-        # Rename part to final
-        part_file.rename(video_path)
+        # Rename part to a stable, processing-safe filename derived from content.
+        try:
+            video_sha256 = _sha256_file(part_file)
+            video_path = job_path / f"video-{video_sha256}{_safe_video_extension(original_filename)}"
+            part_file.rename(video_path)
+        except OSError as exc:
+            return _upload_os_error_response(exc, job_path, "finalizing uploaded file")
         
         try:
             stats = video_utils.get_video_stats(str(video_path))
         except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return JSONResponse(
+                {
+                    "error": f"Upload completed, but the backend could not read video metadata: {exc}",
+                    "code": "video_metadata_failed",
+                    "video_path": str(video_path),
+                },
+                status_code=422,
+            )
 
-        sm.update_job(job_id, video_path=str(video_path), video_stats=stats)
+        try:
+            if isinstance(stats, dict):
+                stats["filename"] = original_filename
+                stats["stored_filename"] = video_path.name
+            sm.update_job(
+                job_id,
+                video_path=str(video_path),
+                original_video_filename=original_filename,
+                video_sha256=video_sha256,
+                video_stats=stats,
+            )
+        except OSError as exc:
+            return _upload_os_error_response(exc, job_path, "persisting job metadata")
         return {"job_id": job_id, "stats": stats, "complete": True}
 
     return {"success": True, "complete": False}
@@ -402,15 +728,17 @@ def run_vad(job_id: str, body: dict = Body(default={})):
     def run():
         sm.job_id_var.set(job_id)
         try:
-            sm.set_status(job_id, "running", "VAD detection started")
+            _mark_step_running(job_id, "vad", "VAD detection started")
 
-            def cb(msg):
-                _push(job_id, "progress", {"step": "vad", "message": msg})
+            def cb(msg, cur=None, total=None):
+                _push_progress(job_id, "vad", msg, cur, total)
 
+            audio_path = str(Path(sm.job_dir(job_id)) / "audio.wav")
             pauses_df, speech_df, srt_str = vad_pauses.extract_pauses(
-                job["video_path"], progress_cb=cb, **params
+                job["video_path"], audio_path=audio_path, progress_cb=cb, **params
             )
             sm.update_job(job_id,
+                          audio_path=audio_path,
                           pauses_df=pauses_df,
                           speech_df=speech_df,
                           pauses_srt=srt_str,
@@ -430,7 +758,8 @@ def run_vad(job_id: str, body: dict = Body(default={})):
             sm.set_status(job_id, "error", str(exc))
             _push(job_id, "error", {"step": "vad", "message": str(exc)})
 
-    threading.Thread(target=run, daemon=True).start()
+    _mark_step_running(job_id, "vad", "VAD queued…")
+    _start_worker(job_id, "vad", run)
     return {"status": "started"}
 
 
@@ -438,7 +767,7 @@ def run_vad(job_id: str, body: dict = Body(default={})):
 
 @app.post("/api/jobs/{job_id}/transcribe")
 def run_transcribe(job_id: str, body: dict = Body(default={})):
-    from pipeline import transcription as trans_mod
+    from pipeline import transcription as trans_mod, vad_pauses
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
@@ -459,40 +788,31 @@ def run_transcribe(job_id: str, body: dict = Body(default={})):
     def run():
         sm.job_id_var.set(job_id)
         try:
-            sm.set_status(job_id, "running", "Extracting audio…")
-            _push(job_id, "progress", {"step": "transcribe", "message": "Extracting audio…"})
+            _mark_step_running(job_id, "transcribe", "Extracting audio…")
 
             video_path = job["video_path"]
-            audio_path = str(Path(sm.job_dir(job_id)) / "audio.wav")
-
-            from moviepy import VideoFileClip
-            from proglog import ProgressBarLogger
-
-            class AudioExtractionLogger(ProgressBarLogger):
-                def bars_callback(self, bar, attr, value, old_value=None):
-                    if bar == "t":
-                        total = self.state.bars[bar].get("total", 1)
-                        _push(job_id, "progress", {
-                            "step": "transcribe",
-                            "message": "Extracting audio…",
-                            "current": value,
-                            "total": total
-                        })
-
-            clip = VideoFileClip(video_path)
-            logger = AudioExtractionLogger()
-            clip.audio.write_audiofile(audio_path, fps=16000, nbytes=2,
-                                       ffmpeg_params=["-ac", "1"], logger=logger)
-            clip.close()
-            sm.update_job(job_id, audio_path=audio_path)
-
-            _push(job_id, "progress", {"step": "transcribe", "message": "Running Whisper…", "current": 0, "total": 100})
-
-            def cb(msg, cur=None, total=None):
-                _push(job_id, "progress", {"step": "transcribe", "message": msg, "current": cur, "total": total})
+            cached_audio_path = job.get("audio_path")
+            audio_path = cached_audio_path if cached_audio_path and Path(cached_audio_path).exists() else str(Path(sm.job_dir(job_id)) / "audio.wav")
 
             video_stats = job.get("video_stats", {})
             total_duration = video_stats.get("duration_s", 0)
+
+            def cb_extract(msg, cur=None, total=None):
+                _push_progress(job_id, "transcribe", msg, cur, total)
+
+            vad_pauses.extract_audio(
+                video_path,
+                audio_path,
+                sample_rate_hz=16000,
+                total_duration_s=total_duration,
+                progress_cb=cb_extract,
+            )
+            sm.update_job(job_id, audio_path=audio_path)
+
+            _push_progress(job_id, "transcribe", "Running Whisper…", 0, 100)
+
+            def cb(msg, cur=None, total=None):
+                _push_progress(job_id, "transcribe", msg, cur, total)
 
             seg_df, srt_str, meta = trans_mod.transcribe(
                 audio_path, progress_cb=cb, 
@@ -520,9 +840,8 @@ def run_transcribe(job_id: str, body: dict = Body(default={})):
             sm.set_status(job_id, "error", str(exc))
             _push(job_id, "error", {"step": "transcribe", "message": str(exc)})
 
-    sm.set_status(job_id, "running", "Transcription queued…")
-    _push(job_id, "progress", {"step": "transcribe", "message": "Transcription queued…", "current": 0, "total": 100})
-    threading.Thread(target=run, daemon=True).start()
+    _mark_step_running(job_id, "transcribe", "Transcription queued…")
+    _start_worker(job_id, "transcribe", run)
     return {"status": "started"}
 
 
@@ -567,8 +886,7 @@ def run_slots(job_id: str, body: dict = Body(default={})):
     def run():
         sm.job_id_var.set(job_id)
         try:
-            sm.set_status(job_id, "running", "Generating AD slots…")
-            _push(job_id, "progress", {"step": "slots", "message": "Converting pauses to slots…"})
+            _mark_step_running(job_id, "slots", "Converting pauses to slots…")
 
             pauses_df: pd.DataFrame = job["pauses_df"]
             speech_df = job.get("segments_df")  # whisper transcript
@@ -585,7 +903,7 @@ def run_slots(job_id: str, body: dict = Body(default={})):
                                                       body.get("whisper_overlap_threshold", 0.05))),
             )
 
-            _push(job_id, "progress", {"step": "slots", "message": "Evaluating quality…"})
+            _push_progress(job_id, "slots", "Evaluating quality…", 75, 100)
             qr = slots_mod.quality_report(
                 pauses_df,
                 speech_df,
@@ -601,6 +919,7 @@ def run_slots(job_id: str, body: dict = Body(default={})):
                           gpt_records_directors=None,
                           final_mp4_path=None)
             sm.set_status(job_id, "idle")
+            _push_progress(job_id, "slots", "Slot generation complete.", 100, 100)
             _push(job_id, "slots_done", {
                 "slot_count": len(slots_df),
                 "slots": slots_df.to_dict(orient="records"),
@@ -610,7 +929,8 @@ def run_slots(job_id: str, body: dict = Body(default={})):
             sm.set_status(job_id, "error", str(exc))
             _push(job_id, "error", {"step": "slots", "message": str(exc)})
 
-    threading.Thread(target=run, daemon=True).start()
+    _mark_step_running(job_id, "slots", "Slot generation queued…")
+    _start_worker(job_id, "slots", run)
     return {"status": "started"}
 
 
@@ -628,8 +948,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
     def run():
         sm.job_id_var.set(job_id)
         try:
-            sm.set_status(job_id, "running", "Extracting scene images…")
-            _push(job_id, "progress", {"step": "images", "message": "Starting scene detection…", "current": 0, "total": 100})
+            _mark_step_running(job_id, "images", "Starting scene detection…")
 
             job_path = sm.job_dir(job_id)
             frames_dir = str(job_path / "frames")
@@ -648,12 +967,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
                     percent = 20 + round((max(0, min(current or 0, total)) / total) * 50)
                 else:
                     percent = 10
-                _push(job_id, "progress", {
-                    "step": "images",
-                    "message": msg,
-                    "current": percent,
-                    "total": 100,
-                })
+                _push_progress(job_id, "images", msg, percent, 100)
 
             scene_images, scene_timestamps = extractor.process_video(
                 job["video_path"],
@@ -662,7 +976,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
                 progress_cb=cb_scene,
             )
 
-            _push(job_id, "progress", {"step": "images", "message": "Gapfill for AD slots…", "current": 70, "total": 100})
+            _push_progress(job_id, "images", "Gapfill for AD slots…", 70, 100)
             slots_df: pd.DataFrame = job["slots_df"]
 
             def cb_gapfill(msg: str, current: int | None = None, total: int | None = None):
@@ -670,12 +984,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
                     percent = 70 + round((max(0, min(current or 0, total)) / total) * 30)
                 else:
                     percent = 70
-                _push(job_id, "progress", {
-                    "step": "images",
-                    "message": msg,
-                    "current": percent,
-                    "total": 100,
-                })
+                _push_progress(job_id, "images", msg, percent, 100)
 
             all_images, slot_map_df = img_mod.gapfill_images_for_ad_slots(
                 video_path=job["video_path"],
@@ -693,7 +1002,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
                           gpt_records_directors=None,
                           final_mp4_path=None)
             sm.set_status(job_id, "idle")
-            _push(job_id, "progress", {"step": "images", "message": "Image extraction complete.", "current": 100, "total": 100})
+            _push_progress(job_id, "images", "Image extraction complete.", 100, 100)
             _push(job_id, "images_done", {
                 "scene_count": len(scene_images),
                 "total_images": len(all_images),
@@ -704,7 +1013,8 @@ def run_images(job_id: str, body: dict = Body(default={})):
             sm.set_status(job_id, "error", str(exc))
             _push(job_id, "error", {"step": "images", "message": str(exc)})
 
-    threading.Thread(target=run, daemon=True).start()
+    _mark_step_running(job_id, "images", "Image extraction queued…")
+    _start_worker(job_id, "images", run)
     return {"status": "started"}
 
 
@@ -770,7 +1080,7 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
     def run():
         sm.job_id_var.set(job_id)
         try:
-            sm.set_status(job_id, "running", "Generating descriptions…")
+            _mark_step_running(job_id, "gpt", "Generating descriptions…")
 
             slots_df: pd.DataFrame = job["slots_df"]
             slot_map_df = job.get("slot_map_df")
@@ -778,12 +1088,7 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
                 slot_map_df = pd.DataFrame()
 
             def cb(msg, cur, total):
-                _push(job_id, "progress", {
-                    "step": "gpt",
-                    "message": msg,
-                    "current": cur,
-                    "total": total,
-                })
+                _push_progress(job_id, "gpt", msg, cur, total)
 
             records = gpt_mod.describe_slots(
                 slots_df, slot_map_df,
@@ -801,6 +1106,7 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
                           output_paths={**job.get("output_paths", {}), **paths},
                           final_mp4_path=None)
             sm.set_status(job_id, "idle")
+            _push_progress(job_id, "gpt", "Description generation complete.", 100, 100)
             _push(job_id, "gpt_done", {
                 "total": len(records),
                 "ok_count": sum(1 for r in records if r.get("ok") and not r.get("skipped")),
@@ -813,7 +1119,8 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
             sm.set_status(job_id, "error", str(exc))
             _push(job_id, "error", {"step": "gpt", "message": str(exc)})
 
-    threading.Thread(target=run, daemon=True).start()
+    _mark_step_running(job_id, "gpt", "GPT generation queued…")
+    _start_worker(job_id, "gpt", run)
     return {"status": "started"}
 
 
@@ -968,13 +1275,13 @@ def run_tts_export(job_id: str, body: dict = Body(default={})):
     def run():
         sm.job_id_var.set(job_id)
         try:
-            sm.set_status(job_id, "running", "Generating TTS audio...")
+            _mark_step_running(job_id, "tts", "Generating TTS audio...")
             
             job_path = sm.job_dir(job_id)
             tts_dir = job_path / "tts"
             
             def cb_tts(msg, cur, total):
-                _push(job_id, "progress", {"step": "tts", "message": msg, "current": cur, "total": total})
+                _push_progress(job_id, "tts", msg, cur, total)
                 
             tts_files = tts_mod.generate_tts(
                 records=records,
@@ -984,10 +1291,10 @@ def run_tts_export(job_id: str, body: dict = Body(default={})):
                 progress_cb=cb_tts
             )
             
-            _push(job_id, "progress", {"step": "tts", "message": "Mixing audio into MP4...", "current": 0, "total": 100})
+            _push_progress(job_id, "tts", "Mixing audio into MP4...", 0, 100)
             
             def cb_export(msg, cur, total):
-                 _push(job_id, "progress", {"step": "tts", "message": msg, "current": cur, "total": total})
+                 _push_progress(job_id, "tts", msg, cur, total)
                  
             final_mp4_path = str(job_path / f"output_{cut}.mp4")
             
@@ -1008,6 +1315,7 @@ def run_tts_export(job_id: str, body: dict = Body(default={})):
                           **{key: records})
             
             sm.set_status(job_id, "idle")
+            _push_progress(job_id, "tts", "TTS export complete.", 100, 100)
             _push(job_id, "tts_done", {
                 "tts_files_count": len(tts_files),
                 "final_mp4": final_mp4_path
@@ -1017,7 +1325,8 @@ def run_tts_export(job_id: str, body: dict = Body(default={})):
             sm.set_status(job_id, "error", str(exc))
             _push(job_id, "error", {"step": "tts", "message": str(exc)})
             
-    threading.Thread(target=run, daemon=True).start()
+    _mark_step_running(job_id, "tts", "TTS export queued…")
+    _start_worker(job_id, "tts", run)
     return {"status": "started"}
 
 
@@ -1026,22 +1335,71 @@ def run_tts_export(job_id: str, body: dict = Body(default={})):
 @app.get("/api/jobs/{job_id}/stream")
 async def status_stream(job_id: str, request: Request):
     async def generate():
-        q = _get_queue(job_id)
-        # Send current job state immediately
+        topic = f"job:{job_id}"
+        last_event_id = request.headers.get("last-event-id", "")
+        try:
+            cursor = int(last_event_id) if last_event_id else 0
+        except ValueError:
+            cursor = 0
+
         job = sm.get_job(job_id)
+        last_status = job.get("status") if job else None
+        last_progress_key: Optional[str] = None
         if job:
             yield f"data: {json.dumps({'event': 'connected', 'status': job['status']})}\n\n"
-        
+
+        if cursor > 0:
+            missed_events = event_bus.replay_after(topic, cursor)
+            for item in missed_events:
+                yield _sse_message(item)
+                cursor = item.seq
+                if item.event == "progress":
+                    last_progress_key = _stable_json_key(item.data)
+        elif job:
+            latest_event = event_bus.latest(topic, "progress")
+            if latest_event:
+                yield _sse_message(latest_event)
+                cursor = latest_event.seq
+                last_progress_key = _stable_json_key(latest_event.data)
+            else:
+                latest_progress = _latest_progress_for_job(job_id, job)
+                if latest_progress:
+                    yield f"data: {json.dumps({'event': 'progress', 'data': latest_progress})}\n\n"
+                    last_progress_key = _stable_json_key(latest_progress)
+                latest_any_event = event_bus.latest(topic)
+                if latest_any_event:
+                    cursor = latest_any_event.seq
+
         loop = asyncio.get_running_loop()
         while True:
             if await request.is_disconnected():
                 break
             try:
                 # Use run_in_executor to avoid blocking the event loop
-                item = await loop.run_in_executor(None, q.get, True, 1.0)
-                yield f"data: {json.dumps(item)}\n\n"
-            except queue.Empty:
-                yield "data: {\"event\":\"ping\"}\n\n"
+                new_events = await loop.run_in_executor(None, event_bus.wait_after, topic, cursor, 1.0)
+                if new_events:
+                    for item in new_events:
+                        yield _sse_message(item)
+                        cursor = item.seq
+                        if item.event == "progress":
+                            last_progress_key = _stable_json_key(item.data)
+                else:
+                    sidecar = _job_sidecar_snapshot(job_id)
+                    if not sidecar:
+                        yield "data: {\"event\":\"ping\"}\n\n"
+                        continue
+
+                    status = sidecar.get("status")
+                    progress = sidecar.get("progress")
+                    progress_key = _stable_json_key(progress) if progress else None
+                    if status != last_status:
+                        last_status = status
+                        yield f"data: {json.dumps({'event': 'job_status', 'data': {'status': status}})}\n\n"
+                    elif status == "running" and progress and progress_key != last_progress_key:
+                        last_progress_key = progress_key
+                        yield f"data: {json.dumps({'event': 'progress', 'data': progress})}\n\n"
+                    else:
+                        yield "data: {\"event\":\"ping\"}\n\n"
             except Exception:
                 pass
 
@@ -1135,6 +1493,8 @@ def get_job(job_id: str, request: Request):
         "scenes": make_serializable(job.get("scenes_df")),
         "slot_map": job.get("slot_map_df").to_dict(orient="records") if (job.get("slot_map_df") is not None and not job.get("slot_map_df").empty) else None,
         "video_path": video_path,
+        "original_video_filename": job.get("original_video_filename"),
+        "video_sha256": job.get("video_sha256"),
         "video_cache_key": video_cache_key,
         
         "transcript_meta": job.get("transcript_meta"),
@@ -1144,7 +1504,7 @@ def get_job(job_id: str, request: Request):
                          **({"log": sm.JOB_LOG_FILENAME} if Path(sm.job_dir(job_id) / sm.JOB_LOG_FILENAME).exists() else {})},
         "gpt_records": job.get("gpt_records_broadcast", job.get("gpt_records_directors")),
         "links": build_hateoas_links(job, str(request.base_url)),
-        "latest_progress": _LATEST_PROGRESS_BY_JOB.get(job_id) if job.get("status") == "running" else None
+        "latest_progress": _latest_progress_for_job(job_id, job)
     }
     return out
 

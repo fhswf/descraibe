@@ -14,6 +14,9 @@
 # ── Frontend Build ─────────────────────────────────────────────────────────────
 FROM node:24-slim AS frontend-builder
 WORKDIR /app/frontend
+ARG VITE_APP_BUILD_CHANNEL=""
+ARG VITE_APP_COMMIT_SHA=""
+ARG VITE_APP_REPOSITORY_URL=""
 COPY webapp/frontend/package*.json ./
 RUN npm install
 COPY webapp/frontend/ ./

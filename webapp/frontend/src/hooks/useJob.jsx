@@ -56,7 +56,7 @@ function progressPercent(progress) {
 function jobMetaFromData(data) {
     const percent = data.status === 'running' ? progressPercent(data.latest_progress) : null;
     return {
-        name: basename(data.video_path) || `Job ${String(data.job_id || '').slice(0, 8)}`,
+        name: data.original_video_filename || basename(data.video_path) || `Job ${String(data.job_id || '').slice(0, 8)}`,
         status: data.status || null,
         progressPercent: percent,
         progressMessage: data.latest_progress?.message || null,
@@ -382,114 +382,7 @@ export function JobProvider({ children }) {
         }
     }, [jobId, fetchJobData]);
 
-
-
-    const handleSSEEvent = useCallback((payload) => {
-        const { event, data } = payload;
-
-        if (event === 'ping' || event === 'connected') return;
-
-        if (event === 'progress') {
-            const percent = progressPercent(data);
-            updateSavedJobMeta(jobId, {
-                status: 'running',
-                progressPercent: percent,
-                progressMessage: data.message || null
-            });
-            setProgressData(prev => ({
-                ...prev,
-                [data.step]: {
-                    msg: data.message,
-                    percent: percent ?? 100
-                }
-            }));
-        } else if (event === 'error') {
-            updateSavedJobMeta(jobId, {
-                status: 'error',
-                progressPercent: null,
-                progressMessage: data.message || null
-            });
-            alert(`Error in ${data.step}: ${data.message}`);
-            setProgressData(prev => ({ ...prev, [data.step]: null }));
-            fetchJobData(jobId);
-        } else {
-            // Refresh job data to get the latest state (links, stats, counts)
-            fetchJobData(jobId);
-
-            if (event === 'vad_done') {
-                setDoneSteps(prev => new Set(prev).add(1));
-                setCurrentStep(2);
-                setProgressData(prev => ({ ...prev, vad: null }));
-            } else if (event === 'transcribe_done') {
-                setDoneSteps(prev => new Set(prev).add(2));
-                setCurrentStep(3);
-                setProgressData(prev => ({ ...prev, transcribe: null }));
-            } else if (event === 'slots_done') {
-                setDoneSteps(prev => new Set(prev).add(3));
-                setCurrentStep(4);
-                setProgressData(prev => ({ ...prev, slots: null }));
-            } else if (event === 'images_done') {
-                setDoneSteps(prev => new Set(prev).add(4));
-                setCurrentStep(5);
-                setProgressData(prev => ({ ...prev, images: null }));
-            } else if (event === 'gpt_done') {
-                setDoneSteps(prev => new Set(prev).add(5));
-                setCurrentStep(6);
-                fetchJobData(jobId); // Need full update for outputs
-                setProgressData(prev => ({ ...prev, gpt: null }));
-            } else if (event === 'tts_done') {
-                setDoneSteps(prev => new Set(prev).add(6));
-                setCurrentStep(7);
-                fetchJobData(jobId);
-                setProgressData(prev => ({ ...prev, tts: null }));
-                setIsRunAllActive(false); // Finished all automatic steps
-            }
-
-            // Chain reactions if Run All is active
-            if (isRunAllActive) {
-                if (event === 'upload_done' || event === 'upload_success') {
-                    // Start VAD automatically? We assume Run All is triggered AFTER upload, so VAD is the first target.
-                } else if (event === 'vad_done') {
-                    handleRunTranscribe();
-                } else if (event === 'transcribe_done') {
-                    handleRunSlots();
-                } else if (event === 'slots_done') {
-                    handleRunImages();
-                } else if (event === 'images_done') {
-                    handleRunGPT();
-                } else if (event === 'gpt_done') {
-                    handleRunTTS();
-                }
-            }
-        }
-    }, [jobId, fetchJobData, updateSavedJobMeta, setProgressData, setDoneSteps, setCurrentStep, isRunAllActive]);
-
-    useEffect(() => {
-        if (!jobId) return;
-
-        const source = new EventSource(`/api/jobs/${jobId}/stream`);
-
-        source.onopen = () => setSseConnected(true);
-        source.onerror = () => setSseConnected(false);
-
-        source.onmessage = (ev) => {
-            try {
-                const payload = JSON.parse(ev.data);
-                handleSSEEvent(payload);
-            } catch (err) {
-                console.error("SSE parsing error", err);
-            }
-        };
-
-        return () => {
-            source.close();
-            setSseConnected(false);
-        };
-    }, [jobId, handleSSEEvent]);
-
-
-
-    const createJob = async () => {
+    const createJob = useCallback(async () => {
         try {
             const res = await fetch('/api/jobs', { method: 'POST' });
             const data = await res.json();
@@ -507,11 +400,11 @@ export function JobProvider({ children }) {
         } catch (err) {
             console.error("Failed to create job:", err);
         }
-    };
+    }, [addSavedJobId, resetJobView, updateSavedJobMeta]);
 
-    const markStepDone = (step) => {
+    const markStepDone = useCallback((step) => {
         setDoneSteps(prev => new Set(prev).add(step));
-    };
+    }, []);
 
     const markJobStarted = useCallback((step, message) => {
         if (!jobId) return;
@@ -664,7 +557,114 @@ export function JobProvider({ children }) {
         } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
     }, [jobId, ttsParams, markJobStarted]);
 
-    const runAllSteps = () => {
+    const handleSSEEvent = useCallback((payload) => {
+        const { event, data } = payload;
+
+        if (event === 'ping' || event === 'connected') return;
+
+        if (event === 'progress') {
+            const percent = progressPercent(data);
+            updateSavedJobMeta(jobId, {
+                status: 'running',
+                progressPercent: percent,
+                progressMessage: data.message || null
+            });
+            setProgressData(prev => ({
+                ...prev,
+                [data.step]: {
+                    msg: data.message,
+                    percent: percent ?? 100
+                }
+            }));
+        } else if (event === 'error') {
+            updateSavedJobMeta(jobId, {
+                status: 'error',
+                progressPercent: null,
+                progressMessage: data.message || null
+            });
+            alert(`Error in ${data.step}: ${data.message}`);
+            setProgressData(prev => ({ ...prev, [data.step]: null }));
+            fetchJobData(jobId);
+        } else {
+            // Refresh job data to get the latest state (links, stats, counts)
+            fetchJobData(jobId);
+
+            if (event === 'vad_done') {
+                setDoneSteps(prev => new Set(prev).add(1));
+                setCurrentStep(2);
+                setProgressData(prev => ({ ...prev, vad: null }));
+            } else if (event === 'transcribe_done') {
+                setDoneSteps(prev => new Set(prev).add(2));
+                setCurrentStep(3);
+                setProgressData(prev => ({ ...prev, transcribe: null }));
+            } else if (event === 'slots_done') {
+                setDoneSteps(prev => new Set(prev).add(3));
+                setCurrentStep(4);
+                setProgressData(prev => ({ ...prev, slots: null }));
+            } else if (event === 'images_done') {
+                setDoneSteps(prev => new Set(prev).add(4));
+                setCurrentStep(5);
+                setProgressData(prev => ({ ...prev, images: null }));
+            } else if (event === 'gpt_done') {
+                setDoneSteps(prev => new Set(prev).add(5));
+                setCurrentStep(6);
+                fetchJobData(jobId); // Need full update for outputs
+                setProgressData(prev => ({ ...prev, gpt: null }));
+            } else if (event === 'tts_done') {
+                setDoneSteps(prev => new Set(prev).add(6));
+                setCurrentStep(7);
+                fetchJobData(jobId);
+                setProgressData(prev => ({ ...prev, tts: null }));
+                setIsRunAllActive(false); // Finished all automatic steps
+            }
+
+            // Chain reactions if Run All is active
+            if (isRunAllActive) {
+                if (event === 'upload_done' || event === 'upload_success') {
+                    // Start VAD automatically? We assume Run All is triggered AFTER upload, so VAD is the first target.
+                } else if (event === 'vad_done') {
+                    handleRunTranscribe();
+                } else if (event === 'transcribe_done') {
+                    handleRunSlots();
+                } else if (event === 'slots_done') {
+                    handleRunImages();
+                } else if (event === 'images_done') {
+                    handleRunGPT();
+                } else if (event === 'gpt_done') {
+                    handleRunTTS();
+                }
+            }
+        }
+    }, [
+        jobId, fetchJobData, updateSavedJobMeta, setProgressData, setDoneSteps,
+        setCurrentStep, isRunAllActive, handleRunTranscribe, handleRunSlots,
+        handleRunImages, handleRunGPT, handleRunTTS
+    ]);
+
+    useEffect(() => {
+        if (!jobId) return;
+
+        const source = new EventSource(`/api/jobs/${jobId}/stream`);
+
+        source.onopen = () => setSseConnected(true);
+        source.onerror = () => setSseConnected(false);
+
+        source.onmessage = (ev) => {
+            try {
+                const payload = JSON.parse(ev.data);
+                handleSSEEvent(payload);
+            } catch (err) {
+                console.error("SSE parsing error", err);
+            }
+        };
+
+        return () => {
+            source.close();
+            setSseConnected(false);
+        };
+    }, [jobId, handleSSEEvent]);
+
+    const runAllSteps = useCallback(() => {
         if (!jobId) return alert("Bitte laden Sie zuerst ein Video hoch.");
         setIsRunAllActive(true);
         // Determine the next uncompleted step and start there
@@ -675,11 +675,11 @@ export function JobProvider({ children }) {
         else if (!doneSteps.has(5)) handleRunGPT();
         else if (!doneSteps.has(6)) handleRunTTS();
         else setIsRunAllActive(false); // all done
-    };
+    }, [doneSteps, handleRunGPT, handleRunImages, handleRunSlots, handleRunTTS, handleRunTranscribe, handleRunVAD, jobId]);
 
-    const stopRunAll = () => {
+    const stopRunAll = useCallback(() => {
         setIsRunAllActive(false);
-    };
+    }, []);
 
     const handleUpdateGPTRecord = useCallback((recordId, updates) => {
         setGptRecords(prevRecords =>

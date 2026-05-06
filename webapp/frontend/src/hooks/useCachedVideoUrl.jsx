@@ -72,12 +72,18 @@ export function useCachedVideoUrl(remoteUrl, cacheKey) {
         let cancelled = false;
         let objectUrl = null;
 
-        setCachedUrl(null);
-        setCacheStatus(remoteUrl ? 'loading' : 'idle');
+        queueMicrotask(() => {
+            if (cancelled) return;
+            setCachedUrl(null);
+            setCacheStatus(remoteUrl ? 'loading' : 'idle');
+        });
 
         if (!remoteUrl || !cacheKey || !supportsOPFS()) {
-            setCachedUrl(remoteUrl);
-            setCacheStatus(remoteUrl ? 'network' : 'idle');
+            queueMicrotask(() => {
+                if (cancelled) return;
+                setCachedUrl(remoteUrl);
+                setCacheStatus(remoteUrl ? 'network' : 'idle');
+            });
             return undefined;
         }
 

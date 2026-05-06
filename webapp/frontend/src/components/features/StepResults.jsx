@@ -58,7 +58,6 @@ function FileRow({ jobId, fileKey, filename }) {
 
             {expanded && audio && (
                 <div className="px-4 pb-4">
-                    {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                     <audio
                         controls
                         autoPlay
@@ -71,7 +70,6 @@ function FileRow({ jobId, fileKey, filename }) {
 
             {expanded && video && (
                 <div className="px-4 pb-4">
-                    {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                     <video
                         controls
                         autoPlay

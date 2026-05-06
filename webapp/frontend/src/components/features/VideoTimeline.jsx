@@ -88,14 +88,6 @@ export function VideoTimeline({ videoRef, videoUrl }) {
         });
     }, []);
 
-    const playSlotAudio = useCallback((slotId) => {
-        const entry = adAudiosRef.current[slotId];
-        if (!entry) return;
-        const { el } = entry;
-        el.currentTime = 0;
-        el.play().catch(() => {/* user gesture requirements */});
-    }, []);
-
     // Poll video time and trigger AD audio clips at their start_s
     useEffect(() => {
         const video = videoRef.current;

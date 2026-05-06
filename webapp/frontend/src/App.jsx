@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useJob } from './hooks/useJob.jsx';
 import { useCachedVideoUrl } from './hooks/useCachedVideoUrl.jsx';
 import { VideoTimeline } from './components/features/VideoTimeline';
@@ -15,6 +15,97 @@ import { StepGenerate } from './components/features/StepGenerate';
 import { StepTTS } from './components/features/StepTTS';
 import { StepResults } from './components/features/StepResults';
 import { SRTWidget } from './components/features/SRTWidget';
+
+const APP_VERSION = import.meta.env.VITE_APP_VERSION;
+const BUILD_CHANNEL = import.meta.env.VITE_APP_BUILD_CHANNEL;
+const COMMIT_SHA = import.meta.env.VITE_APP_COMMIT_SHA;
+const REPOSITORY_URL = import.meta.env.VITE_APP_REPOSITORY_URL?.replace(/\/$/, '') || '';
+const VERSION_LABEL = import.meta.env.VITE_APP_VERSION_LABEL;
+const SHA_TAG = COMMIT_SHA ? `sha-${COMMIT_SHA.slice(0, 7)}` : '';
+const COMMIT_URL = COMMIT_SHA && REPOSITORY_URL ? `${REPOSITORY_URL}/commit/${COMMIT_SHA}` : '';
+const SHOW_STAGING_SHA = BUILD_CHANNEL === 'staging' && Boolean(SHA_TAG);
+const LINK_STAGING_SHA = SHOW_STAGING_SHA && Boolean(COMMIT_URL);
+const SHOW_VERSION_LABEL = !SHOW_STAGING_SHA && Boolean(VERSION_LABEL);
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return 'unbekannt';
+  if (bytes === 0) return '0 B';
+
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** unitIndex;
+  const precision = value >= 10 || unitIndex === 0 ? 0 : 1;
+
+  return `${value.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function StorageQuotaFooter() {
+  const [storageEstimate, setStorageEstimate] = useState({
+    status: navigator.storage?.estimate ? 'loading' : 'unsupported',
+    usage: null,
+    quota: null,
+    opfsUsage: null
+  });
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const updateStorageEstimate = async () => {
+      if (!navigator.storage?.estimate) {
+        if (isMounted) {
+          setStorageEstimate(prev => ({ ...prev, status: 'unsupported' }));
+        }
+        return;
+      }
+
+      try {
+        const estimate = await navigator.storage.estimate();
+        if (!isMounted) return;
+
+        setStorageEstimate({
+          status: 'ready',
+          usage: estimate.usage ?? null,
+          quota: estimate.quota ?? null,
+          opfsUsage: estimate.usageDetails?.fileSystem ?? null
+        });
+      } catch {
+        if (isMounted) {
+          setStorageEstimate(prev => ({ ...prev, status: 'error' }));
+        }
+      }
+    };
+
+    updateStorageEstimate();
+    const intervalId = window.setInterval(updateStorageEstimate, 15_000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  const originText = storageEstimate.status === 'ready'
+    ? `${formatBytes(storageEstimate.usage)} / ${formatBytes(storageEstimate.quota)}`
+    : storageEstimate.status === 'loading'
+      ? 'wird geladen...'
+      : 'nicht verfügbar';
+  const opfsText = storageEstimate.opfsUsage !== null
+    ? `OPFS ${formatBytes(storageEstimate.opfsUsage)}`
+    : 'OPFS im Ursprung enthalten';
+
+  return (
+    <footer className="h-8 border-t border-border-subtle bg-bg-surface px-4 flex items-center justify-end gap-3 text-[10px] text-text-muted">
+      <span className="font-semibold uppercase tracking-wider">Origin Storage</span>
+      <span className="font-mono">{originText}</span>
+      {storageEstimate.status === 'ready' && (
+        <>
+          <span className="h-3 w-px bg-border-subtle"></span>
+          <span>{opfsText}</span>
+        </>
+      )}
+    </footer>
+  );
+}
 
 function App() {
   const {
@@ -109,7 +200,28 @@ function App() {
             <img src="/favicon.png" alt="DescrAIbe Logo" className="w-8 h-8 rounded-[8px] object-cover shadow-sm" />
             <div className="flex flex-col">
               <h1 className="font-bold text-lg tracking-tight leading-none">Descr<span className="text-violet-500 text-xl">AI</span>be <span className="font-light opacity-60">Pipeline</span></h1>
-              <span className="text-[10px] text-text-muted mt-0.5">v{import.meta.env.VITE_APP_VERSION}</span>
+              <span className="text-[10px] text-text-muted mt-0.5">
+                v{APP_VERSION}
+                {SHOW_STAGING_SHA && (
+                  <>
+                    {' '}
+                    {LINK_STAGING_SHA ? (
+                      <a
+                        href={COMMIT_URL}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline decoration-dotted underline-offset-2 transition-colors hover:text-text-secondary"
+                        title={`Open ${SHA_TAG}`}
+                      >
+                        ({SHA_TAG})
+                      </a>
+                    ) : (
+                      <>({SHA_TAG})</>
+                    )}
+                  </>
+                )}
+                {SHOW_VERSION_LABEL && <> ({VERSION_LABEL})</>}
+              </span>
             </div>
           </div>
           {jobId && (
@@ -175,13 +287,6 @@ function App() {
               </button>
             )}
             
-            <button
-                className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-white/5 hover:bg-white/10 text-text-primary border border-border-subtle"
-                onClick={() => setIsConfigModalOpen(true)}
-              >
-                <span className="material-icons-round text-[1.1rem]">settings</span>
-                Konfiguration ändern
-            </button>
           </div>
 
           <div className="flex flex-col gap-4">
@@ -258,13 +363,14 @@ function App() {
         </main>
       </div>
 
+      <StorageQuotaFooter />
       <ConfigModal />
     </div>
   );
 }
 
 function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJob, removeSavedJobId }) {
-  const activeName = jobData?.video_path?.split(/[\\/]/).filter(Boolean).pop();
+  const activeName = jobData?.original_video_filename || jobData?.video_path?.split(/[\\/]/).filter(Boolean).pop();
   const activeStatus = jobData?.status || (jobId ? 'lädt...' : null);
 
   return (

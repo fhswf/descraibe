@@ -46,6 +46,7 @@ export async function uploadVideoInChunks({ jobId, file, onProgress }) {
         formData.append('filename', file.name);
         formData.append('chunkIndex', i);
         formData.append('totalChunks', totalChunks);
+        formData.append('totalBytes', file.size);
         formData.append('chunk', chunk);
 
         lastData = await uploadChunk(`/api/jobs/${jobId}/video`, formData, (loaded) => {
