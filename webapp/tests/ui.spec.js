@@ -207,10 +207,10 @@ test.describe('Step 6 – Prompts & Config', () => {
         await expect(page.locator('#api-key')).toHaveAttribute('type', 'password');
     });
 
-    test('GPT model selector has gpt-4o option', async ({ page }) => {
+    test('GPT model selector does not fall back to gpt-4o', async ({ page }) => {
         await openApp(page);
         await clickStep(page, 5);
-        await expect(page.locator('#gpt-model option[value="gpt-4o"]')).toHaveCount(1);
+        await expect(page.locator('#gpt-model option[value="gpt-4o"]')).toHaveCount(0);
     });
 
     test('temperature slider range 0–1.5', async ({ page }) => {

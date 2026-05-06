@@ -117,7 +117,7 @@ def test_completion_retries_transient_connection_errors(monkeypatch):
     )
     monkeypatch.setattr(gpt_description.time, "sleep", lambda seconds: None)
 
-    result = gpt_description._completion_with_retries(client, model="gpt-4o")
+    result = gpt_description._completion_with_retries(client, model="gpt-5-mini-2025-08-07")
 
     assert result == "ok"
     assert completions.calls == 3

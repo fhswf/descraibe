@@ -446,7 +446,7 @@ def _load_available_models(config_path: str) -> list[dict]:
     3) Legacy-Format:
        environments:
          default:
-           model: gpt-4o
+           model: gpt-5-mini-2025-08-07
     """
     try:
         import yaml
@@ -505,6 +505,33 @@ def _load_available_models(config_path: str) -> list[dict]:
         print(f"[system_info] Failed to load GPT models from {config_path}: {exc}")
         return []
 
+
+def _gpt_config_path() -> str:
+    gpt_config_path = os.environ.get("GPT_CONFIG_PATH", "")
+    if gpt_config_path:
+        return gpt_config_path
+
+    potential_configs = [
+        Path("/app/config/gpt_config.yaml"),
+        Path(__file__).parent.parent / "config" / "gpt_config.yaml"
+    ]
+    for p in potential_configs:
+        if p.exists():
+            return str(p)
+    return ""
+
+
+def _available_gpt_models() -> list[dict]:
+    gpt_config_path = _gpt_config_path()
+    return _load_available_models(gpt_config_path) if gpt_config_path else []
+
+
+def _default_gpt_model() -> str:
+    available_models = _available_gpt_models()
+    if available_models:
+        return str(available_models[0]["model"])
+    return "gpt-5-mini-2025-08-07"
+
 # ── Health check (K8s liveness / readiness probe) ─────────────────────────────
 
 @app.get("/api/ping")
@@ -559,26 +586,9 @@ def system_info():
     if prompts_dir:
         defaults = _load_raw_prompts_from_dir(prompts_dir)
 
-    # Load available models from gpt_config.yaml
-    gpt_config_path = os.environ.get("GPT_CONFIG_PATH", "")
-    if not gpt_config_path:
-        potential_configs = [
-            Path("/app/config/gpt_config.yaml"),
-            Path(__file__).parent.parent / "config" / "gpt_config.yaml"
-        ]
-        for p in potential_configs:
-            if p.exists():
-                gpt_config_path = str(p)
-                break
-
-    available_models = _load_available_models(gpt_config_path) if gpt_config_path else []
-
-    # Fallback: if no models found, return sensible defaults
+    available_models = _available_gpt_models()
     if not available_models:
-        available_models = [
-            {"env": "default", "model": "gpt-4o"},
-            {"env": "mini", "model": "gpt-4o-mini"},
-        ]
+        available_models = [{"env": "default", "model": _default_gpt_model()}]
 
     return {
         "gpu_available": gpu_available,
@@ -1070,7 +1080,7 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
                     user_prompt = loaded[1]
 
     cut = body.get("cut", "broadcast")
-    model_name = body.get("model", "gpt-4o")
+    model_name = str(body.get("model") or "").strip() or _default_gpt_model()
     
     # O1/O3/gpt-5 models require temperature = 1.0 exactly
     raw_temp = float(body.get("temperature", 0.2))

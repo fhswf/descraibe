@@ -110,7 +110,7 @@ def describe_slots(
     user_prompt_base: str,
     *,
     api_key: str,
-    model: str = "gpt-4o",
+    model: str = "gpt-5-mini-2025-08-07",
     temperature: float = 0.2,
     max_tokens: int = 1024,
     detail: str = "low",

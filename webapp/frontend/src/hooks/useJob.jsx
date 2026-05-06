@@ -101,7 +101,7 @@ export function JobProvider({ children }) {
         user_prompt: "",
         ad_rules: "",
         few_shots: "",
-        model: "gpt-4o",
+        model: "",
         temperature: 0.2,
         max_tokens: 1024,
         detail: "low",
@@ -529,6 +529,7 @@ export function JobProvider({ children }) {
             user_prompt: gptParams.user_prompt || "Erstelle eine AD für diese Frames.",
         };
         try {
+            if (!payload.model) throw new Error("Kein GPT-Modell ausgewählt. Bitte Konfiguration laden oder ein Modell auswählen.");
             const res = await fetch(`/api/jobs/${jobId}/gpt`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
