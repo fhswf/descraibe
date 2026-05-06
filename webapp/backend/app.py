@@ -1104,6 +1104,10 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
             os.environ.get("GPT_MAX_CONSECUTIVE_ERRORS", 3),
         )),
         "min_slot_s": float(body.get("min_slot_s", 0.5)),
+        "transcript_window_before_s": float(body.get("transcript_window_before_s", 20.0)),
+        "transcript_window_after_s": float(body.get("transcript_window_after_s", 5.0)),
+        "transcript_context_max_chars": int(body.get("transcript_context_max_chars", 2000)),
+        "previous_context_max_chars": int(body.get("previous_context_max_chars", 3000)),
     }
     gpt_run_config = {k: v for k, v in gpt_params.items() if k != "api_key"}
 
@@ -1124,6 +1128,7 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
             records = gpt_mod.describe_slots(
                 slots_df, slot_map_df,
                 system_prompt, user_prompt,
+                transcript_df=job.get("segments_df"),
                 progress_cb=cb,
                 **gpt_params,
             )

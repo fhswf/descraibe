@@ -102,6 +102,126 @@ def _build_messages(system_text: str, user_text: str, image_paths: List[str], de
     return msgs
 
 
+def _append_with_limit(lines: List[str], line: str, current_chars: int, max_chars: int) -> int:
+    """Append line while respecting a soft character budget."""
+    if not line:
+        return current_chars
+    extra = len(line) + (1 if lines else 0)
+    if current_chars + extra > max_chars:
+        return current_chars
+    lines.append(line)
+    return current_chars + extra
+
+
+def _format_transcript_context(
+    transcript_df: Optional[pd.DataFrame],
+    slot_start_s: float,
+    slot_end_s: float,
+    *,
+    window_before_s: float,
+    window_after_s: float,
+    max_chars: int,
+) -> str:
+    """Return nearby transcript lines for context, bounded for prompt size."""
+    if transcript_df is None or transcript_df.empty or max_chars <= 0:
+        return ""
+
+    required = {"start_s", "end_s", "text"}
+    if not required.issubset(set(transcript_df.columns)):
+        return ""
+
+    ctx_start = slot_start_s - max(0.0, window_before_s)
+    ctx_end = slot_end_s + max(0.0, window_after_s)
+    df = transcript_df.copy()
+    df = df[(df["end_s"] >= ctx_start) & (df["start_s"] <= ctx_end)]
+    if df.empty:
+        return ""
+
+    lines: List[str] = []
+    current_chars = 0
+    for _, r in df.sort_values("start_s").iterrows():
+        text = " ".join(str(r.get("text", "")).split())
+        if not text:
+            continue
+        line = f"[{float(r['start_s']):.1f}-{float(r['end_s']):.1f}s] {text}"
+        new_count = _append_with_limit(lines, line, current_chars, max_chars)
+        if new_count == current_chars:
+            break
+        current_chars = new_count
+
+    return "\n".join(lines)
+
+
+def _format_previous_descriptions_context(
+    previous_records: List[Dict[str, Any]],
+    *,
+    max_chars: int,
+) -> str:
+    """Return previous successful AD texts, prioritising the most recent ones."""
+    if not previous_records or max_chars <= 0:
+        return ""
+
+    selected_reversed: List[str] = []
+    current_chars = 0
+    for rec in reversed(previous_records):
+        if not rec.get("ok") or rec.get("skipped"):
+            continue
+        text = " ".join(str(rec.get("text") or "").split())
+        if not text:
+            continue
+        line = (
+            f"Slot {rec.get('slot')} "
+            f"({float(rec.get('start_s', 0.0)):.1f}-{float(rec.get('end_s', 0.0)):.1f}s): "
+            f"{text}"
+        )
+        extra = len(line) + (1 if selected_reversed else 0)
+        if current_chars + extra > max_chars:
+            break
+        selected_reversed.append(line)
+        current_chars += extra
+
+    return "\n".join(reversed(selected_reversed))
+
+
+def _build_context_block(
+    transcript_df: Optional[pd.DataFrame],
+    previous_records: List[Dict[str, Any]],
+    slot_start_s: float,
+    slot_end_s: float,
+    *,
+    transcript_window_before_s: float,
+    transcript_window_after_s: float,
+    transcript_context_max_chars: int,
+    previous_context_max_chars: int,
+) -> str:
+    transcript_context = _format_transcript_context(
+        transcript_df,
+        slot_start_s,
+        slot_end_s,
+        window_before_s=transcript_window_before_s,
+        window_after_s=transcript_window_after_s,
+        max_chars=transcript_context_max_chars,
+    )
+    previous_context = _format_previous_descriptions_context(
+        previous_records,
+        max_chars=previous_context_max_chars,
+    )
+    if not transcript_context and not previous_context:
+        return ""
+
+    parts = [
+        "## Kontext",
+        "Nutze diesen Kontext, um Wiederholungen zu vermeiden.",
+        "Wiederhole keine Informationen, die im Audio-Transkript bereits genannt werden.",
+        "Wiederhole keine visuellen Details aus vorherigen AD-Slots, außer sie haben sich sichtbar verändert oder sind für das Verständnis zwingend nötig.",
+    ]
+    if transcript_context:
+        parts.extend(["", "### Audio-Transkript im Umfeld des Slots", transcript_context])
+    if previous_context:
+        parts.extend(["", "### Vorherige AD-Slots", previous_context])
+    return "\n".join(parts)
+
+
 # ── Syllable helpers (optional pyphen) ────────────────────────────────────────
 
 def _count_syllables(text: str) -> int:
@@ -122,6 +242,7 @@ def describe_slots(
     user_prompt_base: str,
     *,
     api_key: str,
+    transcript_df: Optional[pd.DataFrame] = None,
     model: str = "gpt-5-mini-2025-08-07",
     temperature: float = 0.2,
     max_tokens: int = 1024,
@@ -132,6 +253,10 @@ def describe_slots(
     max_rewrite_attempts: int = 2,
     max_consecutive_gpt_errors: int = 3,
     min_slot_s: float = 0.5,
+    transcript_window_before_s: float = 20.0,
+    transcript_window_after_s: float = 5.0,
+    transcript_context_max_chars: int = 2000,
+    previous_context_max_chars: int = 3000,
     progress_cb: Optional[Callable[[str, int, int], None]] = None,
 ) -> List[Dict[str, Any]]:
     """Call OpenAI vision API for each AD slot and return result records.
@@ -141,6 +266,7 @@ def describe_slots(
         slot_map_df    – DataFrame mapping slot → image_path
         system_prompt  – combined system + AD rules text
         user_prompt_base – base user instruction text
+        transcript_df   – optional transcript segments with start_s/end_s/text columns
         api_key        – OpenAI API key
         cut            – "broadcast" or "directors"
         progress_cb    – called with (message, current_slot_index, total_slots)
@@ -226,6 +352,19 @@ def describe_slots(
                 + "\n\n## Director's Cut\nErstelle eine ausführliche Audiodeskription.\n"
                 + f"Start={s:.3f}\nEnde={e:.3f}\nSlotDauer={dur:.3f}\n"
             )
+
+        context_block = _build_context_block(
+            transcript_df,
+            records,
+            s,
+            e,
+            transcript_window_before_s=transcript_window_before_s,
+            transcript_window_after_s=transcript_window_after_s,
+            transcript_context_max_chars=transcript_context_max_chars,
+            previous_context_max_chars=previous_context_max_chars,
+        )
+        if context_block:
+            user_text += "\n\n" + context_block
 
         try:
             messages = _build_messages(system_prompt, user_text, imgs, detail=detail)

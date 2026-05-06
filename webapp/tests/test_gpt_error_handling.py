@@ -129,6 +129,63 @@ def test_describe_slots_stores_original_and_shortened_text(monkeypatch, tmp_path
     assert records[0]["syllables_final"] == 4
 
 
+def test_describe_slots_sends_transcript_and_previous_ad_context(monkeypatch, tmp_path):
+    seen_messages = []
+
+    class FakeCompletions:
+        def __init__(self):
+            self.responses = [
+                FakeChoiceResponse("Erste Beschreibung."),
+                FakeChoiceResponse("Zweite Beschreibung."),
+            ]
+
+        def create(self, **kwargs):
+            seen_messages.append(kwargs["messages"])
+            return self.responses.pop(0)
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.chat = types.SimpleNamespace(
+                completions=FakeCompletions()
+            )
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeOpenAI))
+
+    image_path = tmp_path / "frame.jpg"
+    image_path.write_bytes(b"fake-jpeg")
+    slots_df = pd.DataFrame([
+        {"slot": 1, "start_s": 10.0, "end_s": 12.0},
+        {"slot": 2, "start_s": 20.0, "end_s": 22.0},
+    ])
+    slot_map_df = pd.DataFrame([
+        {"slot": 1, "img_path": str(image_path)},
+        {"slot": 2, "img_path": str(image_path)},
+    ])
+    transcript_df = pd.DataFrame([
+        {"index": 1, "start_s": 18.0, "end_s": 19.0, "dur_s": 1.0, "text": "Das ist bereits im Dialog."},
+    ])
+
+    gpt_description.describe_slots(
+        slots_df,
+        slot_map_df,
+        "system",
+        "user",
+        api_key="test-key",
+        cut="directors",
+        transcript_df=transcript_df,
+    )
+
+    assert len(seen_messages) == 2
+    second_user_content = seen_messages[1][1]["content"][0]["text"]
+    assert "## Kontext" in second_user_content
+    assert "Audio-Transkript im Umfeld des Slots" in second_user_content
+    assert "Das ist bereits im Dialog." in second_user_content
+    assert "Vorherige AD-Slots" in second_user_content
+    assert "Slot 1 (10.0-12.0s): Erste Beschreibung." in second_user_content
+    assert "Wiederhole keine Informationen" in second_user_content
+    assert "Wiederhole keine visuellen Details" in second_user_content
+
+
 def test_completion_retries_transient_connection_errors(monkeypatch):
     class APIConnectionError(Exception):
         pass
