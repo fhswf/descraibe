@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -31,6 +32,16 @@ def _emit_progress(progress_cb, message: str, current: Optional[int] = None, tot
             progress_cb(message, current, total)
     except TypeError:
         progress_cb(message)
+
+
+def _video_frame_count(video_path: str) -> int:
+    cap = cv2.VideoCapture(str(video_path))
+    try:
+        if not cap.isOpened():
+            return 0
+        return max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0))
+    finally:
+        cap.release()
 
 
 # ── Timestamp helpers ──────────────────────────────────────────────────────────
@@ -121,11 +132,56 @@ class MidframeExtractor:
 
     # ── scene detection ─────────────────────────────────────────────────────
 
-    def detect_scenes(self, video_path: str) -> list[tuple[float, float]]:
+    def detect_scenes(
+        self,
+        video_path: str,
+        progress_cb: Optional[Callable[..., None]] = None,
+    ) -> list[tuple[float, float]]:
         from scenedetect import open_video, SceneManager
         from scenedetect.detectors import ContentDetector
         video = open_video(video_path)
-        sm = SceneManager()
+
+        total_frames = _video_frame_count(video_path)
+        if total_frames > 0:
+            _emit_progress(progress_cb, "Detecting scenes…", 0, total_frames)
+
+        last_report_at = 0.0
+        last_report_frame = -1
+        min_frame_delta = max(1, total_frames // 100) if total_frames > 0 else 250
+
+        def report_detection_progress(frame_num: int) -> None:
+            nonlocal last_report_at, last_report_frame
+            frame_num = max(0, int(frame_num or 0))
+            now = time.monotonic()
+            should_report = (
+                frame_num - last_report_frame >= min_frame_delta
+                or now - last_report_at >= 2.0
+                or (total_frames > 0 and frame_num >= total_frames)
+            )
+            if not should_report:
+                return
+
+            last_report_at = now
+            last_report_frame = frame_num
+            if total_frames > 0:
+                current = min(frame_num, total_frames)
+                _emit_progress(
+                    progress_cb,
+                    f"Detecting scenes… frame {current}/{total_frames}",
+                    current,
+                    total_frames,
+                )
+            else:
+                _emit_progress(progress_cb, f"Detecting scenes… frame {frame_num}")
+
+        class ProgressSceneManager(SceneManager):
+            # PySceneDetect only exposes cut callbacks publicly; this hook lets us
+            # report frame progress while preserving its detection implementation.
+            def _process_frame(self, frame_num: int, frame_im: np.ndarray, callback=None) -> bool:
+                report_detection_progress(frame_num)
+                return super()._process_frame(frame_num, frame_im, callback)
+
+        sm = ProgressSceneManager()
         sm.add_detector(ContentDetector(
             threshold=self.threshold,
             min_scene_len=self.min_scene_length,
@@ -133,6 +189,15 @@ class MidframeExtractor:
         sm.detect_scenes(video)
         scenes = sm.get_scene_list()
         logger.info(f"Scene detection: found {len(scenes)} scenes.")
+        if total_frames > 0:
+            _emit_progress(
+                progress_cb,
+                f"Scene detection complete: found {len(scenes)} scenes.",
+                total_frames,
+                total_frames,
+            )
+        else:
+            _emit_progress(progress_cb, f"Scene detection complete: found {len(scenes)} scenes.")
         return [(float(s[0].get_seconds()), float(s[1].get_seconds()))
                 for s in scenes]
 
@@ -228,7 +293,7 @@ class MidframeExtractor:
         progress_cb: Optional[Callable[..., None]] = None,
     ) -> tuple[list[str], list[tuple[float, float]]]:
         _emit_progress(progress_cb, "Detecting scenes…")
-        scenes = self.detect_scenes(video_path)
+        scenes = self.detect_scenes(video_path, progress_cb=progress_cb)
 
         # Window filter
         if window_start_s or window_end_s:

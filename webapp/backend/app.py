@@ -963,10 +963,23 @@ def run_images(job_id: str, body: dict = Body(default={})):
             )
 
             def cb_scene(msg: str, current: int | None = None, total: int | None = None):
-                if total:
-                    percent = 20 + round((max(0, min(current or 0, total)) / total) * 50)
+                message = str(msg or "")
+                lower_message = message.lower()
+                is_detection = (
+                    lower_message.startswith("detecting scenes")
+                    or lower_message.startswith("scene detection")
+                )
+                if is_detection:
+                    base = 5
+                    span = 30
                 else:
-                    percent = 10
+                    base = 35
+                    span = 35
+
+                if total:
+                    percent = base + round((max(0, min(current or 0, total)) / total) * span)
+                else:
+                    percent = base
                 _push_progress(job_id, "images", msg, percent, 100)
 
             scene_images, scene_timestamps = extractor.process_video(
