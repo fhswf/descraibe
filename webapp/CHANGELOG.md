@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.22.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.21.0...v0.22.0) (2026-05-06)
+
+
+### Features
+
+* Add scene detection progress reporting and frame count functionality ([bab6606](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/bab6606731e2650e7fd5a28be0c42f2178b69801))
+* Add transcript context handling and previous AD context to GPT description ([df13084](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/df130845f7d5933b8eba0cf386945dd06b5cee14))
+* Display storage quota information in the frontend ([e740f72](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/e740f72a9b1f79634e8fd950c11b08ce939a8be0))
+* Enhance audio extraction process in VAD pipeline ([e740f72](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/e740f72a9b1f79634e8fd950c11b08ce939a8be0))
+* Enhance error handling and text management in GPT processing and SRT widget ([90dbcae](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/90dbcae6190605b93cced62ffa15ecd92dc3f478))
+* enhance transcription process with progress tracking and job status updates ([188f054](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/188f054705a4b355d2623ad423e51fefecc3a85a))
+* Enhance video handling by introducing displayedVideo state and updating VideoTimeline to use timelineJobData ([8219146](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/82191462aef2c79e6b1e5671bd6b5e658b029827))
+* Extend session manager to include original video filename and SHA256 ([e740f72](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/e740f72a9b1f79634e8fd950c11b08ce939a8be0))
+* implement chunked video upload functionality and enhance progress tracking ([d54c198](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/d54c19810a5f495798439028abb68fa9d3bbc152))
+* Implement consecutive error handling in GPT generation and add corresponding tests ([bbb23dd](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/bbb23dd7813f2a4f01303ed58f485e1fd6824e87))
+* Implement in-process event bus for pub/sub with event replay ([e740f72](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/e740f72a9b1f79634e8fd950c11b08ce939a8be0))
+* implement job summary streaming and enhance upload progress tracking ([be89cf7](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/be89cf78ee5fc9fbff817e69d245cd672275639e))
+* implement video caching mechanism and enhance progress tracking in image extraction ([501372b](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/501372b20fd4ea667856cf9c8a382880637b7810))
+* Improve model selection handling in ConfigModal and JobProvider ([b183f6c](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/b183f6caa3e026bbaf478a55aa03dab831a33e89))
+* Introduce environment variables for frontend build configuration ([e740f72](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/e740f72a9b1f79634e8fd950c11b08ce939a8be0))
+* **k8s:** add SealedSecrets for OpenAI API keys in staging and release environments ([69e8fde](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/69e8fde17b525c9727553131091ea083bd09cd5f))
+* **k8s:** restructure deployment configuration for staging and release environments ([8f82711](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/8f8271111a82c6e91672eb1dd2b5591dc5bd3bff))
+* Refactor VideoTimeline to improve state management and enhance audio region handling ([e403121](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/e403121185e1ae7b73d19810a9019ce58ca1196f))
+* Strip whitespace from API key in TTS generation and add corresponding test ([f765fec](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/f765feca0ca72830154a8769c2837a0b28c82a11))
+* Update GPT model references to gpt-5-mini-2025-08-07 and improve model selection handling ([f3d72ef](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/f3d72ef3bda88fa81ec367073cc027864386f209))
+
+
+### Bug Fixes
+
+* **docs:** update README and SealedSecret manifest for OpenAI API key handling ([21d348f](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/21d348fef5ad34e34e017be16d5107e36565f1c4))
+* **k8s:** correct indentation in openai-sealedsecret.yaml template section ([6c46474](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/6c46474ccaa289a01adb14aa837d143cb4d1bd55))
+* **k8s:** revert webapp image tag to v0.20.0 ([2616fbe](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/2616fbeef12d063d44778dafdac1d5f83f8ad1fa))
+* **k8s:** update Ingress host value for staging environment ([6e45fcc](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/6e45fcce01cc8ec3fe04b2efd1b202a1b10a3963))
+* **k8s:** update OPENAI_API_KEY in SealedSecret for staging environment ([72e0f8b](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/72e0f8b84a97d2a4acddc872c24e955cebc7dc76))
+* Update job metadata handling to include original video filename ([e740f72](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/e740f72a9b1f79634e8fd950c11b08ce939a8be0))
+
 ## [0.21.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.20.0...v0.21.0) (2026-03-17)
 
 
