@@ -1159,9 +1159,17 @@ def update_texts(job_id: str, body: dict = Body(...)):
     for rec in records:
         s_id = str(rec.get("slot"))
         if s_id in updates:
-            rec["text"] = updates[s_id]
-            rec["ok"] = True
-            rec["skipped"] = False
+            old_text = str(rec.get("text") or "")
+            new_text = str(updates[s_id] or "")
+            rec["text"] = new_text
+
+            # A failed/skipped slot should only become usable AD text when the
+            # user has actually supplied replacement content.
+            if new_text.strip() and new_text != old_text:
+                rec["ok"] = True
+                rec["skipped"] = False
+                rec["reason"] = ""
+                rec.pop("error", None)
 
     try:
         # Re-export files with the new texts

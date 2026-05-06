@@ -28,6 +28,13 @@ def _clean_line(txt: str) -> str:
     return " ".join((txt or "").split())
 
 
+def _record_note(rec: Dict[str, Any]) -> str:
+    error = rec.get("error")
+    if isinstance(error, dict):
+        return _clean_line(error.get("message", ""))
+    return _clean_line(rec.get("reason", ""))
+
+
 def write_outputs(
     run_folder: Path,
     records: List[Dict[str, Any]],
@@ -89,17 +96,19 @@ def _write_gesamt(path: Path, records: List[Dict[str, Any]]) -> None:
 
 def _write_quality(path: Path, records: List[Dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as f:
-        f.write("Slot\tStart\tEnde\tDauer\tStatus\tText\n")
+        f.write("Slot\tStart\tEnde\tDauer\tStatus\tText\tHinweis\n")
         for rec in records:
             status = "OK" if rec.get("ok") and not rec.get("skipped") else \
                      ("SKIP" if rec.get("skipped") else "ERROR")
+            text = _clean_line(rec.get("text", "")) if status == "OK" else ""
             f.write(
                 f"{rec['slot']}\t"
                 f"{_srt_time(rec['start_s'])}\t"
                 f"{_srt_time(rec['end_s'])}\t"
                 f"{rec['duration_s']:.3f}\t"
                 f"{status}\t"
-                f"{_clean_line(rec.get('text',''))}\n"
+                f"{text}\t"
+                f"{_record_note(rec)}\n"
             )
 
 
@@ -123,5 +132,7 @@ def _write_tsv(path: Path, records: List[Dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as f:
         f.write("start\tende\ttext\n")
         for rec in records:
+            if rec.get("skipped") or not rec.get("ok"):
+                continue
             txt = _clean_line(rec.get("text", ""))
             f.write(f"{_srt_time(rec['start_s'])}\t{_srt_time(rec['end_s'])}\t{txt}\n")

@@ -15,6 +15,52 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def _is_retryable_openai_error(exc: Exception) -> bool:
+    """Return True for transient OpenAI/client failures worth retrying."""
+    name = exc.__class__.__name__
+    if name in {
+        "APIConnectionError",
+        "APITimeoutError",
+        "RateLimitError",
+        "InternalServerError",
+    }:
+        return True
+
+    status_code = getattr(exc, "status_code", None)
+    return status_code == 429 or (isinstance(status_code, int) and status_code >= 500)
+
+
+def _error_message(exc: Exception) -> str:
+    msg = str(exc).strip() or exc.__class__.__name__
+    return " ".join(msg.split())
+
+
+def _completion_with_retries(client: Any, *, max_attempts: int = 3, **kwargs: Any) -> Any:
+    """Call OpenAI chat completions and retry transient API/client failures."""
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= max_attempts or not _is_retryable_openai_error(exc):
+                raise
+
+            wait_s = min(2 ** (attempt - 1), 8)
+            logger.warning(
+                "OpenAI completion failed on attempt %s/%s; retrying in %ss: %s",
+                attempt,
+                max_attempts,
+                wait_s,
+                _error_message(exc),
+            )
+            time.sleep(wait_s)
+
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("OpenAI completion failed without an exception")
+
+
 # ── Image helpers ──────────────────────────────────────────────────────────────
 
 def _img_to_data_url(image_path: str) -> str:
@@ -126,6 +172,7 @@ def describe_slots(
             "reason": "",
             "num_images": 0,
             "text": "",
+            "original_text": "",
         }
 
         if progress_cb:
@@ -168,20 +215,25 @@ def describe_slots(
 
         try:
             messages = _build_messages(system_prompt, user_text, imgs, detail=detail)
-            resp = client.chat.completions.create(
+            resp = _completion_with_retries(
+                client,
                 model=model,
                 messages=messages,
                 temperature=float(temperature),
                 max_completion_tokens=int(max_tokens),
                 store=True,
             )
-            txt_final = (resp.choices[0].message.content or "").strip()
-            logger.info(f"Slot {slot_id}: Initial GPT response: '{txt_final[:50]}...' ({len(txt_final)} chars)")
+            txt_original = (resp.choices[0].message.content or "").strip()
+            txt_final = txt_original
+            logger.info(f"Slot {slot_id}: Initial GPT response: '{txt_original[:50]}...' ({len(txt_original)} chars)")
 
             # Syllable rewrite loop (broadcast only)
+            sylls_original: Optional[int] = None
+            sylls_final: Optional[int] = None
+            attempts = 0
             if cut == "broadcast" and syll_limit is not None:
-                attempts = 0
                 sylls = _count_syllables(txt_final)
+                sylls_original = sylls
                 logger.info(f"Slot {slot_id}: Initial syllables: {sylls}, limit: {syll_limit}")
                 while attempts < max_rewrite_attempts and sylls > syll_limit and sylls > 0:
                     attempts += 1
@@ -191,7 +243,8 @@ def describe_slots(
                         "Nur den finalen AD-Text zurückgeben.\n\n"
                         f"TEXT:\n{txt_final}"
                     )
-                    rr = client.chat.completions.create(
+                    rr = _completion_with_retries(
+                        client,
                         model=model,
                         messages=_build_messages(system_prompt, rewrite, [], detail="low"),
                         temperature=float(temperature),
@@ -202,16 +255,35 @@ def describe_slots(
                     sylls = _count_syllables(txt_final)
                     logger.info(f"Slot {slot_id}: Attempt {attempts} result: {sylls} syllables")
 
+                sylls_final = sylls
                 if sylls > syll_limit:
                     logger.warning(f"Slot {slot_id}: Could not meet syllable limit ({sylls} > {syll_limit}) after {attempts} attempts")
                 elif sylls > 0:
                     logger.info(f"Slot {slot_id}: Syllable limit met: {sylls} <= {syll_limit}")
 
-            rec.update({"ok": True, "skipped": False, "text": txt_final})
+            rec.update({
+                "ok": True,
+                "skipped": False,
+                "text": txt_final,
+                "original_text": txt_original,
+                "rewrite_attempts": attempts,
+                "syllable_limit": syll_limit,
+                "syllables_original": sylls_original,
+                "syllables_final": sylls_final,
+            })
 
         except Exception as exc:
-            logger.error(f"Slot {slot_id}: GPT error: {exc}")
-            rec.update({"ok": False, "reason": f"gpt_error:{exc}", "text": f"[ERROR:{exc}]"})
+            msg = _error_message(exc)
+            logger.error("Slot %s: GPT error: %s", slot_id, msg)
+            rec.update({
+                "ok": False,
+                "reason": "gpt_error",
+                "error": {
+                    "type": exc.__class__.__name__,
+                    "message": msg,
+                },
+                "text": "",
+            })
 
         records.append(rec)
 

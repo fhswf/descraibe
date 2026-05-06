@@ -610,6 +610,10 @@ export function JobProvider({ children }) {
                 setCurrentStep(6);
                 fetchJobData(jobId); // Need full update for outputs
                 setProgressData(prev => ({ ...prev, gpt: null }));
+                if ((data.error_count || 0) > 0) {
+                    setIsRunAllActive(false);
+                    alert(`${data.error_count} GPT-Slot(s) konnten nicht generiert werden. Bitte im Slot Manager prüfen oder GPT erneut starten.`);
+                }
             } else if (event === 'tts_done') {
                 setDoneSteps(prev => new Set(prev).add(6));
                 setCurrentStep(7);
@@ -630,7 +634,7 @@ export function JobProvider({ children }) {
                     handleRunImages();
                 } else if (event === 'images_done') {
                     handleRunGPT();
-                } else if (event === 'gpt_done') {
+                } else if (event === 'gpt_done' && !(data.error_count || 0)) {
                     handleRunTTS();
                 }
             }
