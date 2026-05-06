@@ -123,6 +123,59 @@ def test_completion_retries_transient_connection_errors(monkeypatch):
     assert completions.calls == 3
 
 
+def test_describe_slots_aborts_after_consecutive_openai_connection_errors(monkeypatch, tmp_path):
+    class APIConnectionError(Exception):
+        pass
+
+    class FakeCompletions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **kwargs):
+            self.calls += 1
+            raise APIConnectionError("Connection error.")
+
+    completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.chat = types.SimpleNamespace(
+                completions=completions
+            )
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setattr(gpt_description.time, "sleep", lambda seconds: None)
+
+    image_path = tmp_path / "frame.jpg"
+    image_path.write_bytes(b"fake-jpeg")
+    slots_df = pd.DataFrame([
+        {"slot": 1, "start_s": 1.0, "end_s": 3.0},
+        {"slot": 2, "start_s": 4.0, "end_s": 6.0},
+        {"slot": 3, "start_s": 7.0, "end_s": 9.0},
+    ])
+    slot_map_df = pd.DataFrame([
+        {"slot": 1, "img_path": str(image_path)},
+        {"slot": 2, "img_path": str(image_path)},
+        {"slot": 3, "img_path": str(image_path)},
+    ])
+
+    try:
+        gpt_description.describe_slots(
+            slots_df,
+            slot_map_df,
+            "system",
+            "user",
+            api_key="test-key",
+            max_consecutive_gpt_errors=2,
+        )
+    except gpt_description.GPTGenerationAborted as exc:
+        assert "2 consecutive OpenAI connection/API failures" in str(exc)
+    else:
+        raise AssertionError("Expected GPTGenerationAborted")
+
+    assert completions.calls == 6
+
+
 def test_exports_do_not_write_error_text_as_ad(tmp_path):
     records = [
         {

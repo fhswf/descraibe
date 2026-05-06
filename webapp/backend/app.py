@@ -1054,7 +1054,7 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
     if job.get("slots_df") is None:
         return JSONResponse({"error": "Slots not available"}, status_code=400)
 
-    api_key = body.get("api_key") or os.environ.get("OPENAI_API_KEY", "")
+    api_key = str(body.get("api_key") or os.environ.get("OPENAI_API_KEY", "")).strip()
     if not api_key:
         return JSONResponse({"error": "OpenAI API key required"}, status_code=400)
 
@@ -1099,6 +1099,10 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
         "syllables_per_second": float(body.get("syllables_per_second", 6.0)),
         "syl_safety_factor": float(body.get("syl_safety_factor", 0.85)),
         "max_rewrite_attempts": int(body.get("max_rewrite_attempts", 2)),
+        "max_consecutive_gpt_errors": int(body.get(
+            "max_consecutive_gpt_errors",
+            os.environ.get("GPT_MAX_CONSECUTIVE_ERRORS", 3),
+        )),
         "min_slot_s": float(body.get("min_slot_s", 0.5)),
     }
     gpt_run_config = {k: v for k, v in gpt_params.items() if k != "api_key"}
@@ -1304,7 +1308,7 @@ def run_tts_export(job_id: str, body: dict = Body(default={})):
     if not records:
         return JSONResponse({"error": f"No GPT records found for cut '{cut}'. Run generation first."}, status_code=400)
         
-    api_key = body.get("api_key") or os.environ.get("OPENAI_API_KEY", "")
+    api_key = str(body.get("api_key") or os.environ.get("OPENAI_API_KEY", "")).strip()
     if not api_key:
         return JSONResponse({"error": "OpenAI API key required"}, status_code=400)
         

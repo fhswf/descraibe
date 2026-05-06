@@ -15,6 +15,10 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+class GPTGenerationAborted(RuntimeError):
+    """Raised when generation should stop instead of failing every remaining slot."""
+
+
 def _is_retryable_openai_error(exc: Exception) -> bool:
     """Return True for transient OpenAI/client failures worth retrying."""
     name = exc.__class__.__name__
@@ -33,6 +37,14 @@ def _is_retryable_openai_error(exc: Exception) -> bool:
 def _error_message(exc: Exception) -> str:
     msg = str(exc).strip() or exc.__class__.__name__
     return " ".join(msg.split())
+
+
+def _abort_message(consecutive_errors: int, last_error: Exception) -> str:
+    return (
+        f"GPT generation aborted after {consecutive_errors} consecutive OpenAI connection/API failures. "
+        "This usually points to staging egress, DNS, proxy, TLS, or OpenAI API reachability problems. "
+        f"Last error: {_error_message(last_error)}"
+    )
 
 
 def _completion_with_retries(client: Any, *, max_attempts: int = 3, **kwargs: Any) -> Any:
@@ -118,6 +130,7 @@ def describe_slots(
     syllables_per_second: float = 6.0,
     syl_safety_factor: float = 0.85,
     max_rewrite_attempts: int = 2,
+    max_consecutive_gpt_errors: int = 3,
     min_slot_s: float = 0.5,
     progress_cb: Optional[Callable[[str, int, int], None]] = None,
 ) -> List[Dict[str, Any]]:
@@ -136,7 +149,7 @@ def describe_slots(
     """
     from openai import OpenAI
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=str(api_key).strip())
 
     # Build a slot_id → image_path index
     img_index: Dict[int, List[str]] = {}
@@ -154,6 +167,7 @@ def describe_slots(
 
     records: List[Dict[str, Any]] = []
     total = len(slots_df)
+    consecutive_gpt_errors = 0
 
     for idx, (_, row) in enumerate(slots_df.iterrows()):
         slot_id = int(row[col_slot])
@@ -271,6 +285,7 @@ def describe_slots(
                 "syllables_original": sylls_original,
                 "syllables_final": sylls_final,
             })
+            consecutive_gpt_errors = 0
 
         except Exception as exc:
             msg = _error_message(exc)
@@ -284,6 +299,13 @@ def describe_slots(
                 },
                 "text": "",
             })
+            if _is_retryable_openai_error(exc):
+                consecutive_gpt_errors += 1
+                if max_consecutive_gpt_errors > 0 and consecutive_gpt_errors >= max_consecutive_gpt_errors:
+                    records.append(rec)
+                    raise GPTGenerationAborted(_abort_message(consecutive_gpt_errors, exc)) from exc
+            else:
+                consecutive_gpt_errors = 0
 
         records.append(rec)
 
