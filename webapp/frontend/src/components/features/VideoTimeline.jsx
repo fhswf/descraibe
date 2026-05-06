@@ -5,11 +5,12 @@ import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
 import { useJob } from '../../hooks/useJob.jsx';
 
-export function VideoTimeline({ videoRef, videoUrl }) {
+export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
     const containerRef = useRef(null);
     const wavesurferRef = useRef(null);
     const regionsRef = useRef(null);
     const { jobData, focusedSlot, handleUpdateSlotTiming } = useJob();
+    const activeJobData = timelineJobData || jobData;
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
@@ -60,13 +61,13 @@ export function VideoTimeline({ videoRef, videoUrl }) {
     // ── AD Audio sync ───────────────────────────────────────────────────────────
     // Preload all TTS audio elements when gpt_records are available
     useEffect(() => {
-        const records = jobData?.gpt_records;
+        const records = activeJobData?.gpt_records;
         if (!records || records.length === 0) return;
 
         const newAudios = {};
         records.forEach(rec => {
             if (!rec.slot) return;
-            const el = new Audio(`/api/jobs/${jobData.job_id}/tts/${rec.slot}`);
+            const el = new Audio(`/api/jobs/${activeJobData.job_id}/tts/${rec.slot}`);
             el.preload = 'none';
             newAudios[rec.slot] = { el, start_s: rec.start_s, end_s: rec.end_s };
         });
@@ -78,7 +79,7 @@ export function VideoTimeline({ videoRef, videoUrl }) {
                 el.src = '';
             });
         };
-    }, [jobData?.gpt_records, jobData?.job_id]);
+    }, [activeJobData?.gpt_records, activeJobData?.job_id]);
 
     // Handle AD audio playback in sync with video
     const stopAllAd = useCallback(() => {
@@ -141,7 +142,7 @@ export function VideoTimeline({ videoRef, videoUrl }) {
     }, [adAudioEnabled, stopAllAd]);
 
     useEffect(() => {
-        if (!containerRef.current || !jobData?.video_path || !videoUrl) return;
+        if (!containerRef.current || !activeJobData?.video_path || !videoUrl) return;
 
         const ws = WaveSurfer.create({
             container: containerRef.current,
@@ -204,8 +205,8 @@ export function VideoTimeline({ videoRef, videoUrl }) {
             setDuration(totalDuration);
 
             // ── Pause / Voice regions ──────────────────────────────────────────
-            if (jobData.pauses && totalDuration > 0) {
-                jobData.pauses.forEach((p) => {
+            if (activeJobData.pauses && totalDuration > 0) {
+                activeJobData.pauses.forEach((p) => {
                     wsRegions.addRegion({
                         start: p.start_s,
                         end: p.end_s,
@@ -217,7 +218,7 @@ export function VideoTimeline({ videoRef, videoUrl }) {
                 });
 
                 let lastEnd = 0;
-                jobData.pauses.forEach((p) => {
+                activeJobData.pauses.forEach((p) => {
                     if (p.start_s > lastEnd) {
                         wsRegions.addRegion({
                             start: lastEnd,
@@ -243,8 +244,8 @@ export function VideoTimeline({ videoRef, videoUrl }) {
             }
 
             // ── Transcript regions (hoverable text popovers) ──────────────────
-            if (jobData.segments) {
-                jobData.segments.forEach((segment, idx) => {
+            if (activeJobData.segments) {
+                activeJobData.segments.forEach((segment, idx) => {
                     const text = String(segment.text || '').trim();
                     const start = Number(segment.start_s);
                     const end = Number(segment.end_s);
@@ -334,8 +335,8 @@ export function VideoTimeline({ videoRef, videoUrl }) {
             }
 
             // ── AD Slot regions (draggable/resizable) ─────────────────────────
-            if (jobData.slots) {
-                jobData.slots.forEach((s, idx) => {
+            if (activeJobData.slots) {
+                activeJobData.slots.forEach((s, idx) => {
                     const contentDiv = document.createElement('div');
                     contentDiv.style.display = 'flex';
                     contentDiv.style.flexDirection = 'column';
@@ -359,8 +360,8 @@ export function VideoTimeline({ videoRef, videoUrl }) {
                     textSpan.style.boxShadow = '0 1px 2px rgba(0,0,0,0.2)';
                     contentDiv.appendChild(textSpan);
 
-                    if (jobData.slot_map) {
-                        const matchingThumbs = jobData.slot_map.filter(sm => sm.slot === s.slot || sm.slot === (idx + 1));
+                    if (activeJobData.slot_map) {
+                        const matchingThumbs = activeJobData.slot_map.filter(sm => sm.slot === s.slot || sm.slot === (idx + 1));
 
                         if (matchingThumbs.length > 0) {
                             const imgContainer = document.createElement('div');
@@ -377,7 +378,7 @@ export function VideoTimeline({ videoRef, videoUrl }) {
                                 const imgName = sm.img_path ? sm.img_path.split(/[/\\]/).pop() : null;
                                 if (imgName) {
                                     const imgDom = document.createElement('img');
-                                    imgDom.src = `/api/jobs/${jobData.job_id}/images/${imgName}`;
+                                    imgDom.src = `/api/jobs/${activeJobData.job_id}/images/${imgName}`;
                                     imgDom.style.height = '60px';
                                     imgDom.style.borderRadius = '4px';
                                     imgDom.style.border = '2px solid rgba(255,255,255,0.7)';
@@ -433,8 +434,8 @@ export function VideoTimeline({ videoRef, videoUrl }) {
             }
 
             // ── AD audio description regions (non-interactive, below AD slots) ─
-            if (jobData.gpt_records) {
-                jobData.gpt_records.filter(r => r.slot).forEach(rec => {
+            if (activeJobData.gpt_records) {
+                activeJobData.gpt_records.filter(r => r.slot).forEach(rec => {
                     const contentEl = document.createElement('div');
                     contentEl.style.display = 'flex';
                     contentEl.style.alignItems = 'center';
@@ -534,7 +535,7 @@ export function VideoTimeline({ videoRef, videoUrl }) {
             ws.destroy();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [jobData, videoRef, videoUrl, handleUpdateSlotTiming]);
+    }, [activeJobData, videoRef, videoUrl, handleUpdateSlotTiming]);
 
 
     useEffect(() => {
@@ -551,13 +552,13 @@ export function VideoTimeline({ videoRef, videoUrl }) {
         if (focusedSlot != null && wavesurferRef.current) {
             let startTime = null;
 
-            if (jobData?.gpt_records?.length > 0) {
-                const rec = jobData.gpt_records.find(r => r.slot === focusedSlot);
+            if (activeJobData?.gpt_records?.length > 0) {
+                const rec = activeJobData.gpt_records.find(r => r.slot === focusedSlot);
                 if (rec) startTime = rec.start_s;
             }
 
-            if (startTime == null && jobData?.slots?.length > 0) {
-                const slotData = jobData.slots.find(s => s.slot === focusedSlot);
+            if (startTime == null && activeJobData?.slots?.length > 0) {
+                const slotData = activeJobData.slots.find(s => s.slot === focusedSlot);
                 if (slotData) startTime = slotData.start_s;
             }
 
@@ -566,13 +567,13 @@ export function VideoTimeline({ videoRef, videoUrl }) {
                 wavesurferRef.current.setTime(startTime);
             }
         }
-    }, [focusedSlot, jobData, videoRef]);
+    }, [focusedSlot, activeJobData, videoRef]);
 
-    if (!jobData?.video_path) {
+    if (!activeJobData?.video_path) {
         return null;
     }
 
-    const hasTtsRecords = jobData?.gpt_records?.some(r => r.slot);
+    const hasTtsRecords = activeJobData?.gpt_records?.some(r => r.slot);
 
     return (
         <div className="flex flex-col border-t border-border-subtle bg-bg-surface mt-2 rounded-t-xl overflow-hidden shadow-md">
@@ -635,5 +636,6 @@ VideoTimeline.propTypes = {
     videoRef: PropTypes.shape({
         current: PropTypes.instanceOf(Element)
     }),
-    videoUrl: PropTypes.string.isRequired
+    videoUrl: PropTypes.string.isRequired,
+    timelineJobData: PropTypes.object
 };

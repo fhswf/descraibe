@@ -186,11 +186,30 @@ function App() {
   const remoteVideoUrl = jobData?.video_path
     ? `/api/jobs/${jobId}/downloads/video${videoVersion ? `?v=${videoVersion}` : ''}`
     : null;
+  const [displayedVideo, setDisplayedVideo] = useState(null);
+
+  useEffect(() => {
+    if (!jobId || !jobData?.video_path || !remoteVideoUrl) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setDisplayedVideo({
+        jobId,
+        jobData,
+        remoteVideoUrl,
+        cacheKey: jobData?.video_cache_key ? `${jobId}-${jobData.video_cache_key}` : null
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, jobData, remoteVideoUrl]);
+
   const { videoUrl, cacheStatus } = useCachedVideoUrl(
-    remoteVideoUrl,
-    jobId && jobData?.video_cache_key ? `${jobId}-${jobData.video_cache_key}` : null
+    displayedVideo?.remoteVideoUrl || null,
+    displayedVideo?.cacheKey || null
   );
-  const hasVideo = Boolean(remoteVideoUrl);
+  const hasVideo = Boolean(displayedVideo?.remoteVideoUrl);
 
   return (
     <div className="grid grid-rows-[auto_1fr_auto] min-h-screen">
@@ -336,7 +355,11 @@ function App() {
 
             {videoUrl && (
               <div className="shrink-0">
-                <VideoTimeline videoRef={videoRef} videoUrl={videoUrl} />
+                <VideoTimeline
+                  videoRef={videoRef}
+                  videoUrl={videoUrl}
+                  timelineJobData={displayedVideo?.jobData}
+                />
               </div>
             )}
 
