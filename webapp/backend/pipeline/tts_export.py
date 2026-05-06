@@ -23,7 +23,7 @@ def generate_tts(
     Returns a mapping of slot_id -> path_to_tts_file
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=str(api_key).strip())
     
     tts_files = {}
     total = sum(1 for rec in records if rec.get("ok") and not rec.get("skipped") and rec.get("text"))

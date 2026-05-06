@@ -48,6 +48,38 @@ def test_describe_slots_keeps_completion_errors_out_of_text(monkeypatch, tmp_pat
     assert records[0]["error"]["message"] == "Connection error."
 
 
+def test_describe_slots_strips_api_key_whitespace(monkeypatch, tmp_path):
+    seen = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return FakeChoiceResponse("OK")
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            seen["api_key"] = api_key
+            self.chat = types.SimpleNamespace(
+                completions=FakeCompletions()
+            )
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeOpenAI))
+
+    image_path = tmp_path / "frame.jpg"
+    image_path.write_bytes(b"fake-jpeg")
+    slots_df = pd.DataFrame([{"slot": 1, "start_s": 1.0, "end_s": 3.0}])
+    slot_map_df = pd.DataFrame([{"slot": 1, "img_path": str(image_path)}])
+
+    gpt_description.describe_slots(
+        slots_df,
+        slot_map_df,
+        "system",
+        "user",
+        api_key="test-key\n",
+    )
+
+    assert seen["api_key"] == "test-key"
+
+
 def test_describe_slots_stores_original_and_shortened_text(monkeypatch, tmp_path):
     class FakeCompletions:
         def __init__(self):
