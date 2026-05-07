@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.2](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.22.1...v0.22.2) (2026-05-07)
+
+
+### Bug Fixes
+
+* trigger new release ([da559d5](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/da559d5ac767fb4471375417f33a19a670c2fd1c))
+
 ## [0.22.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.22.0...v0.22.1) (2026-05-07)
 
 
