@@ -21,7 +21,7 @@ def _frame_time(seconds: float, fps: int = 25) -> str:
     hh, rem = divmod(total_frames, 3600 * fps)
     mm, rem = divmod(rem, 60 * fps)
     ss, ff = divmod(rem, fps)
-    return f"{hh:02}:{mm:02}:{ss:02},{ff:02}"
+    return f"{hh:02}:{mm:02}:{ss:02}.{ff:02}"
 
 
 def _clean_line(txt: str) -> str:
@@ -114,7 +114,7 @@ def _write_quality(path: Path, records: List[Dict[str, Any]]) -> None:
 
 def _write_frazier(path: Path, records: List[Dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f, delimiter=";")
+        writer = csv.writer(f, delimiter=",")
         writer.writerow(["Slot", "Startzeit", "Endzeit", "Dauer_s", "Audiodeskription"])
         for rec in records:
             if rec.get("skipped") or not rec.get("ok"):
@@ -123,7 +123,7 @@ def _write_frazier(path: Path, records: List[Dict[str, Any]]) -> None:
                 rec["slot"],
                 _frame_time(rec["start_s"]),
                 _frame_time(rec["end_s"]),
-                rec["duration_s"],
+                f"{float(rec['duration_s']):.3f}",
                 _clean_line(rec.get("text", "")),
             ])
 
