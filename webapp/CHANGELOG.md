@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.3](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.22.2...v0.22.3) (2026-05-07)
+
+
+### Bug Fixes
+
+* update Frazier CSV writer to use semicolon delimiter and remove duration field ([89e695d](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/89e695d643e2608ed9f90f4e144b2eba5e666d7e))
+
 ## [0.22.2](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.22.1...v0.22.2) (2026-05-07)
 
 
