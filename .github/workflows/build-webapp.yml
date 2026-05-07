@@ -107,15 +107,29 @@ jobs:
           tag="sha-${short_sha}"
           file="webapp/k8s/overlays/staging/kustomization.yaml"
 
-          sed -i -E "s/newTag: .*/newTag: ${tag}/" "$file"
-
-          if git diff --quiet -- "$file"; then
-            echo "Staging overlay already points to ${tag}."
-            exit 0
-          fi
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$file"
-          git commit -m "chore: pin staging webapp image to ${tag} [skip ci]"
-          git push origin HEAD:main
+
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git switch -C main FETCH_HEAD
+
+            sed -i -E "s/newTag: .*/newTag: ${tag}/" "$file"
+
+            if git diff --quiet -- "$file"; then
+              echo "Staging overlay already points to ${tag}."
+              exit 0
+            fi
+
+            git add "$file"
+            git commit -m "chore: pin staging webapp image to ${tag} [skip ci]"
+
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+
+            echo "Push was rejected because main advanced; retrying (${attempt}/3)."
+          done
+
+          echo "Failed to update staging overlay after 3 attempts."
+          exit 1
