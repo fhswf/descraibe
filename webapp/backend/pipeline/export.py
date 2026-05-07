@@ -114,8 +114,8 @@ def _write_quality(path: Path, records: List[Dict[str, Any]]) -> None:
 
 def _write_frazier(path: Path, records: List[Dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f, delimiter=",")
-        writer.writerow(["Slot", "Startzeit", "Endzeit", "Dauer_s", "Audiodeskription"])
+        writer = csv.writer(f, delimiter=";")
+        writer.writerow(["Position", "Start", "End", "Text"])
         for rec in records:
             if rec.get("skipped") or not rec.get("ok"):
                 continue
@@ -123,7 +123,6 @@ def _write_frazier(path: Path, records: List[Dict[str, Any]]) -> None:
                 rec["slot"],
                 _frame_time(rec["start_s"]),
                 _frame_time(rec["end_s"]),
-                f"{float(rec['duration_s']):.3f}",
                 _clean_line(rec.get("text", "")),
             ])
 

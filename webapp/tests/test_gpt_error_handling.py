@@ -302,7 +302,7 @@ def test_exports_do_not_write_error_text_as_ad(tmp_path):
     assert set(directors_paths) == {"gesamt_txt", "quality_txt", "directors_tsv"}
 
 
-def test_frazier_csv_uses_comma_delimiter_and_dot_frame_timecode(tmp_path):
+def test_frazier_csv_uses_semicolon_delimiter_without_duration_and_dot_frame_timecode(tmp_path):
     records = [
         {
             "slot": 1,
@@ -312,7 +312,7 @@ def test_frazier_csv_uses_comma_delimiter_and_dot_frame_timecode(tmp_path):
             "ok": True,
             "skipped": False,
             "reason": "",
-            "text": "Text mit Komma, damit CSV-Quoting noetig ist.",
+            "text": "Text mit Semikolon; damit CSV-Quoting noetig ist.",
         },
         {
             "slot": 2,
@@ -331,8 +331,10 @@ def test_frazier_csv_uses_comma_delimiter_and_dot_frame_timecode(tmp_path):
     frazier = (tmp_path / "broadcast" / "audio_description_frazier.csv").read_text(encoding="utf-8")
     lines = frazier.splitlines()
 
-    assert lines[0] == "Slot,Startzeit,Endzeit,Dauer_s,Audiodeskription"
-    assert "1,00:00:00.00,00:02:01.07,121.280," in lines[1]
-    assert "2,00:00:03.24,00:00:04.00,0.040," in lines[2]
+    assert lines[0] == "Position;Start;End;Text"
+    assert lines[1] == '1;00:00:00.00;00:02:01.07;"Text mit Semikolon; damit CSV-Quoting noetig ist."'
+    assert lines[2] == "2;00:00:03.24;00:00:04.00;Frame 24 bleibt im gueltigen Bereich."
+    assert "Dauer" not in frazier
+    assert "121.280" not in frazier
     assert "00:02:01,07" not in frazier
     assert "00:00:03.25" not in frazier
