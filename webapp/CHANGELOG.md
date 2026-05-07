@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.1](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.22.0...v0.22.1) (2026-05-07)
+
+
+### Bug Fixes
+
+* update CSV writer to use comma delimiter and adjust frame time format to dot ([25e3144](https://github.com/fhswf/Audiodeskriptionen_SS25/commit/25e31447b4fa0c8eaa4152fda941f1d28d15f8ba))
+
 ## [0.22.0](https://github.com/fhswf/Audiodeskriptionen_SS25/compare/v0.21.0...v0.22.0) (2026-05-06)
 
 
