@@ -10,4 +10,4 @@ resources:
 # Updated by release-please for versioned release deployments.
 images:
   - name: ghcr.io/fhswf/audiodeskription-webapp
-    newTag: v0.22.2 # x-release-please-version
+    newTag: v0.22.3 # x-release-please-version
