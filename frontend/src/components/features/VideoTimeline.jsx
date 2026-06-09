@@ -612,7 +612,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
 
     return (
         <div className="flex flex-col border-t border-border-subtle bg-bg-surface mt-2 rounded-t-xl overflow-hidden shadow-md">
-            <div className="flex items-center justify-between px-4 py-2 bg-[#050505] border-b border-border-subtle">
+            <div className="flex items-center justify-between px-4 py-2 bg-bg-card border-b border-border-subtle">
                 <div className="flex items-center gap-6">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
                         Timeline (Sprechpausen &amp; AD-Slots)
@@ -620,7 +620,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                     {isBuffering && <span className="text-[10px] text-yellow-500 font-bold tracking-widest uppercase">⏳ Puffert...</span>}
                     <div className="flex items-center gap-3">
                         <button
-                            className="material-icons-round text-[1.2rem] hover:text-violet-500 text-text-primary transition-colors flex items-center justify-center p-1 rounded-full hover:bg-white/5"
+                            className="material-icons-round text-[1.2rem] hover:text-violet-500 text-text-primary transition-colors flex items-center justify-center p-1 rounded-full hover:bg-bg-surface"
                             onClick={() => wavesurferRef.current?.playPause()}
                             title={isPlaying ? 'Pause' : 'Play'}
                         >
@@ -633,7 +633,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                         <button
                             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all border ${adAudioEnabled
                                 ? 'bg-violet-600 text-white border-violet-500 shadow-sm shadow-violet-500/30'
-                                : 'bg-white/5 text-text-muted border-border-subtle hover:border-violet-500/50 hover:text-violet-400'}`}
+                                : 'bg-bg-surface text-text-muted border-border-subtle hover:border-violet-500/50 hover:text-violet-400'}`}
                             onClick={() => setAdAudioEnabled(v => !v)}
                             title={adAudioEnabled ? 'AD-Audio deaktivieren' : 'AD-Audio beim Abspielen ausgeben'}
                         >
@@ -646,7 +646,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                     <div className="flex items-center gap-2">
                         <span className="material-icons-round text-text-muted text-[14px]">zoom_in</span>
                         <input
-                            className="w-24 accent-violet-500 h-1 bg-white/10 rounded appearance-none"
+                            className="w-24 accent-violet-500 h-1 bg-bg-surface rounded appearance-none"
                             type="range"
                             min="10"
                             max="500"
@@ -654,13 +654,13 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                             onChange={(e) => setZoom(Number(e.target.value))}
                         />
                     </div>
-                    <div className="text-[11px] font-mono px-2 py-1 bg-white/5 rounded border border-border-subtle text-text-primary">
+                    <div className="text-[11px] font-mono px-2 py-1 bg-bg-surface rounded border border-border-subtle text-text-primary">
                         {formatTime(currentTime)} / {formatTime(duration)}
                     </div>
                 </div>
             </div>
 
-            <div className="bg-[#0a0a0a] p-4 relative pt-2">
+            <div className="bg-bg-base p-4 relative pt-2">
                 <div ref={containerRef} className="w-full"></div>
             </div>
         </div>

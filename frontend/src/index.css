@@ -14,6 +14,7 @@
   --app-text-muted: #64748b;
   --app-scrollbar-thumb: rgba(255, 255, 255, 0.18);
   --app-scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+  --app-overlay: rgba(2, 6, 23, 0.6);
 }
 
 :root[data-theme="dark"] {
@@ -32,6 +33,7 @@
   --app-text-muted: #64748b;
   --app-scrollbar-thumb: rgba(15, 23, 42, 0.2);
   --app-scrollbar-thumb-hover: rgba(15, 23, 42, 0.35);
+  --app-overlay: rgba(148, 163, 184, 0.35);
 }
 
 @media (prefers-color-scheme: light) {
@@ -47,6 +49,7 @@
     --app-text-muted: #64748b;
     --app-scrollbar-thumb: rgba(15, 23, 42, 0.2);
     --app-scrollbar-thumb-hover: rgba(15, 23, 42, 0.35);
+    --app-overlay: rgba(148, 163, 184, 0.35);
   }
 }
 

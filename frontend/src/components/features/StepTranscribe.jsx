@@ -56,7 +56,7 @@ export function StepTranscribe() {
                             Transkription erfolgreich: {segmentCount} Segment{segmentCount === 1 ? '' : 'e'}
                         </div>
                         {jobData?.transcript_preview && (
-                            <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg border border-border-subtle bg-black/20 p-3 text-xs text-text-secondary">
+                            <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg border border-border-subtle bg-bg-card p-3 text-xs text-text-secondary">
                                 {jobData.transcript_preview}
                             </pre>
                         )}

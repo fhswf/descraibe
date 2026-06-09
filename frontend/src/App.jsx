@@ -426,11 +426,11 @@ function App() {
                 <div className="flex flex-col h-full min-h-0">
                   <div className="mb-2 flex shrink-0 items-center justify-between gap-3">
                     <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider">Video Vorschau</p>
-                    <span className="rounded-md bg-white/5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                    <span className="rounded-md bg-bg-card px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted border border-border-subtle">
                       {cacheStatus === 'opfs' ? 'OPFS Cache' : cacheStatus === 'loading' ? 'Caching...' : 'Netzwerk'}
                     </span>
                   </div>
-                  <div className="flex-1 min-h-0 flex justify-center bg-black rounded-lg overflow-hidden">
+                  <div className="flex-1 min-h-0 flex justify-center bg-bg-card rounded-lg overflow-hidden border border-border-subtle">
                     {videoUrl ? (
                       <video
                         ref={videoRef}
@@ -511,7 +511,7 @@ function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJ
 
       <div className="flex flex-col gap-1" aria-label="Gespeicherte Jobs">
         {savedJobIds.length === 0 ? (
-          <div className="rounded-lg border border-border-subtle bg-white/5 px-3 py-2 text-xs text-text-secondary">
+          <div className="rounded-lg border border-border-subtle bg-bg-card px-3 py-2 text-xs text-text-secondary">
             Noch keine Jobs gespeichert.
           </div>
         ) : (
@@ -549,7 +549,7 @@ function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJ
                           ? 'bg-violet-500/15 text-violet-300'
                           : status === 'error'
                             ? 'bg-red-500/15 text-red-300'
-                            : 'bg-white/5 text-text-secondary'
+                            : 'bg-bg-card text-text-secondary'
                           }`}>
                           {showPercent ? `${percent}%` : status}
                         </span>
@@ -562,7 +562,7 @@ function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJ
                           <span className="truncate">{meta.progressMessage || (status === 'uploading' ? 'Upload' : 'In Bearbeitung')}</span>
                           {showPercent && <span className="shrink-0 font-mono">{percent}%</span>}
                         </span>
-                        <span className="mt-1 block h-1.5 overflow-hidden rounded-full bg-white/10">
+                        <span className="mt-1 block h-1.5 overflow-hidden rounded-full bg-bg-card border border-border-subtle">
                           <span
                             className={`block h-full rounded-full ${showPercent ? 'bg-violet-400' : 'bg-violet-400/60'}`}
                             style={{ width: showPercent ? `${percent}%` : '100%' }}

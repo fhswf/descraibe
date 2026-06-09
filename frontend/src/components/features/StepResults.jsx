@@ -22,7 +22,7 @@ function FileRow({ jobId, fileKey, filename }) {
     const playable = audio || video;
 
     return (
-        <div className="flex flex-col gap-2 bg-white/5 border border-border-subtle rounded-xl overflow-hidden transition-all hover:border-violet-500/50">
+        <div className="flex flex-col gap-2 bg-bg-card border border-border-subtle rounded-xl overflow-hidden transition-all hover:border-violet-500/50">
             <div className="flex items-center gap-3 px-4 py-3">
                 <span className="text-[1.2rem]">
                     {video ? '🎬' : audio ? '🎵' : '📄'}
@@ -35,7 +35,7 @@ function FileRow({ jobId, fileKey, filename }) {
                     {playable && (
                         <button
                             onClick={() => setExpanded(e => !e)}
-                            className={`w-8 h-8 flex items-center justify-center rounded-full transition-all hover:scale-105 ${expanded ? 'bg-violet-600 text-white' : 'bg-white/10 text-text-secondary hover:bg-violet-600/30 hover:text-violet-400'}`}
+                            className={`w-8 h-8 flex items-center justify-center rounded-full transition-all hover:scale-105 ${expanded ? 'bg-violet-600 text-white' : 'bg-bg-surface text-text-secondary hover:bg-violet-600/30 hover:text-violet-400'}`}
                             title={expanded ? 'Player schließen' : audio ? 'Audio abspielen' : 'Video abspielen'}
                         >
                             <span className="material-icons-round text-[1.1rem]">
@@ -47,7 +47,7 @@ function FileRow({ jobId, fileKey, filename }) {
                         href={url}
                         target="_blank"
                         rel="noreferrer"
-                        className="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 text-text-secondary hover:bg-violet-600/30 hover:text-violet-400 transition-all hover:scale-105"
+                        className="w-8 h-8 flex items-center justify-center rounded-full bg-bg-surface text-text-secondary hover:bg-violet-600/30 hover:text-violet-400 transition-all hover:scale-105"
                         title="Herunterladen"
                         download={filename}
                     >
@@ -73,7 +73,7 @@ function FileRow({ jobId, fileKey, filename }) {
                     <video
                         controls
                         autoPlay
-                        className="w-full rounded-lg max-h-[400px] bg-black"
+                        className="w-full rounded-lg max-h-[400px] bg-bg-base"
                         src={url}
                         key={url}
                     />

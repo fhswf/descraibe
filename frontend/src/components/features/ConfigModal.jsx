@@ -16,8 +16,8 @@ export function ConfigModal() {
 
   if (!isConfigModalOpen) return null;
 
-  const inputCls = "resize-y bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15";
-  const selectCls = "bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15";
+  const inputCls = "resize-y bg-bg-card border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15";
+  const selectCls = "bg-bg-card border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15";
 
   const isFixedTemp = gptParams.model && (
     gptParams.model.startsWith('o1') || 
@@ -26,8 +26,8 @@ export function ConfigModal() {
   );
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="bg-[#0f0f0f] border border-border-subtle rounded-2xl w-[80vw] h-[80vh] shadow-2xl flex flex-col">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm p-4" style={{ backgroundColor: 'var(--app-overlay)' }}>
+      <div className="bg-bg-surface border border-border-subtle rounded-2xl w-[80vw] h-[80vh] shadow-2xl flex flex-col">
         
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-border-subtle shrink-0">
@@ -62,7 +62,7 @@ export function ConfigModal() {
               className={`px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
                 activeTab === tab.id 
                   ? 'border-violet-500 text-violet-500 bg-violet-500/5' 
-                  : 'border-transparent text-text-secondary hover:text-text-primary hover:bg-white/5'
+                  : 'border-transparent text-text-secondary hover:text-text-primary hover:bg-bg-card'
               }`}
             >
               {tab.label}
@@ -84,7 +84,7 @@ export function ConfigModal() {
                             type="range" min="0.1" max="0.9" step="0.05"
                             value={vadParams.threshold}
                             onChange={e => setVadParams({ ...vadParams, threshold: parseFloat(e.target.value) })}
-                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 outline-none transition-colors accent-violet-500 pr-0 pl-0 py-0"
+                            className="bg-bg-card border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 outline-none transition-colors accent-violet-500 pr-0 pl-0 py-0"
                         />
                     </div>
                     <div className="flex flex-col gap-1.5">
@@ -220,7 +220,7 @@ export function ConfigModal() {
                             type="range" min="10" max="50" step="1"
                             value={imagesParams.threshold}
                             onChange={e => setImagesParams({ ...imagesParams, threshold: parseInt(e.target.value) })}
-                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 outline-none transition-colors accent-violet-500 pr-0 pl-0 py-0"
+                            className="bg-bg-card border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 outline-none transition-colors accent-violet-500 pr-0 pl-0 py-0"
                         />
                     </div>
                     <div className="flex flex-col gap-1.5">
@@ -229,7 +229,7 @@ export function ConfigModal() {
                             type="range" min="20" max="200" step="5"
                             value={imagesParams.blur_threshold}
                             onChange={e => setImagesParams({ ...imagesParams, blur_threshold: parseInt(e.target.value) })}
-                            className="bg-white/5 border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 outline-none transition-colors accent-violet-500 pr-0 pl-0 py-0"
+                            className="bg-bg-card border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 outline-none transition-colors accent-violet-500 pr-0 pl-0 py-0"
                         />
                     </div>
                     <div className="flex flex-col gap-1.5">
