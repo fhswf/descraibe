@@ -3,7 +3,7 @@
 # Single-image build: the FastAPI backend serves the built frontend directly.
 #
 # Build:
-#   docker build -t audiodeskription-webapp webapp/
+#   docker build -t audiodeskription-webapp .
 #
 # Run (GPU image, pass your OpenAI API key at runtime):
 #   docker run -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-webapp
@@ -17,9 +17,9 @@ WORKDIR /app/frontend
 ARG VITE_APP_BUILD_CHANNEL=""
 ARG VITE_APP_COMMIT_SHA=""
 ARG VITE_APP_REPOSITORY_URL=""
-COPY webapp/frontend/package*.json ./
+COPY frontend/package*.json ./
 RUN npm install
-COPY webapp/frontend/ ./
+COPY frontend/ ./
 RUN npm run build
 
 # ── Base image ─────────────────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 # Copy dependency manifest and lockfile first so Docker can cache the install layer
-COPY webapp/pyproject.toml webapp/uv.lock ./
+COPY pyproject.toml uv.lock ./
 
 # Install Python dependencies without bursting cache on every source code change.
 # torch/torchaudio and their CUDA libraries come from the PyTorch base image.
@@ -66,7 +66,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && rm /tmp/requirements-runtime.txt
 
 # Copy the rest of the webapp
-COPY webapp/backend ./backend
+COPY backend ./backend
 # Copy the built frontend from the builder stage
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
