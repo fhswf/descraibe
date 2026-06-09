@@ -6,6 +6,8 @@ namespace: audiodeskription
 resources:
   - namespace.yaml
   - pvc.yaml
+  - cnpg-cluster.yaml
+  - cnpg-pooler.yaml
   - configmap-gpt.yaml
   - configmap-prompts.yaml
   - deployment-backend.yaml

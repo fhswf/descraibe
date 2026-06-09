@@ -1,0 +1,18 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: descraibe-db-rw
+  namespace: audiodeskription
+  labels:
+    app.kubernetes.io/name: audiodeskription
+    app.kubernetes.io/component: database
+spec:
+  cluster:
+    name: descraibe-db
+  instances: 2
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      default_pool_size: "25"
+      max_client_conn: "500"

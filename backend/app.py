@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from event_bus import BusEvent, event_bus
 import session_manager as sm
+from db.store import DataStore
 
 # Pipeline modules are imported lazily inside route handlers to avoid
 # forcing GPU/ML dependencies to be installed just to start the server.
@@ -83,6 +84,8 @@ _USER_CONFIG_DIR = Path(os.environ.get("AD_USER_CONFIG_DIR", "") or (os.environ.
 _OIDC_ID_TOKEN_COOKIE = os.environ.get("OIDC_ID_TOKEN_COOKIE_NAME", "oidc_id_token").strip() or "oidc_id_token"
 _JWKS_CACHE: dict[str, Any] = {"expires_at": 0.0, "key_set": None}
 _JWKS_CACHE_TTL_SECONDS = 3600.0
+_DATABASE_URL = os.environ.get("AD_DATABASE_URL", "").strip()
+_DATASTORE = DataStore(_DATABASE_URL, _USER_CONFIG_DIR, logger)
 
 oauth = OAuth()
 if _OIDC_ENABLED:
@@ -486,35 +489,13 @@ def _require_current_user(request: Request) -> dict[str, Any]:
     return user
 
 
-def _safe_user_id(user: dict[str, Any]) -> str:
-    issuer = str(user.get("iss", "")).strip()
-    subject = str(user.get("sub", "")).strip()
-    digest = hashlib.sha256(f"{issuer}|{subject}".encode("utf-8")).hexdigest()
-    return digest
+def _read_user_config(user: dict[str, Any]) -> dict[str, Any]:
+    payload = _DATASTORE.get_user_config(user)
+    return payload if isinstance(payload, dict) else {}
 
 
-def _user_config_path(user: dict[str, Any]) -> Path:
-    return _USER_CONFIG_DIR / _safe_user_id(user) / "config.json"
-
-
-def _read_user_config(user: dict[str, Any]) -> Optional[dict[str, Any]]:
-    path = _user_config_path(user)
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        logger.warning("Could not parse user config at %s", path)
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _write_user_config(user: dict[str, Any], payload: dict[str, Any]) -> None:
-    path = _user_config_path(user)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+def _write_user_config(user: dict[str, Any], config: dict[str, Any]) -> int:
+    return _DATASTORE.put_user_config(user, config)
 
 
 # ── Prompt auto-loader (GPT_PROMPTS_DIR) ──────────────────────────────────────
@@ -776,7 +757,7 @@ def auth_logout(request: Request):
 @app.get("/api/user/config")
 def get_user_config(request: Request):
     user = _require_current_user(request)
-    payload = _read_user_config(user) or {}
+    payload = _read_user_config(user)
     config = payload.get("config")
     if not isinstance(config, dict):
         config = {}
@@ -798,12 +779,59 @@ def put_user_config(request: Request, body: dict = Body(default={})):
     if len(encoded.encode("utf-8")) > 1_000_000:
         raise HTTPException(status_code=413, detail="Config payload too large (max 1 MB)")
 
-    payload = {
-        "config": incoming,
-        "updated_at": int(time.time()),
-    }
-    _write_user_config(user, payload)
-    return {"ok": True, "updated_at": payload["updated_at"]}
+    updated_at = _write_user_config(user, incoming)
+    return {"ok": True, "updated_at": updated_at}
+
+
+@app.get("/api/user/presets")
+def list_user_presets(request: Request):
+    user = _require_current_user(request)
+    presets = _DATASTORE.list_presets(user)
+    return {"presets": presets}
+
+
+@app.post("/api/user/presets")
+def create_user_preset(request: Request, body: dict = Body(default={})):
+    user = _require_current_user(request)
+    incoming = body.get("preset") if isinstance(body, dict) and isinstance(body.get("preset"), dict) else body
+    if not isinstance(incoming, dict):
+        raise HTTPException(status_code=400, detail="Invalid preset payload")
+
+    try:
+        preset = _DATASTORE.create_preset(user, incoming)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not create preset: {exc}") from exc
+    return {"preset": preset}
+
+
+@app.put("/api/user/presets/{preset_id}")
+def update_user_preset(request: Request, preset_id: str, body: dict = Body(default={})):
+    user = _require_current_user(request)
+    incoming = body.get("preset") if isinstance(body, dict) and isinstance(body.get("preset"), dict) else body
+    if not isinstance(incoming, dict):
+        raise HTTPException(status_code=400, detail="Invalid preset payload")
+
+    try:
+        preset = _DATASTORE.update_preset(user, preset_id, incoming)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not update preset: {exc}") from exc
+    if not preset:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return {"preset": preset}
+
+
+@app.delete("/api/user/presets/{preset_id}")
+def delete_user_preset(request: Request, preset_id: str):
+    user = _require_current_user(request)
+    try:
+        deleted = _DATASTORE.delete_preset(user, preset_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not delete preset: {exc}") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return {"ok": True}
 
 
 

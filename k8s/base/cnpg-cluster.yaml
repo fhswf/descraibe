@@ -1,0 +1,39 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: descraibe-db
+  namespace: audiodeskription
+  labels:
+    app.kubernetes.io/name: audiodeskription
+    app.kubernetes.io/component: database
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+
+  bootstrap:
+    initdb:
+      database: descraibe
+      owner: descraibe_app
+      secret:
+        name: descraibe-db-app-user
+
+  superuserSecret:
+    name: descraibe-db-superuser
+
+  storage:
+    size: 100Gi
+    storageClass: ceph-filesystem
+
+  walStorage:
+    size: 20Gi
+    storageClass: ceph-filesystem
+
+  postgresql:
+    parameters:
+      max_connections: "300"
+      shared_buffers: "512MB"
+      work_mem: "16MB"
+      maintenance_work_mem: "256MB"
+
+  monitoring:
+    enablePodMonitor: true

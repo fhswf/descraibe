@@ -7,6 +7,7 @@ namespace: audiodeskription-staging
 resources:
   - ../../base
   - openai-sealedsecret.yaml
+  - cnpg-sealedsecret.yaml
 
 # Bootstrap values. After every successful push to main, CI replaces both tags
 # with the immutable sha-* tag that it just built and commits the change.
@@ -67,3 +68,33 @@ patches:
         value:
           name: OIDC_REDIRECT_URI
           value: https://descraibe.gawron.cloud/api/auth/callback
+  - target:
+      kind: Deployment
+      name: audiodeskription-backend
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: audiodeskription-backend
+      spec:
+        template:
+          spec:
+            containers:
+              - name: backend
+                env:
+                  - name: AD_DATABASE_URL
+                    valueFrom:
+                      secretKeyRef:
+                        name: descraibe-db-staging-app
+                        key: uri
+                        optional: true
+  - target:
+      kind: Cluster
+      name: descraibe-db
+    patch: |-
+      - op: replace
+        path: /spec/bootstrap/initdb/secret/name
+        value: descraibe-db-app-user-staging
+      - op: replace
+        path: /spec/superuserSecret/name
+        value: descraibe-db-superuser-staging

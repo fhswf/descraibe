@@ -6,6 +6,7 @@ namespace: audiodeskription
 resources:
   - ../../base
   - openai-sealedsecret.yaml
+  - cnpg-sealedsecret.yaml
 
 # Updated by release-please for versioned release deployments.
 images:

@@ -126,6 +126,27 @@ Paste the resulting ciphertext as `spec.encryptedData.OPENAI_API_KEY` in:
 Keep the names and namespaces unchanged; SealedSecrets are namespace/name bound
 unless you deliberately use a different sealing scope.
 
+### Sealed CNPG bootstrap secrets
+
+CNPG bootstrap credentials are managed as SealedSecrets in overlays:
+
+- `k8s/overlays/release/cnpg-sealedsecret.yaml`
+- `k8s/overlays/staging/cnpg-sealedsecret.yaml`
+
+Generate fresh random passwords and ciphertexts with:
+
+```bash
+./k8s/scripts/generate-cnpg-sealed-secrets.sh release
+./k8s/scripts/generate-cnpg-sealed-secrets.sh staging
+```
+
+The script uses:
+`kubeseal --controller-name sealed-secrets --controller-namespace kube-system`
+by default.
+
+Paste the printed ciphertexts into the matching `encryptedData` keys.  
+Do not commit plain Kubernetes `Secret` manifests with raw passwords.
+
 ### Updating prompts or GPT config
 
 Edit the relevant ConfigMap file and push to `main` — ArgoCD syncs within ≈3 minutes and rolls the pod.
@@ -159,6 +180,7 @@ git push
 | `OIDC_SESSION_SECRET` | *(unset)* | No | Cookie/session signing secret used for authenticated browser sessions. Set in production. |
 | `OIDC_COOKIE_SECURE` | `false` | No | Set to `true` when running behind HTTPS so session cookies are marked `Secure`. |
 | `OIDC_ID_TOKEN_COOKIE_NAME` | `oidc_id_token` | No | Cookie name used to store the OIDC ID token (JWT). |
+| `AD_DATABASE_URL` | *(unset)* | No | PostgreSQL DSN for relational metadata storage (users, user config, presets). Example: `postgresql://user:pass@host:5432/descraibe`. If unset, the app uses file-based fallback for user config/presets. |
 | `AD_USER_CONFIG_DIR` | `${AD_JOBS_DIR}/users` | No | Directory for per-user config storage (`jobs`, `saved metadata`, and pipeline settings) for logged-in users. |
 
 > [!IMPORTANT]
@@ -329,7 +351,28 @@ Each uploaded video creates a **job directory** under `$AD_JOBS_DIR/<uuid>/` con
 ```
 
 > [!WARNING]
-> Job state is stored **in memory** and is lost on container restart. Only the files in `$AD_JOBS_DIR` survive. Re-uploading and re-running the pipeline is required after a restart.
+> Large job artifacts are stored in `$AD_JOBS_DIR`. Runtime job state still resides in-memory and active runs are interrupted on restart.  
+> If `AD_DATABASE_URL` is configured, user config and presets are persisted in PostgreSQL; otherwise they are file-based under `AD_USER_CONFIG_DIR`.
+
+### Relational Metadata (PostgreSQL)
+
+With `AD_DATABASE_URL` set, the backend uses PostgreSQL for:
+- user config (`/api/user/config`)
+- user-managed AD presets (`/api/user/presets`)
+
+Run migrations before rollout:
+
+```bash
+AD_DATABASE_URL=postgresql://... uv run python -m backend.db.migrate
+```
+
+Kubernetes CNPG resources are included in `k8s/base/`:
+- `cnpg-cluster.yaml`
+- `cnpg-pooler.yaml`
+
+CNPG bootstrap credentials are provided via SealedSecrets in overlays:
+- `k8s/overlays/release/cnpg-sealedsecret.yaml`
+- `k8s/overlays/staging/cnpg-sealedsecret.yaml`
 
 ---
 
