@@ -2,25 +2,71 @@
 
 @import "tailwindcss";
 
+:root {
+  color-scheme: dark;
+  --app-bg-base: #0d0f14;
+  --app-bg-surface: #13161e;
+  --app-bg-card: rgba(255, 255, 255, 0.04);
+  --app-border-subtle: rgba(255, 255, 255, 0.08);
+  --app-border-accent: rgba(139, 92, 246, 0.4);
+  --app-text-primary: #f1f5f9;
+  --app-text-secondary: #94a3b8;
+  --app-text-muted: #64748b;
+  --app-scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --app-scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --app-bg-base: #f1f5f9;
+  --app-bg-surface: #ffffff;
+  --app-bg-card: #f8fafc;
+  --app-border-subtle: #dbe4ee;
+  --app-border-accent: rgba(139, 92, 246, 0.25);
+  --app-text-primary: #0f172a;
+  --app-text-secondary: #334155;
+  --app-text-muted: #64748b;
+  --app-scrollbar-thumb: rgba(15, 23, 42, 0.2);
+  --app-scrollbar-thumb-hover: rgba(15, 23, 42, 0.35);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    color-scheme: light;
+    --app-bg-base: #f1f5f9;
+    --app-bg-surface: #ffffff;
+    --app-bg-card: #f8fafc;
+    --app-border-subtle: #dbe4ee;
+    --app-border-accent: rgba(139, 92, 246, 0.25);
+    --app-text-primary: #0f172a;
+    --app-text-secondary: #334155;
+    --app-text-muted: #64748b;
+    --app-scrollbar-thumb: rgba(15, 23, 42, 0.2);
+    --app-scrollbar-thumb-hover: rgba(15, 23, 42, 0.35);
+  }
+}
+
 @theme {
-  --color-bg-base: #0d0f14;
-  --color-bg-surface: #13161e;
-  --color-bg-card: rgba(255, 255, 255, 0.04);
-
-  --color-border-subtle: rgba(255, 255, 255, 0.08);
-  --color-border-accent: rgba(139, 92, 246, 0.4);
-
-  --color-text-primary: #f1f5f9;
-  --color-text-secondary: #94a3b8;
-  --color-text-muted: #475569;
+  --color-bg-base: var(--app-bg-base);
+  --color-bg-surface: var(--app-bg-surface);
+  --color-bg-card: var(--app-bg-card);
+  --color-border-subtle: var(--app-border-subtle);
+  --color-border-accent: var(--app-border-accent);
+  --color-text-primary: var(--app-text-primary);
+  --color-text-secondary: var(--app-text-secondary);
+  --color-text-muted: var(--app-text-muted);
 
   --font-sans: 'Inter', system-ui, sans-serif;
 }
 
 body {
   font-family: 'Inter', system-ui, sans-serif;
-  background: #0d0f14;
-  color: #f1f5f9;
+  background: var(--app-bg-base);
+  color: var(--app-text-primary);
   min-height: 100vh;
   line-height: 1.6;
 }
@@ -55,7 +101,7 @@ body {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  scrollbar-color: var(--app-scrollbar-thumb) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -68,10 +114,10 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--app-scrollbar-thumb);
   border-radius: 99px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background: var(--app-scrollbar-thumb-hover);
 }

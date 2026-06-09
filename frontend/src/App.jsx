@@ -26,6 +26,14 @@ const COMMIT_URL = COMMIT_SHA && REPOSITORY_URL ? `${REPOSITORY_URL}/commit/${CO
 const SHOW_STAGING_SHA = BUILD_CHANNEL === 'staging' && Boolean(SHA_TAG);
 const LINK_STAGING_SHA = SHOW_STAGING_SHA && Boolean(COMMIT_URL);
 const SHOW_VERSION_LABEL = !SHOW_STAGING_SHA && Boolean(VERSION_LABEL);
+const THEME_STORAGE_KEY = 'descraibe-theme-mode';
+const THEME_OPTIONS = ['system', 'light', 'dark'];
+
+function getInitialThemeMode() {
+  if (typeof window === 'undefined') return 'system';
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return THEME_OPTIONS.includes(stored) ? stored : 'system';
+}
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes)) return 'unbekannt';
@@ -135,6 +143,12 @@ function App() {
   } = useJob();
 
   const uploadInputRef = useRef(null);
+  const [themeMode, setThemeMode] = useState(getInitialThemeMode);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+  }, [themeMode]);
 
   const handleUpload = async (file) => {
     setProgressData(prev => ({ ...prev, upload: { msg: 'Starte Upload...', percent: 0 } }));
@@ -217,12 +231,14 @@ function App() {
   return (
     <div className="grid grid-rows-[auto_1fr_auto] min-h-screen">
       <header className="h-14 border-b border-border-subtle flex items-center justify-between px-4 bg-bg-surface z-50 sticky top-0">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <img src="/favicon.png" alt="DescrAIbe Logo" className="w-8 h-8 rounded-[8px] object-cover shadow-sm" />
-            <div className="flex flex-col">
-              <h1 className="font-bold text-lg tracking-tight leading-none">Descr<span className="text-violet-500 text-xl">AI</span>be <span className="font-light opacity-60">Pipeline</span></h1>
-              <span className="text-[10px] text-text-muted mt-0.5">
+        <div className="flex items-center gap-5 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <img src="/favicon.png" alt="DescrAIbe Logo" className="w-8 h-8 rounded-[8px] object-cover shadow-sm ring-1 ring-border-subtle" />
+            <div className="flex flex-col leading-none min-w-0">
+              <h1 className="font-bold text-[15px] tracking-tight text-text-primary truncate">
+                Descr<span className="text-violet-500">AI</span>be <span className="font-normal text-text-muted text-xs">Pipeline</span>
+              </h1>
+              <span className="text-[10px] text-text-muted mt-1 truncate">
                 v{APP_VERSION}
                 {SHOW_STAGING_SHA && (
                   <>
@@ -248,15 +264,28 @@ function App() {
           </div>
           {jobId && (
             <>
-              <div className="h-6 w-px bg-border-subtle mx-2"></div>
-              <div className="flex items-center gap-2 text-xs font-mono opacity-50">
+              <div className="h-6 w-px bg-border-subtle"></div>
+              <div className="hidden md:flex items-center gap-2 text-xs font-mono text-text-secondary truncate">
                 <span className={`w-2 h-2 rounded-full ${sseConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
-                <span>Job: {jobId}</span>
+                <span className="truncate">Job: {jobId}</span>
               </div>
             </>
           )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <label className="sr-only" htmlFor="theme-mode">Theme</label>
+          <select
+            id="theme-mode"
+            value={themeMode}
+            onChange={(event) => setThemeMode(event.target.value)}
+            className="px-2 py-1.5 rounded-lg text-xs font-medium border border-border-subtle bg-bg-base text-text-secondary hover:text-text-primary transition-colors focus:outline-none focus:ring-2 focus:ring-violet-500/35"
+            title="Theme auswählen"
+          >
+            <option value="system">System</option>
+            <option value="light">Hell</option>
+            <option value="dark">Dunkel</option>
+          </select>
+          <div className="h-6 w-px bg-border-subtle mx-1"></div>
           {authState.enabled && (
             authState.authenticated ? (
               <>
@@ -264,7 +293,7 @@ function App() {
                   {authState.user?.name || authState.user?.email || 'Angemeldet'}
                 </span>
                 <button
-                  className="px-3 py-2 rounded-lg text-xs font-medium border border-border-subtle hover:bg-bg-card transition-colors"
+                  className="px-3 py-2 rounded-lg text-xs font-medium border border-border-subtle text-text-secondary hover:text-text-primary hover:bg-bg-card transition-colors"
                   onClick={logout}
                 >
                   Logout
@@ -272,7 +301,7 @@ function App() {
               </>
             ) : (
               <button
-                className="px-3 py-2 rounded-lg text-xs font-medium border border-violet-500/40 text-violet-300 hover:bg-violet-500/10 transition-colors"
+                className="px-3 py-2 rounded-lg text-xs font-medium border border-violet-500/40 text-violet-500 hover:bg-violet-500/10 transition-colors"
                 onClick={login}
               >
                 Login
@@ -280,7 +309,7 @@ function App() {
             )
           )}
           <button
-            className="px-4 py-2 bg-violet-500 hover:bg-opacity-90 transition-all rounded-lg text-white text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+            className="px-4 py-2 bg-violet-500 hover:bg-violet-600 transition-all rounded-lg text-white text-sm font-medium flex items-center gap-2 disabled:opacity-50 shadow-sm shadow-violet-500/20"
             onClick={handleSaveSrtTexts}
             disabled={isSavingSrt}
           >
@@ -288,11 +317,11 @@ function App() {
             {isSavingSrt ? 'Speichert...' : 'Änderungen speichern'}
           </button>
           <button 
-            className="p-2 hover:bg-bg-card rounded-full transition-colors flex items-center justify-center"
+            className="p-2 hover:bg-bg-card rounded-full transition-colors flex items-center justify-center text-text-secondary hover:text-text-primary"
             onClick={() => setIsConfigModalOpen(true)}
             title="Prompts & Konfiguration"
           >
-            <span className="material-icons-round text-text-secondary">settings</span>
+            <span className="material-icons-round">settings</span>
           </button>
         </div>
       </header>
