@@ -9,6 +9,10 @@ metadata:
 spec:
   replicas: 1     # Keep replicas=1: the pipeline holds per-job in-memory state.
                   # Scale-out requires externalizing state (e.g. Redis + shared PVC).
+  # Avoid rollout deadlocks with scarce MIG resources:
+  # terminate old pod first, then schedule the new one.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: audiodeskription-backend
