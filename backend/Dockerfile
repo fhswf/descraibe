@@ -65,24 +65,24 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ── Runtime config ─────────────────────────────────────────────────────────────
 # All values can be overridden at runtime:
 #   docker run -e OPENAI_API_KEY=sk-... -e MAX_UPLOAD_MB=4096 ...
+#
+# NOTE: OPENAI_API_KEY is intentionally NOT set here. It must be injected at
+# runtime only (via k8s Secret / envFrom, or -e at docker run). Setting it in
+# ENV would persist the value (or an empty placeholder) in the image metadata.
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    # --- Required (no default) -----------------------------------
-    # OpenAI API key used for GPT scene-description calls.
-    # Must be set at runtime; the app will reject /api/run/gpt if absent.
-    OPENAI_API_KEY="" \
     # --- Job storage ---------------------------------------------
     # Directory where per-job temp files (video, audio, frames) are written.
     # Mount a persistent volume here to survive container restarts.
     AD_JOBS_DIR=/app/jobs \
     # --- Upload limits -------------------------------------------
-    # Maximum video upload size in megabytes (Flask MAX_CONTENT_LENGTH).
+    # Maximum video upload size in megabytes.
     MAX_UPLOAD_MB=2048 \
     # --- Uvicorn tuning -----------------------------------------
     # Keep workers=1: the pipeline holds large in-memory state per job.
     UVICORN_WORKERS=1 \
-    # Keep-alive timeout (seconds). Uvicorn does not have a hard request timeout like Gunicorn.
+    # Keep-alive timeout (seconds).
     UVICORN_TIMEOUT=600 \
     # Graceful shutdown timeout (seconds), relevant for open SSE/video connections.
     UVICORN_GRACEFUL_TIMEOUT=30

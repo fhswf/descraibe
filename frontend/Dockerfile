@@ -29,7 +29,7 @@ FROM nginx:alpine
 # Remove the default nginx config
 RUN rm /etc/nginx/conf.d/default.conf
 
-COPY docker/nginx.conf /etc/nginx/conf.d/frontend.conf
+COPY frontend/nginx.conf /etc/nginx/conf.d/frontend.conf
 
 COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
 
