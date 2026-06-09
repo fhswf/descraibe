@@ -8,6 +8,8 @@ resources:
   - pvc.yaml
   - configmap-gpt.yaml
   - configmap-prompts.yaml
-  - deployment.yaml
-  - service.yaml
+  - deployment-backend.yaml
+  - deployment-frontend.yaml
+  - service-backend.yaml
+  - service-frontend.yaml
   - ingress.yaml

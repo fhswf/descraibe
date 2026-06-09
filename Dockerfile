@@ -1,26 +1,15 @@
-# ── Audiodeskription Webapp Docker Image ──────────────────────────────────────
+# ── Audiodeskription Backend Docker Image ─────────────────────────────────────
 #
-# Single-image build: the FastAPI backend serves the built frontend directly.
+# FastAPI/PyTorch backend. Static frontend is served separately by nginx.
 #
 # Build:
-#   docker build -t audiodeskription-webapp .
+#   docker build -t audiodeskription-backend .
 #
 # Run (GPU image, pass your OpenAI API key at runtime):
-#   docker run -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-webapp
+#   docker run -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-backend
 #
 # The runtime image already includes PyTorch, CUDA and cuDNN. The Kubernetes
 # GPU Operator still provides the host driver, device plugin and runtime hooks.
-
-# ── Frontend Build ─────────────────────────────────────────────────────────────
-FROM node:24-slim AS frontend-builder
-WORKDIR /app/frontend
-ARG VITE_APP_BUILD_CHANNEL=""
-ARG VITE_APP_COMMIT_SHA=""
-ARG VITE_APP_REPOSITORY_URL=""
-COPY frontend/package*.json ./
-RUN npm install
-COPY frontend/ ./
-RUN npm run build
 
 # ── Base image ─────────────────────────────────────────────────────────────────
 # GPU-first runtime: PyTorch, CUDA 12.8 and cuDNN 9 are preinstalled in
@@ -65,10 +54,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && uv pip install --break-system-packages --requirements /tmp/requirements-runtime.txt \
     && rm /tmp/requirements-runtime.txt
 
-# Copy the rest of the webapp
+# Copy the backend source
 COPY backend ./backend
-# Copy the built frontend from the builder stage
-COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 # Install the actual project (nearly instant since deps are already there)
 RUN --mount=type=cache,target=/root/.cache/uv \

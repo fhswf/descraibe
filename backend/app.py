@@ -23,7 +23,6 @@ from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException, Bod
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -35,8 +34,6 @@ import session_manager as sm
 # forcing GPU/ML dependencies to be installed just to start the server.
 
 # ── App setup ──────────────────────────────────────────────────────────────────
-
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 
 app = FastAPI(title="Audiodeskription API", docs_url=None)
 
@@ -551,14 +548,6 @@ async def custom_swagger_ui_html():
         swagger_css_url="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css",
     )
 
-
-# ── Frontend ───────────────────────────────────────────────────────────────────
-
-@app.get("/")
-def index():
-    if not FRONTEND_DIR.exists():
-        return JSONResponse({"error": "Frontend build not found. Run npm run build in the frontend directory."})
-    return FileResponse(FRONTEND_DIR / "index.html")
 
 
 # ── Upload ─────────────────────────────────────────────────────────────────────
@@ -1654,10 +1643,6 @@ def preview_image(job_id: str, img_name: str):
 
     return JSONResponse({"error": "Image not found"}, status_code=404)
 
-
-# Mount static files last so it doesn't intercept API routes
-if FRONTEND_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
 
 
 # ── Run Server ─────────────────────────────────────────────────────────────────

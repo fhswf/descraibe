@@ -1,27 +1,27 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: audiodeskription
+  name: audiodeskription-backend
   namespace: audiodeskription
   labels:
     app.kubernetes.io/name: audiodeskription
-    app.kubernetes.io/component: webapp
+    app.kubernetes.io/component: backend
 spec:
   replicas: 1     # Keep replicas=1: the pipeline holds per-job in-memory state.
                   # Scale-out requires externalizing state (e.g. Redis + shared PVC).
   selector:
     matchLabels:
-      app: audiodeskription
+      app: audiodeskription-backend
   template:
     metadata:
       labels:
-        app: audiodeskription
+        app: audiodeskription-backend
         app.kubernetes.io/name: audiodeskription
+        app.kubernetes.io/component: backend
     spec:
       containers:
-        - name: webapp
-          # Update image tag to match your registry and CI pipeline tag.
-          image: ghcr.io/fhswf/audiodeskription-webapp:latest
+        - name: backend
+          image: ghcr.io/fhswf/descraibe/audiodeskription-backend:latest
           imagePullPolicy: Always
           ports:
             - name: http
@@ -59,9 +59,8 @@ spec:
               mountPath: /app/config/prompts
               readOnly: true
           # ── Resources ────────────────────────────────────────────────────────
-          # Minimum viable for CPU inference. Adjust for GPU nodes.
           resources:
-            requests:                
+            requests:
               nvidia.com/mig-2g.20gb: "1"
               cpu: "2"
               memory: "8Gi"

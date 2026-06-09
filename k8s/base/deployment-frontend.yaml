@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audiodeskription-frontend
+  namespace: audiodeskription
+  labels:
+    app.kubernetes.io/name: audiodeskription
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audiodeskription-frontend
+  template:
+    metadata:
+      labels:
+        app: audiodeskription-frontend
+        app.kubernetes.io/name: audiodeskription
+        app.kubernetes.io/component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/fhswf/descraibe/audiodeskription-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          # ── Resources ────────────────────────────────────────────────────────
+          # nginx serving static files: minimal resources needed.
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "64Mi"
+          # ── Probes ───────────────────────────────────────────────────────────
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3

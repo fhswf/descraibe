@@ -8,10 +8,12 @@ resources:
   - ../../base
   - openai-sealedsecret.yaml
 
-# Bootstrap value. After every successful push to main, CI replaces this with
-# the immutable sha-* image tag that it just built and commits the change.
+# Bootstrap values. After every successful push to main, CI replaces both tags
+# with the immutable sha-* tag that it just built and commits the change.
 images:
-  - name: ghcr.io/fhswf/audiodeskription-webapp
+  - name: ghcr.io/fhswf/descraibe/audiodeskription-backend
+    newTag: sha-ae31de9
+  - name: ghcr.io/fhswf/descraibe/audiodeskription-frontend
     newTag: sha-ae31de9
 
 patches:
@@ -24,7 +26,7 @@ patches:
         value: descraibe.gawron.cloud
   - target:
       kind: Deployment
-      name: audiodeskription
+      name: audiodeskription-backend
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/0/secretRef/name

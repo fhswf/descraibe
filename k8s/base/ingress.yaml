@@ -11,17 +11,26 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
     traefik.ingress.kubernetes.io/router.tls.certresolver: "letsencrypt"
-    
+
 spec:
   ingressClassName: traefik
   rules:
     - host: descraibe.fh-swf.cloud
       http:
         paths:
+          # /api/* → FastAPI backend (SSE, uploads, downloads, all API routes)
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: audiodeskription-backend
+                port:
+                  name: http
+          # /* → nginx frontend (React SPA + static assets)
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: audiodeskription
+                name: audiodeskription-frontend
                 port:
                   name: http

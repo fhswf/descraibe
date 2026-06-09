@@ -1,4 +1,4 @@
-name: Build & Push Webapp Container
+name: Build & Push Containers
 
 on:
   push:
@@ -11,51 +11,46 @@ on:
   workflow_call:
     inputs:
       release_tag:
-        description: 'Tag to apply to the image (e.g. v1.0.0)'
+        description: 'Tag to apply to the images (e.g. v1.0.0)'
         required: false
         type: string
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Optional: version tag to apply to the image (e.g. v0.18.0)'
+        description: 'Optional: version tag to apply to the images (e.g. v0.18.0)'
         required: false
         type: string
 
 concurrency:
-  # Use a more descriptive group name. 
+  # Use a more descriptive group name.
   # For release-please calls, use the tag name if available to avoid cancellation by a push build.
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ inputs.release_tag || github.ref_name }}
   cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/audiodeskription-webapp
+  IMAGE_OWNER: ${{ github.repository }}
 
 jobs:
-  build:
-    # Pushes to main publish the staging image; tags publish release images.
+
+  # ── Backend image (PyTorch / FastAPI) ─────────────────────────────────────────
+  build-backend:
     if: |
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))) ||
       (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'workflow_call')
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # needed to update the staging overlay with the built sha tag
-      packages: write   # needed to push to ghcr.io
+      contents: read
+      packages: write
 
     steps:
-
-      # ── Checkout ──────────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── Set up Docker Buildx (multi-platform + layer cache support) ───────────
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ── Log in to GitHub Container Registry ───────────────────────────────────
-      # Required for image pushes and for exporting the BuildKit registry cache.
-      # This job only runs for merged PRs, tags, manual dispatches, or workflow calls.
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -63,15 +58,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Derive image tags & labels (OCI standard) ─────────────────────────────
-      # docker/metadata-action handles:
-      #   • main pushes    → :staging +  :<sha> (overlay is pinned to :<sha>)
-      #   • semver tags    → :1.2.3   +  :1.2  +  :1  +  :latest
-      - name: Extract Docker metadata
+      - name: Extract Docker metadata (backend)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/audiodeskription-backend
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -81,8 +72,7 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
 
-      # ── Build and push ────────────────────────────────────────────────────────
-      - name: Build and push Docker image
+      - name: Build and push backend image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -90,17 +80,78 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/audiodeskription-backend:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/audiodeskription-backend:buildcache,mode=max
+
+
+  # ── Frontend image (nginx / React) ────────────────────────────────────────────
+  build-frontend:
+    if: |
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))) ||
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'workflow_call')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata (frontend)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/audiodeskription-frontend
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=staging,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.frontend
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VITE_APP_BUILD_CHANNEL=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'staging' || '' }}
             VITE_APP_COMMIT_SHA=${{ github.sha }}
             VITE_APP_REPOSITORY_URL=${{ github.server_url }}/${{ github.repository }}
-          # Use the registry as a cache backend (much faster for large layers in GHCR)
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/audiodeskription-frontend:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/audiodeskription-frontend:buildcache,mode=max
 
-      # ── Pin staging overlay to the immutable image tag ───────────────────────
-      - name: Update staging overlay image tag
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+  # ── Pin staging overlay to the immutable sha-* tags ───────────────────────────
+  update-staging:
+    needs: [build-backend, build-frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update staging overlay image tags
         run: |
           set -euo pipefail
           short_sha="${GITHUB_SHA::7}"
@@ -114,7 +165,23 @@ jobs:
             git fetch origin main
             git switch -C main FETCH_HEAD
 
-            sed -i -E "s/newTag: .*/newTag: ${tag}/" "$file"
+            # Update both image tags — match on the image name line, then replace the
+            # following newTag line. Using python for reliable multi-line YAML editing.
+            python3 - "$file" "$tag" <<'EOF'
+          import sys, re
+
+          path, tag = sys.argv[1], sys.argv[2]
+          content = open(path).read()
+
+          # Replace newTag for each image entry
+          content = re.sub(
+              r'(name: ghcr\.io/[^\n]+/audiodeskription-(?:backend|frontend)\n\s+newTag:) \S+',
+              rf'\1 {tag}',
+              content
+          )
+
+          open(path, 'w').write(content)
+          EOF
 
             if git diff --quiet -- "$file"; then
               echo "Staging overlay already points to ${tag}."
@@ -122,7 +189,7 @@ jobs:
             fi
 
             git add "$file"
-            git commit -m "chore: pin staging webapp image to ${tag} [skip ci]"
+            git commit -m "chore: pin staging images to ${tag} [skip ci]"
 
             if git push origin HEAD:main; then
               exit 0
