@@ -46,7 +46,7 @@ wheels = [
 
 [[package]]
 name = "audiodeskription-webapp"
-version = "0.22.0"
+version = "0.22.3"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

@@ -44,7 +44,9 @@ spec:
               value: "4096"
             - name: UVICORN_WORKERS
               value: "1"
-          # OpenAI API key injected from Secret
+          # OpenAI API key and base URL injected from Secret.
+          # OPENAI_API_KEY  – bearer token for the LLM endpoint
+          # OPENAI_BASE_URL – OpenAI-compatible endpoint (e.g. https://hub.ki.fh-swf.de/v1)
           envFrom:
             - secretRef:
                 name: openai-secret

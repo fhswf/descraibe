@@ -12,7 +12,7 @@ spec:
   source:
     repoURL: git@github.com:fhswf/Audiodeskriptionen_SS25.git
     targetRevision: main
-    path: webapp/k8s/argocd/apps
+    path: k8s/argocd/apps
 
   destination:
     server: https://kubernetes.default.svc

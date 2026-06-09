@@ -22,14 +22,14 @@ metadata:
     link.argocd.argoproj.io/external-link: "https://descraibe.fh-swf.cloud" 
   labels:
     app.kubernetes.io/name: audiodeskription
-    component: backend 
+    component: platform 
 spec:
   project: default
 
   source:
-    repoURL: git@github.com:fhswf/Audiodeskriptionen_SS25.git
+    repoURL: git@github.com:fhswf/descraibe.git
     targetRevision: main
-    path: webapp/k8s/overlays/staging
+    path: k8s/overlays/staging
 
   destination:
     server: https://kubernetes.default.svc

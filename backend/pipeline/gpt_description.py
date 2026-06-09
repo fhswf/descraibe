@@ -273,9 +273,22 @@ def describe_slots(
 
     Returns: list of record dicts (slot, start_s, end_s, duration_s, text, ok, skipped, reason)
     """
+    import os
     from openai import OpenAI
 
-    client = OpenAI(api_key=str(api_key).strip())
+    # OPENAI_BASE_URL allows routing to any OpenAI-compatible endpoint
+    # (e.g. https://hub.ki.fh-swf.de/v1). Injected via k8s Secret (envFrom).
+    # Falls back to the standard OpenAI API if not set.
+    base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or None
+
+    # Allow per-request api_key override (e.g. from the UI), otherwise the
+    # OpenAI client picks up OPENAI_API_KEY from the environment automatically.
+    effective_api_key = str(api_key).strip() if api_key and str(api_key).strip() else None
+
+    client = OpenAI(
+        **({"api_key": effective_api_key} if effective_api_key else {}),
+        **({"base_url": base_url} if base_url else {}),
+    )
 
     # Build a slot_id → image_path index
     img_index: Dict[int, List[str]] = {}
