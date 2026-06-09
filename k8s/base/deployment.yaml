@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audiodeskription
+  namespace: audiodeskription
+  labels:
+    app.kubernetes.io/name: audiodeskription
+    app.kubernetes.io/component: webapp
+spec:
+  replicas: 1     # Keep replicas=1: the pipeline holds per-job in-memory state.
+                  # Scale-out requires externalizing state (e.g. Redis + shared PVC).
+  selector:
+    matchLabels:
+      app: audiodeskription
+  template:
+    metadata:
+      labels:
+        app: audiodeskription
+        app.kubernetes.io/name: audiodeskription
+    spec:
+      containers:
+        - name: webapp
+          # Update image tag to match your registry and CI pipeline tag.
+          image: ghcr.io/fhswf/audiodeskription-webapp:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+          # ── Environment ──────────────────────────────────────────────────────
+          env:
+            # GPT config path: the ConfigMap is mounted as a file at /app/config/
+            - name: GPT_CONFIG_PATH
+              value: /app/config/gpt_config.yaml
+            # Prompt templates dir: the prompts ConfigMap is mounted at /app/config/prompts/
+            # The app assembles system_instruction + ad_rules [+ few_shots] → SYSTEM_FINAL
+            # and uses user_instruction as USER_BASE when no explicit prompts are in the request.
+            - name: GPT_PROMPTS_DIR
+              value: /app/config/prompts
+            # Standard gunicorn/app tuning
+            - name: AD_JOBS_DIR
+              value: /app/jobs
+            - name: MAX_UPLOAD_MB
+              value: "4096"
+            - name: UVICORN_WORKERS
+              value: "1"
+          # OpenAI API key injected from Secret
+          envFrom:
+            - secretRef:
+                name: openai-secret
+          # ── Volume mounts ────────────────────────────────────────────────────
+          volumeMounts:
+            - name: jobs
+              mountPath: /app/jobs
+            - name: gpt-config
+              mountPath: /app/config
+              readOnly: true
+            - name: prompts-config
+              mountPath: /app/config/prompts
+              readOnly: true
+          # ── Resources ────────────────────────────────────────────────────────
+          # Minimum viable for CPU inference. Adjust for GPU nodes.
+          resources:
+            requests:                
+              nvidia.com/mig-2g.20gb: "1"
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              nvidia.com/mig-2g.20gb: "1"
+              cpu: "4"
+              memory: "32Gi"
+          # ── Probes ───────────────────────────────────────────────────────────
+          livenessProbe:
+            httpGet:
+              path: /api/ping
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/ping
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+      # ── Volumes ──────────────────────────────────────────────────────────────
+      volumes:
+        - name: jobs
+          persistentVolumeClaim:
+            claimName: audiodeskription-jobs
+        - name: gpt-config
+          configMap:
+            name: gpt-config
+        - name: prompts-config
+          configMap:
+            name: prompts-config

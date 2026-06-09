@@ -1,0 +1,78 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+  workflow_dispatch:
+    inputs:
+      tag_name_override:
+        description: 'Tag name to force release (e.g. v1.2.3)'
+        required: false
+        type: string
+      skip_release_please:
+        description: 'Skip release-please and just run downstream builds'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write        # create tags & GitHub releases
+  pull-requests: write   # open the version-bump PR
+  packages: write        # needed to push to ghcr.io
+  deployments: write     # create and update deployments
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    outputs:
+      release_created: ${{ github.event.inputs.tag_name_override != '' || steps.release.outputs.release_created }}
+      tag_name: ${{ github.event.inputs.tag_name_override || steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        if: ${{ github.event.inputs.skip_release_please != 'true' }}
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Log Release Outputs
+        run: |
+          echo "Release Created: ${{ steps.release.outputs.release_created }}"
+          echo "Tag Name: ${{ steps.release.outputs.tag_name }}"
+          echo "Manual Tag Override: ${{ github.event.inputs.tag_name_override }}"
+
+
+  build-release-image:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    uses: ./.github/workflows/build-webapp.yml
+    with:
+      release_tag: ${{ needs.release-please.outputs.tag_name }}
+
+  create-github-deployment:
+    needs: [release-please, build-release-image]
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub Deployment
+        uses: bobheadxi/deployments@v1
+        id: deployment
+        with:
+          step: start
+          token: ${{ secrets.GITHUB_TOKEN }}
+          env: production
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Update Deployment Status
+        uses: bobheadxi/deployments@v1
+        if: always()
+        with:
+          step: finish
+          token: ${{ secrets.GITHUB_TOKEN }}
+          status: success
+          env: ${{ steps.deployment.outputs.env }}
+          deployment_id: ${{ steps.deployment.outputs.deployment_id }}
+          env_url: "https://descraibe.fh-swf.cloud"

@@ -1,0 +1,45 @@
+# ArgoCD Application manifest for the Audiodeskription webapp.
+#
+# Apply this once to your ArgoCD namespace (not to the app namespace):
+#   kubectl apply -f k8s/argocd-app.yaml -n argocd
+#
+# After applying, ArgoCD will sync the staging overlay and create all resources
+# (Namespace, ConfigMaps, Secret placeholder, PVC, Deployment, Service, Ingress).
+#
+# Pre-requisites:
+#   1. Set your real OpenAI API key in the `openai-secret` Secret
+#      (use External Secrets Operator or Vault instead of committing it).
+#   2. Replace REPO_URL, TARGET_REVISION, and the domain in k8s/base/ingress.yaml.
+#   3. Use overlays/release for release-tag based deployments.
+#
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: audiodeskription
+  namespace: argocd          # always deploy the Application object into the argocd namespace
+  annotations:
+    # Provide the external link for the GitHub Deployment dashboard:
+    link.argocd.argoproj.io/external-link: "https://descraibe.fh-swf.cloud" 
+  labels:
+    app.kubernetes.io/name: audiodeskription
+    component: backend 
+spec:
+  project: default
+
+  source:
+    repoURL: git@github.com:fhswf/Audiodeskriptionen_SS25.git
+    targetRevision: main
+    path: webapp/k8s/overlays/staging
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: audiodeskription
+
+  syncPolicy:
+    automated:
+      prune: true       # delete resources removed from git
+      selfHeal: true    # revert manual changes in the cluster
+    syncOptions:
+      - CreateNamespace=true          # create the namespace if it doesn't exist
+      - ServerSideApply=true          # required for large ConfigMaps (prompt files)
+      - PrunePropagationPolicy=foreground

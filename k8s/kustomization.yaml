@@ -1,0 +1,8 @@
+# kustomization.yaml – base resources.
+# Environment-specific image tags live in overlays/staging and overlays/release.
+#
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - base

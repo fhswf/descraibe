@@ -1,0 +1,9 @@
+opencv-python
+pydub
+openai
+transformers
+pandas
+moviepy
+pydub
+whisper
+moviepy

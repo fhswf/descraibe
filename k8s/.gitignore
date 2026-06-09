@@ -1,0 +1,4 @@
+# k8s/secret.yaml is a placeholder template only.
+# NEVER commit actual API keys here.
+# Use External Secrets Operator or ArgoCD Vault Plugin in production.
+secret.yaml

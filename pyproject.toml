@@ -1,0 +1,46 @@
+[project]
+name = "audiodeskription-webapp"
+version = "0.22.3"
+description = "Audiodeskription pipeline web application"
+requires-python = ">=3.11"
+dependencies = [
+    # Web framework
+    "fastapi>=0.100.0",
+    "uvicorn>=0.30.0",
+    "python-multipart>=0.0.27",
+    # Pipeline dependencies (same as notebook)
+    "moviepy>=2.2",
+    "torch",
+    "torchaudio",
+    "pyarrow",
+    "soundfile",
+    "faster-whisper>=1.0",
+    "scenedetect>=0.6",
+    "pandas",
+    "numpy",
+    "opencv-python-headless",
+    "openai>=1.0",
+    "pyphen",
+    "tqdm",
+    "pyyaml",
+    "python-dotenv>=1.2.2",
+]
+
+[project.scripts]
+webapp = "backend.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]   # makes `import backend.session_manager` work
+testpaths  = ["tests"]

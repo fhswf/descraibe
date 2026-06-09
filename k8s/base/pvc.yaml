@@ -1,0 +1,19 @@
+# PersistentVolumeClaim for per-job scratch space (/app/jobs).
+# Jobs write video files, extracted audio, scene frames, and GPT results here.
+# Adjust storageClassName and storage size to match your cluster.
+#
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: audiodeskription-jobs
+  namespace: audiodeskription
+  labels:
+    app.kubernetes.io/name: audiodeskription
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ceph-filesystem
+  resources:
+    requests:
+      storage: 50Gi
