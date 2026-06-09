@@ -31,3 +31,39 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/envFrom/0/secretRef/name
         value: openai-secret-staging
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OIDC_ISSUER_URL
+          value: https://keycloak.ki.fh-swf.de/realms/public
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OIDC_CLIENT_ID
+          value: fh-swf-cloud
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OIDC_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: openai-secret-staging
+              key: OIDC_CLIENT_SECRET
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OIDC_SESSION_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: openai-secret-staging
+              key: OIDC_SESSION_SECRET
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OIDC_COOKIE_SECURE
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OIDC_REDIRECT_URI
+          value: https://descraibe.gawron.cloud/api/auth/callback

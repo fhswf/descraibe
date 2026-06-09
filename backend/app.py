@@ -10,6 +10,7 @@ import hashlib
 import shutil
 import threading
 import time
+import urllib.request
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -25,6 +26,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from authlib.integrations.starlette_client import OAuth, OAuthError
+from authlib.jose import JsonWebKey, jwt
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -78,6 +80,9 @@ _OIDC_ENABLED = bool(_OIDC_ISSUER_URL and _OIDC_CLIENT_ID and _OIDC_CLIENT_SECRE
 _SESSION_SECRET = os.environ.get("OIDC_SESSION_SECRET", "").strip() or os.environ.get("SESSION_SECRET", "").strip() or "change-me-please"
 _SESSION_SECURE = os.environ.get("OIDC_COOKIE_SECURE", "false").lower() in {"1", "true", "yes", "on"}
 _USER_CONFIG_DIR = Path(os.environ.get("AD_USER_CONFIG_DIR", "") or (os.environ.get("AD_JOBS_DIR", "/tmp/ad_jobs") + "/users"))
+_OIDC_ID_TOKEN_COOKIE = os.environ.get("OIDC_ID_TOKEN_COOKIE_NAME", "oidc_id_token").strip() or "oidc_id_token"
+_JWKS_CACHE: dict[str, Any] = {"expires_at": 0.0, "key_set": None}
+_JWKS_CACHE_TTL_SECONDS = 3600.0
 
 oauth = OAuth()
 if _OIDC_ENABLED:
@@ -400,11 +405,76 @@ def _oidc_ready() -> bool:
     return _OIDC_ENABLED
 
 
+def _oidc_metadata() -> dict[str, Any]:
+    well_known = f"{_OIDC_ISSUER_URL.rstrip('/')}/.well-known/openid-configuration"
+    with urllib.request.urlopen(well_known, timeout=10) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid OIDC metadata response")
+    return payload
+
+
+def _oidc_jwks() -> Any:
+    now = time.time()
+    cached = _JWKS_CACHE.get("key_set")
+    if cached is not None and now < float(_JWKS_CACHE.get("expires_at", 0.0)):
+        return cached
+
+    metadata = _oidc_metadata()
+    jwks_uri = str(metadata.get("jwks_uri", "")).strip()
+    if not jwks_uri:
+        raise ValueError("OIDC metadata does not contain jwks_uri")
+
+    with urllib.request.urlopen(jwks_uri, timeout=10) as response:
+        jwks_payload = json.loads(response.read().decode("utf-8"))
+    key_set = JsonWebKey.import_key_set(jwks_payload)
+    _JWKS_CACHE["key_set"] = key_set
+    _JWKS_CACHE["expires_at"] = now + _JWKS_CACHE_TTL_SECONDS
+    return key_set
+
+
+def _claims_to_user(claims: dict[str, Any]) -> Optional[dict[str, Any]]:
+    subject = str(claims.get("sub", "")).strip()
+    if not subject:
+        return None
+    return {
+        "sub": subject,
+        "iss": str(claims.get("iss", "")).strip(),
+        "name": str(claims.get("name", "")).strip() or None,
+        "email": str(claims.get("email", "")).strip() or None,
+        "preferred_username": str(claims.get("preferred_username", "")).strip() or None,
+        "picture": str(claims.get("picture", "")).strip() or None,
+    }
+
+
+def _validate_id_token(id_token: str) -> Optional[dict[str, Any]]:
+    if not id_token:
+        return None
+
+    key_set = _oidc_jwks()
+    claims = jwt.decode(
+        id_token,
+        key_set,
+        claims_options={
+            "iss": {"essential": True, "value": _OIDC_ISSUER_URL},
+            "aud": {"essential": True, "value": _OIDC_CLIENT_ID},
+            "exp": {"essential": True},
+            "iat": {"essential": True},
+            "sub": {"essential": True},
+        },
+    )
+    claims.validate(leeway=60)
+    return _claims_to_user(dict(claims))
+
+
 def _current_user(request: Request) -> Optional[dict[str, Any]]:
-    user = request.session.get("user")
-    if isinstance(user, dict) and str(user.get("sub", "")).strip():
-        return user
-    return None
+    raw_token = request.cookies.get(_OIDC_ID_TOKEN_COOKIE, "")
+    if not raw_token:
+        return None
+    try:
+        return _validate_id_token(raw_token)
+    except Exception:
+        return None
 
 
 def _require_current_user(request: Request) -> dict[str, Any]:
@@ -664,28 +734,43 @@ async def auth_callback(request: Request):
     except OAuthError as exc:
         raise HTTPException(status_code=401, detail=f"OIDC login failed: {exc.error}") from exc
 
-    if not user or not str(user.get("sub", "")).strip():
+    id_token = str(token.get("id_token", "")).strip()
+    if not user or not str(user.get("sub", "")).strip() or not id_token:
         raise HTTPException(status_code=401, detail="OIDC login failed: missing subject claim")
-
-    request.session["user"] = {
-        "sub": str(user.get("sub", "")).strip(),
-        "iss": str(user.get("iss", "")).strip(),
-        "name": str(user.get("name", "")).strip() or None,
-        "email": str(user.get("email", "")).strip() or None,
-        "preferred_username": str(user.get("preferred_username", "")).strip() or None,
-        "picture": str(user.get("picture", "")).strip() or None,
-    }
 
     redirect_to = request.session.pop("post_login_redirect", "/")
     if not isinstance(redirect_to, str) or not redirect_to.startswith("/"):
         redirect_to = "/"
-    return RedirectResponse(url=redirect_to, status_code=303)
+    response = RedirectResponse(url=redirect_to, status_code=303)
+
+    max_age: Optional[int] = None
+    try:
+        claims = jwt.decode(id_token, _oidc_jwks(), claims_options={})
+        exp = int(claims.get("exp", 0))
+        now = int(time.time())
+        if exp > now:
+            max_age = exp - now
+    except Exception:
+        max_age = 3600
+
+    response.set_cookie(
+        _OIDC_ID_TOKEN_COOKIE,
+        id_token,
+        httponly=True,
+        secure=_SESSION_SECURE,
+        samesite="lax",
+        max_age=max_age,
+        path="/",
+    )
+    return response
 
 
 @app.post("/api/auth/logout")
 def auth_logout(request: Request):
     request.session.clear()
-    return {"ok": True}
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(_OIDC_ID_TOKEN_COOKIE, path="/")
+    return response
 
 
 @app.get("/api/user/config")

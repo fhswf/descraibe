@@ -158,6 +158,7 @@ git push
 | `OIDC_REDIRECT_URI` | *(auto from request)* | No | Override callback URL if your ingress/proxy requires a fixed external redirect URI. |
 | `OIDC_SESSION_SECRET` | *(unset)* | No | Cookie/session signing secret used for authenticated browser sessions. Set in production. |
 | `OIDC_COOKIE_SECURE` | `false` | No | Set to `true` when running behind HTTPS so session cookies are marked `Secure`. |
+| `OIDC_ID_TOKEN_COOKIE_NAME` | `oidc_id_token` | No | Cookie name used to store the OIDC ID token (JWT). |
 | `AD_USER_CONFIG_DIR` | `${AD_JOBS_DIR}/users` | No | Directory for per-user config storage (`jobs`, `saved metadata`, and pipeline settings) for logged-in users. |
 
 > [!IMPORTANT]
