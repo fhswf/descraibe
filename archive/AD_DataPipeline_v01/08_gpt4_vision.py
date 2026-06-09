@@ -1,1 +1,0 @@
-# Platzhalter für 08_gpt4_vision.py

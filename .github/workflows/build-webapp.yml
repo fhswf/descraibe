@@ -7,7 +7,7 @@ on:
     tags:
       - "v*.*.*"          # e.g. v1.2.3  → triggers a versioned release build
     paths:
-      - "webapp/**"
+      - "**"
   workflow_call:
     inputs:
       release_tag:
@@ -86,7 +86,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: webapp/Dockerfile
+          file: Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -105,7 +105,7 @@ jobs:
           set -euo pipefail
           short_sha="${GITHUB_SHA::7}"
           tag="sha-${short_sha}"
-          file="webapp/k8s/overlays/staging/kustomization.yaml"
+          file="k8s/overlays/staging/kustomization.yaml"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
