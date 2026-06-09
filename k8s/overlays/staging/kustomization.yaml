@@ -12,9 +12,9 @@ resources:
 # with the immutable sha-* tag that it just built and commits the change.
 images:
   - name: ghcr.io/fhswf/descraibe/audiodeskription-backend
-    newTag: sha-fc0a89f
+    newTag: sha-daed03e
   - name: ghcr.io/fhswf/descraibe/audiodeskription-frontend
-    newTag: sha-fc0a89f
+    newTag: sha-daed03e
 
 patches:
   - target:
