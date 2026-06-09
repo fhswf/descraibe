@@ -63,11 +63,11 @@ spec:
           # ── Resources ────────────────────────────────────────────────────────
           resources:
             requests:
-              nvidia.com/mig-2g.20gb: "1"
+              nvidia.com/mig-3g.40gb: "1"
               cpu: "2"
               memory: "8Gi"
             limits:
-              nvidia.com/mig-2g.20gb: "1"
+              nvidia.com/mig-3g.40gb: "1"
               cpu: "4"
               memory: "32Gi"
           # ── Probes ───────────────────────────────────────────────────────────
