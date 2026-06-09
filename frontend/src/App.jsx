@@ -128,7 +128,10 @@ function App() {
     savedJobMeta,
     selectJob,
     removeSavedJobId,
-    updateSavedJobMeta
+    updateSavedJobMeta,
+    authState,
+    login,
+    logout
   } = useJob();
 
   const uploadInputRef = useRef(null);
@@ -254,6 +257,28 @@ function App() {
           )}
         </div>
         <div className="flex items-center gap-3">
+          {authState.enabled && (
+            authState.authenticated ? (
+              <>
+                <span className="text-xs text-text-secondary max-w-[220px] truncate" title={authState.user?.email || authState.user?.name || authState.user?.sub}>
+                  {authState.user?.name || authState.user?.email || 'Angemeldet'}
+                </span>
+                <button
+                  className="px-3 py-2 rounded-lg text-xs font-medium border border-border-subtle hover:bg-bg-card transition-colors"
+                  onClick={logout}
+                >
+                  Logout
+                </button>
+              </>
+            ) : (
+              <button
+                className="px-3 py-2 rounded-lg text-xs font-medium border border-violet-500/40 text-violet-300 hover:bg-violet-500/10 transition-colors"
+                onClick={login}
+              >
+                Login
+              </button>
+            )
+          )}
           <button
             className="px-4 py-2 bg-violet-500 hover:bg-opacity-90 transition-all rounded-lg text-white text-sm font-medium flex items-center gap-2 disabled:opacity-50"
             onClick={handleSaveSrtTexts}

@@ -24,6 +24,7 @@ dependencies = [
     "tqdm",
     "pyyaml",
     "python-dotenv>=1.2.2",
+    "authlib>=1.4.0",
 ]
 
 [project.scripts]

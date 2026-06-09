@@ -20,9 +20,11 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException, Body
-from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+from authlib.integrations.starlette_client import OAuth, OAuthError
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -66,6 +68,35 @@ _STORAGE_ERROR_ERRNOS = {
     errno.EDQUOT,
     errno.EFBIG,
 }
+
+_OIDC_ISSUER_URL = os.environ.get("OIDC_ISSUER_URL", "").strip()
+_OIDC_CLIENT_ID = os.environ.get("OIDC_CLIENT_ID", "").strip()
+_OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET", "").strip()
+_OIDC_SCOPES = os.environ.get("OIDC_SCOPES", "openid profile email").strip() or "openid profile email"
+_OIDC_REDIRECT_URI = os.environ.get("OIDC_REDIRECT_URI", "").strip()
+_OIDC_ENABLED = bool(_OIDC_ISSUER_URL and _OIDC_CLIENT_ID and _OIDC_CLIENT_SECRET)
+_SESSION_SECRET = os.environ.get("OIDC_SESSION_SECRET", "").strip() or os.environ.get("SESSION_SECRET", "").strip() or "change-me-please"
+_SESSION_SECURE = os.environ.get("OIDC_COOKIE_SECURE", "false").lower() in {"1", "true", "yes", "on"}
+_USER_CONFIG_DIR = Path(os.environ.get("AD_USER_CONFIG_DIR", "") or (os.environ.get("AD_JOBS_DIR", "/tmp/ad_jobs") + "/users"))
+
+oauth = OAuth()
+if _OIDC_ENABLED:
+    if _SESSION_SECRET == "change-me-please":
+        logger.warning("OIDC is enabled, but OIDC_SESSION_SECRET/SESSION_SECRET is not set.")
+    oauth.register(
+        name="oidc",
+        server_metadata_url=f"{_OIDC_ISSUER_URL.rstrip('/')}/.well-known/openid-configuration",
+        client_id=_OIDC_CLIENT_ID,
+        client_secret=_OIDC_CLIENT_SECRET,
+        client_kwargs={"scope": _OIDC_SCOPES},
+    )
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_SESSION_SECRET,
+    same_site="lax",
+    https_only=_SESSION_SECURE,
+)
 
 
 def _progress_payload(
@@ -365,6 +396,57 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _oidc_ready() -> bool:
+    return _OIDC_ENABLED
+
+
+def _current_user(request: Request) -> Optional[dict[str, Any]]:
+    user = request.session.get("user")
+    if isinstance(user, dict) and str(user.get("sub", "")).strip():
+        return user
+    return None
+
+
+def _require_current_user(request: Request) -> dict[str, Any]:
+    if not _oidc_ready():
+        raise HTTPException(status_code=404, detail="OIDC login is not configured")
+    user = _current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def _safe_user_id(user: dict[str, Any]) -> str:
+    issuer = str(user.get("iss", "")).strip()
+    subject = str(user.get("sub", "")).strip()
+    digest = hashlib.sha256(f"{issuer}|{subject}".encode("utf-8")).hexdigest()
+    return digest
+
+
+def _user_config_path(user: dict[str, Any]) -> Path:
+    return _USER_CONFIG_DIR / _safe_user_id(user) / "config.json"
+
+
+def _read_user_config(user: dict[str, Any]) -> Optional[dict[str, Any]]:
+    path = _user_config_path(user)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("Could not parse user config at %s", path)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _write_user_config(user: dict[str, Any], payload: dict[str, Any]) -> None:
+    path = _user_config_path(user)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
 # ── Prompt auto-loader (GPT_PROMPTS_DIR) ──────────────────────────────────────
 
 def _load_prompts_from_dir(prompts_dir: str) -> tuple[str, str] | None:
@@ -547,6 +629,96 @@ async def custom_swagger_ui_html():
         swagger_js_url="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js",
         swagger_css_url="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css",
     )
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    user = _current_user(request)
+    return {
+        "enabled": _oidc_ready(),
+        "authenticated": bool(user),
+        "user": user if user else None,
+    }
+
+
+@app.get("/api/auth/login")
+async def auth_login(request: Request, next: str = "/"):
+    if not _oidc_ready():
+        raise HTTPException(status_code=404, detail="OIDC login is not configured")
+
+    next_path = next if next.startswith("/") else "/"
+    request.session["post_login_redirect"] = next_path
+
+    redirect_uri = _OIDC_REDIRECT_URI or str(request.url_for("auth_callback"))
+    return await oauth.oidc.authorize_redirect(request, redirect_uri)
+
+
+@app.get("/api/auth/callback")
+async def auth_callback(request: Request):
+    if not _oidc_ready():
+        raise HTTPException(status_code=404, detail="OIDC login is not configured")
+
+    try:
+        token = await oauth.oidc.authorize_access_token(request)
+        user = token.get("userinfo") or await oauth.oidc.parse_id_token(request, token)
+    except OAuthError as exc:
+        raise HTTPException(status_code=401, detail=f"OIDC login failed: {exc.error}") from exc
+
+    if not user or not str(user.get("sub", "")).strip():
+        raise HTTPException(status_code=401, detail="OIDC login failed: missing subject claim")
+
+    request.session["user"] = {
+        "sub": str(user.get("sub", "")).strip(),
+        "iss": str(user.get("iss", "")).strip(),
+        "name": str(user.get("name", "")).strip() or None,
+        "email": str(user.get("email", "")).strip() or None,
+        "preferred_username": str(user.get("preferred_username", "")).strip() or None,
+        "picture": str(user.get("picture", "")).strip() or None,
+    }
+
+    redirect_to = request.session.pop("post_login_redirect", "/")
+    if not isinstance(redirect_to, str) or not redirect_to.startswith("/"):
+        redirect_to = "/"
+    return RedirectResponse(url=redirect_to, status_code=303)
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    request.session.clear()
+    return {"ok": True}
+
+
+@app.get("/api/user/config")
+def get_user_config(request: Request):
+    user = _require_current_user(request)
+    payload = _read_user_config(user) or {}
+    config = payload.get("config")
+    if not isinstance(config, dict):
+        config = {}
+
+    return {
+        "config": config,
+        "updated_at": payload.get("updated_at"),
+    }
+
+
+@app.put("/api/user/config")
+def put_user_config(request: Request, body: dict = Body(default={})):
+    user = _require_current_user(request)
+    incoming = body.get("config") if isinstance(body, dict) and isinstance(body.get("config"), dict) else body
+    if not isinstance(incoming, dict):
+        raise HTTPException(status_code=400, detail="Invalid config payload")
+
+    encoded = json.dumps(incoming, ensure_ascii=False, default=str)
+    if len(encoded.encode("utf-8")) > 1_000_000:
+        raise HTTPException(status_code=413, detail="Config payload too large (max 1 MB)")
+
+    payload = {
+        "config": incoming,
+        "updated_at": int(time.time()),
+    }
+    _write_user_config(user, payload)
+    return {"ok": True, "updated_at": payload["updated_at"]}
 
 
 

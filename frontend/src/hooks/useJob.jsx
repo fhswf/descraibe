@@ -4,6 +4,53 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 const JobContext = createContext();
 const SAVED_JOBS_STORAGE_KEY = 'descrAIbe.savedJobIds';
 const SAVED_JOB_META_STORAGE_KEY = 'descrAIbe.savedJobMeta';
+const USER_SETTINGS_STORAGE_KEY = 'descrAIbe.userSettings';
+
+const DEFAULT_GPT_PARAMS = {
+    system_prompt: "",
+    user_prompt: "",
+    ad_rules: "",
+    few_shots: "",
+    model: "",
+    temperature: 0.2,
+    max_tokens: 1024,
+    detail: "low",
+    cut: "broadcast",
+    syllables_per_second: 6.0
+};
+
+const DEFAULT_VAD_PARAMS = {
+    threshold: 0.5,
+    min_speech_duration_ms: 1500,
+    min_silence_duration_ms: 400,
+    min_pause_duration_s: 0.3
+};
+
+const DEFAULT_TRANSCRIBE_PARAMS = {
+    model_size: "small",
+    language: "de",
+    use_fw_vad: true
+};
+
+const DEFAULT_SLOTS_PARAMS = {
+    min_slot_s: 1.0,
+    pad_in_s: 0.0,
+    pad_out_s: 0.0,
+    filter_whisper: false
+};
+
+const DEFAULT_TTS_PARAMS = {
+    apiKey: '',
+    voice: 'alloy',
+    duckingVolume: '0.4'
+};
+
+const DEFAULT_IMAGES_PARAMS = {
+    threshold: 24,
+    blur_threshold: 80,
+    min_scene_length: 20,
+    short_scene_s: 3.0
+};
 
 function readSavedJobIds() {
     try {
@@ -43,6 +90,25 @@ function writeSavedJobMeta(meta) {
     }
 }
 
+function readUserSettings() {
+    try {
+        const raw = window.localStorage.getItem(USER_SETTINGS_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (err) {
+        console.warn("Could not read user settings from localStorage:", err);
+        return {};
+    }
+}
+
+function writeUserSettings(settings) {
+    try {
+        window.localStorage.setItem(USER_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    } catch (err) {
+        console.warn("Could not write user settings to localStorage:", err);
+    }
+}
+
 function basename(path) {
     if (!path) return '';
     return String(path).split(/[\\/]/).filter(Boolean).pop() || '';
@@ -76,6 +142,7 @@ function mergeSummaryMeta(existing, summary) {
 }
 
 export function JobProvider({ children }) {
+    const initialSettings = useMemo(() => readUserSettings(), []);
     const [jobId, setJobId] = useState(() => {
         const params = new URLSearchParams(window.location.search);
         return params.get('job') || null;
@@ -96,51 +163,56 @@ export function JobProvider({ children }) {
     // Global Config Modal State
     const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
     const [availableModels, setAvailableModels] = useState([]);
-    const [gptParams, setGptParams] = useState({
-        system_prompt: "",
-        user_prompt: "",
-        ad_rules: "",
-        few_shots: "",
-        model: "",
-        temperature: 0.2,
-        max_tokens: 1024,
-        detail: "low",
-        cut: "broadcast",
-        syllables_per_second: 6.0
+    const [gptParams, setGptParams] = useState(() => ({ ...DEFAULT_GPT_PARAMS, ...(initialSettings.gptParams || {}) }));
+    const [vadParams, setVadParams] = useState(() => ({ ...DEFAULT_VAD_PARAMS, ...(initialSettings.vadParams || {}) }));
+    const [transcribeParams, setTranscribeParams] = useState(() => ({ ...DEFAULT_TRANSCRIBE_PARAMS, ...(initialSettings.transcribeParams || {}) }));
+    const [slotsParams, setSlotsParams] = useState(() => ({ ...DEFAULT_SLOTS_PARAMS, ...(initialSettings.slotsParams || {}) }));
+    const [ttsParams, setTtsParams] = useState(() => ({ ...DEFAULT_TTS_PARAMS, ...(initialSettings.ttsParams || {}) }));
+    const [imagesParams, setImagesParams] = useState(() => ({ ...DEFAULT_IMAGES_PARAMS, ...(initialSettings.imagesParams || {}) }));
+    const [authState, setAuthState] = useState({
+        loading: true,
+        enabled: false,
+        authenticated: false,
+        user: null
     });
+    const [remoteConfigLoaded, setRemoteConfigLoaded] = useState(false);
 
-    const [vadParams, setVadParams] = useState({
-        threshold: 0.5,
-        min_speech_duration_ms: 1500,
-        min_silence_duration_ms: 400,
-        min_pause_duration_s: 0.3
-    });
+    const refreshAuthState = useCallback(async () => {
+        try {
+            const res = await fetch('/api/auth/status', {
+                cache: 'no-store',
+                headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+            });
+            if (!res.ok) throw new Error('Could not load auth status');
+            const data = await res.json();
+            setAuthState({
+                loading: false,
+                enabled: Boolean(data.enabled),
+                authenticated: Boolean(data.enabled && data.authenticated),
+                user: data.enabled && data.authenticated ? data.user : null
+            });
+        } catch {
+            setAuthState({
+                loading: false,
+                enabled: false,
+                authenticated: false,
+                user: null
+            });
+        }
+    }, []);
 
-    const [transcribeParams, setTranscribeParams] = useState({
-        model_size: "small",
-        language: "de",
-        use_fw_vad: true
-    });
+    const login = useCallback(() => {
+        const nextPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        window.location.href = `/api/auth/login?next=${encodeURIComponent(nextPath || '/')}`;
+    }, []);
 
-    const [slotsParams, setSlotsParams] = useState({
-        min_slot_s: 1.0,
-        pad_in_s: 0.0,
-        pad_out_s: 0.0,
-        filter_whisper: false
-    });
-
-    const [ttsParams, setTtsParams] = useState({
-        apiKey: '',
-        voice: 'alloy',
-        duckingVolume: '0.4'
-    });
-
-    const [imagesParams, setImagesParams] = useState({
-        threshold: 24,
-        blur_threshold: 80,
-        min_scene_length: 20,
-        short_scene_s: 3.0
-    });
+    const logout = useCallback(async () => {
+        try {
+            await fetch('/api/auth/logout', { method: 'POST' });
+        } finally {
+            await refreshAuthState();
+        }
+    }, [refreshAuthState]);
 
     const addSavedJobId = useCallback((id) => {
         if (!id) return;
@@ -227,16 +299,149 @@ export function JobProvider({ children }) {
                     if (data.available_models && data.available_models.length > 0) {
                         setAvailableModels(data.available_models);
                         const firstModel = data.available_models[0];
-                        newP.model = firstModel.model;
-                        newP.temperature = firstModel.temperature !== undefined ? firstModel.temperature : 0.2;
-                        newP.max_tokens = firstModel.max_tokens !== undefined ? firstModel.max_tokens : 1024;
-                        newP.detail = firstModel.detail !== undefined ? firstModel.detail : "low";
+                        if (!newP.model) {
+                            newP.model = firstModel.model;
+                        }
+                        if (newP.temperature === undefined || newP.temperature === null) {
+                            newP.temperature = firstModel.temperature !== undefined ? firstModel.temperature : 0.2;
+                        }
+                        if (newP.max_tokens === undefined || newP.max_tokens === null) {
+                            newP.max_tokens = firstModel.max_tokens !== undefined ? firstModel.max_tokens : 1024;
+                        }
+                        if (!newP.detail) {
+                            newP.detail = firstModel.detail !== undefined ? firstModel.detail : "low";
+                        }
                     }
                     return newP;
                 });
             })
             .catch(console.error);
     }, []);
+
+    useEffect(() => {
+        refreshAuthState();
+    }, [refreshAuthState]);
+
+    useEffect(() => {
+        writeUserSettings({
+            gptParams,
+            vadParams,
+            transcribeParams,
+            slotsParams,
+            ttsParams,
+            imagesParams
+        });
+    }, [gptParams, vadParams, transcribeParams, slotsParams, ttsParams, imagesParams]);
+
+    useEffect(() => {
+        if (!authState.authenticated) {
+            setRemoteConfigLoaded(false);
+            return;
+        }
+
+        let cancelled = false;
+        const loadRemoteConfig = async () => {
+            try {
+                const res = await fetch('/api/user/config', {
+                    cache: 'no-store',
+                    headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+                });
+                if (!res.ok) return;
+                const payload = await res.json();
+                const remoteConfig = payload?.config && typeof payload.config === 'object' ? payload.config : {};
+                const remoteIds = Array.isArray(remoteConfig.saved_job_ids)
+                    ? remoteConfig.saved_job_ids.filter(id => typeof id === 'string' && id.trim())
+                    : [];
+                const remoteMeta = remoteConfig.saved_job_meta && typeof remoteConfig.saved_job_meta === 'object' && !Array.isArray(remoteConfig.saved_job_meta)
+                    ? remoteConfig.saved_job_meta
+                    : {};
+                const remoteSettings = remoteConfig.settings && typeof remoteConfig.settings === 'object' && !Array.isArray(remoteConfig.settings)
+                    ? remoteConfig.settings
+                    : {};
+
+                if (cancelled) return;
+
+                if (remoteIds.length > 0) {
+                    setSavedJobIds(prev => {
+                        const next = [...new Set([...remoteIds, ...prev])];
+                        writeSavedJobIds(next);
+                        return next;
+                    });
+                }
+                if (Object.keys(remoteMeta).length > 0) {
+                    setSavedJobMeta(prev => {
+                        const next = { ...prev, ...remoteMeta };
+                        writeSavedJobMeta(next);
+                        return next;
+                    });
+                }
+
+                if (remoteSettings.gptParams) setGptParams(prev => ({ ...prev, ...remoteSettings.gptParams }));
+                if (remoteSettings.vadParams) setVadParams(prev => ({ ...prev, ...remoteSettings.vadParams }));
+                if (remoteSettings.transcribeParams) setTranscribeParams(prev => ({ ...prev, ...remoteSettings.transcribeParams }));
+                if (remoteSettings.slotsParams) setSlotsParams(prev => ({ ...prev, ...remoteSettings.slotsParams }));
+                if (remoteSettings.ttsParams) setTtsParams(prev => ({ ...prev, ...remoteSettings.ttsParams }));
+                if (remoteSettings.imagesParams) setImagesParams(prev => ({ ...prev, ...remoteSettings.imagesParams }));
+            } catch (err) {
+                console.warn("Could not load remote user config:", err);
+            } finally {
+                if (!cancelled) setRemoteConfigLoaded(true);
+            }
+        };
+
+        loadRemoteConfig();
+        return () => {
+            cancelled = true;
+        };
+    }, [authState.authenticated]);
+
+    useEffect(() => {
+        if (!authState.authenticated || !remoteConfigLoaded) return;
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(async () => {
+            try {
+                await fetch('/api/user/config', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: controller.signal,
+                    body: JSON.stringify({
+                        config: {
+                            saved_job_ids: savedJobIds,
+                            saved_job_meta: savedJobMeta,
+                            settings: {
+                                gptParams,
+                                vadParams,
+                                transcribeParams,
+                                slotsParams,
+                                ttsParams,
+                                imagesParams
+                            }
+                        }
+                    })
+                });
+            } catch (err) {
+                if (err?.name !== 'AbortError') {
+                    console.warn("Could not store remote user config:", err);
+                }
+            }
+        }, 800);
+
+        return () => {
+            controller.abort();
+            window.clearTimeout(timeoutId);
+        };
+    }, [
+        authState.authenticated,
+        remoteConfigLoaded,
+        savedJobIds,
+        savedJobMeta,
+        gptParams,
+        vadParams,
+        transcribeParams,
+        slotsParams,
+        ttsParams,
+        imagesParams
+    ]);
 
     useEffect(() => {
         if (jobData?.gpt_records) {
@@ -761,7 +966,11 @@ export function JobProvider({ children }) {
         handleRunTTS,
         runAllSteps,
         isRunAllActive,
-        stopRunAll
+        stopRunAll,
+        authState,
+        login,
+        logout,
+        refreshAuthState
     }), [
         jobId, setJobId, savedJobIds, savedJobMeta, selectJob, removeSavedJobId, updateSavedJobMeta, jobData, sseConnected, gptRecords, setGptRecords, currentStep, setCurrentStep,
         doneSteps, markStepDone, progressData, setProgressData, focusedSlot, setFocusedSlot, createJob,
@@ -770,7 +979,7 @@ export function JobProvider({ children }) {
         vadParams, setVadParams, transcribeParams, setTranscribeParams, slotsParams, setSlotsParams,
         ttsParams, setTtsParams, imagesParams, setImagesParams, handleRunVAD, handleRunTranscribe,
         handleRunSlots, handleRunImages, handleRunGPT, handleUpdateGPTRecord, handleRunTTS, runAllSteps,
-        isRunAllActive, stopRunAll
+        isRunAllActive, stopRunAll, authState, login, logout, refreshAuthState
     ]);
 
     return (

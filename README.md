@@ -151,6 +151,14 @@ git push
 | `GUNICORN_TIMEOUT` | `600` | No | Request timeout in seconds. Pipeline steps (Whisper transcription, GPT calls) can take several minutes. |
 | `GPT_CONFIG_PATH` | `/app/config/gpt_config.yaml` | No | Path to the GPT preset YAML (see section below). |
 | `GPT_PROMPTS_DIR` | *(unset)* | No | Directory containing the four prompt `.txt` files. When set, `/api/run/gpt` reads and assembles prompts automatically if none are supplied in the request body (see *GPT Prompt Files* section below). |
+| `OIDC_ISSUER_URL` | *(unset)* | No | OpenID Connect issuer base URL (e.g. `https://id.example.com/realms/main`). Set together with client ID/secret to enable optional login. |
+| `OIDC_CLIENT_ID` | *(unset)* | No | OIDC client ID for the web app. |
+| `OIDC_CLIENT_SECRET` | *(unset)* | No | OIDC client secret for the web app. |
+| `OIDC_SCOPES` | `openid profile email` | No | Space-separated scopes requested during login. |
+| `OIDC_REDIRECT_URI` | *(auto from request)* | No | Override callback URL if your ingress/proxy requires a fixed external redirect URI. |
+| `OIDC_SESSION_SECRET` | *(unset)* | No | Cookie/session signing secret used for authenticated browser sessions. Set in production. |
+| `OIDC_COOKIE_SECURE` | `false` | No | Set to `true` when running behind HTTPS so session cookies are marked `Secure`. |
+| `AD_USER_CONFIG_DIR` | `${AD_JOBS_DIR}/users` | No | Directory for per-user config storage (`jobs`, `saved metadata`, and pipeline settings) for logged-in users. |
 
 > [!IMPORTANT]
 > `OPENAI_API_KEY` is the only **required** environment variable. The container will start without it, but calls to `/api/run/gpt` will return a `400` error until it is provided.
