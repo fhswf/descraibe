@@ -27,14 +27,14 @@ spec:
               containerPort: 80
               protocol: TCP
           # ── Resources ────────────────────────────────────────────────────────
-          # nginx serving static files: minimal resources needed.
+          # Keep enough headroom to avoid OOM kills during startup/reloads.
           resources:
             requests:
               cpu: "50m"
-              memory: "32Mi"
+              memory: "64Mi"
             limits:
               cpu: "200m"
-              memory: "64Mi"
+              memory: "256Mi"
           # ── Probes ───────────────────────────────────────────────────────────
           livenessProbe:
             httpGet:
