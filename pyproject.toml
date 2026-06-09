@@ -25,6 +25,7 @@ dependencies = [
     "pyyaml",
     "python-dotenv>=1.2.2",
     "authlib>=1.4.0",
+    "itsdangerous>=2.2.0",
 ]
 
 [project.scripts]
