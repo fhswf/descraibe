@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 
 const JobContext = createContext();
 const SAVED_JOBS_STORAGE_KEY = 'descrAIbe.savedJobIds';
@@ -158,6 +158,7 @@ export function JobProvider({ children }) {
     const [focusedSlot, setFocusedSlot] = useState(null);
     const [srtTexts, setSrtTexts] = useState({});
     const [isSavingSrt, setIsSavingSrt] = useState(false);
+    const lastSavedSrtPayloadRef = useRef('');
     const [isRunAllActive, setIsRunAllActive] = useState(false);
     
     // Global Config Modal State
@@ -450,8 +451,45 @@ export function JobProvider({ children }) {
                 initialTexts[rec.slot] = rec.text || '';
             });
             setSrtTexts(initialTexts);
+            lastSavedSrtPayloadRef.current = JSON.stringify(initialTexts);
         }
     }, [jobData?.gpt_records]);
+
+    useEffect(() => {
+        if (!jobId) return;
+        if (!jobData?.gpt_records || jobData.gpt_records.length === 0) return;
+
+        const currentPayload = JSON.stringify(srtTexts);
+        if (currentPayload === lastSavedSrtPayloadRef.current) return;
+
+        let cancelled = false;
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(async () => {
+            setIsSavingSrt(true);
+            try {
+                const res = await fetch(`/api/jobs/${jobId}/texts`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: controller.signal,
+                    body: JSON.stringify({ texts: srtTexts })
+                });
+                if (!res.ok) return;
+                lastSavedSrtPayloadRef.current = currentPayload;
+            } catch (err) {
+                if (err?.name !== 'AbortError') {
+                    console.warn("Could not auto-save SRT texts:", err);
+                }
+            } finally {
+                if (!cancelled) setIsSavingSrt(false);
+            }
+        }, 800);
+
+        return () => {
+            cancelled = true;
+            controller.abort();
+            window.clearTimeout(timeoutId);
+        };
+    }, [jobId, jobData?.gpt_records, srtTexts]);
 
     const handleSaveSrtTexts = useCallback(async () => {
         if (!jobId) return;
@@ -466,6 +504,7 @@ export function JobProvider({ children }) {
                 const data = await res.json();
                 throw new Error(data.error || 'Failed to save texts');
             }
+            lastSavedSrtPayloadRef.current = JSON.stringify(srtTexts);
             alert("Änderungen erfolgreich gespeichert! Die Ausgabedateien wurden aktualisiert.");
         } catch (err) {
             alert("Error: " + err.message);

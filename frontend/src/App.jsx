@@ -123,8 +123,6 @@ function App() {
     setCurrentStep,
     doneSteps,
     sseConnected,
-    isSavingSrt,
-    handleSaveSrtTexts,
     setIsConfigModalOpen,
     runAllSteps,
     isRunAllActive,
@@ -143,12 +141,32 @@ function App() {
   } = useJob();
 
   const uploadInputRef = useRef(null);
+  const userMenuRef = useRef(null);
   const [themeMode, setThemeMode] = useState(getInitialThemeMode);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
     window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
   }, [themeMode]);
+
+  useEffect(() => {
+    if (!isUserMenuOpen) return;
+    const handlePointerDown = (event) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target)) {
+        setIsUserMenuOpen(false);
+      }
+    };
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') setIsUserMenuOpen(false);
+    };
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [isUserMenuOpen]);
 
   const handleUpload = async (file) => {
     setProgressData(prev => ({ ...prev, upload: { msg: 'Starte Upload...', percent: 0 } }));
@@ -227,6 +245,9 @@ function App() {
     displayedVideo?.cacheKey || null
   );
   const hasVideo = Boolean(displayedVideo?.remoteVideoUrl);
+  const userDisplayName = authState.user?.name || authState.user?.email || 'Gast';
+  const userSubtitle = authState.user?.email || authState.user?.sub || (authState.enabled ? 'Nicht angemeldet' : 'Login deaktiviert');
+  const avatarLetter = String(userDisplayName || 'G').trim().charAt(0).toUpperCase() || 'G';
 
   return (
     <div className="grid grid-rows-[auto_1fr_auto] min-h-screen">
@@ -286,43 +307,68 @@ function App() {
             <option value="dark">Dunkel</option>
           </select>
           <div className="h-6 w-px bg-border-subtle mx-1"></div>
-          {authState.enabled && (
-            authState.authenticated ? (
-              <>
-                <span className="text-xs text-text-secondary max-w-[220px] truncate" title={authState.user?.email || authState.user?.name || authState.user?.sub}>
-                  {authState.user?.name || authState.user?.email || 'Angemeldet'}
-                </span>
-                <button
-                  className="px-3 py-2 rounded-lg text-xs font-medium border border-border-subtle text-text-secondary hover:text-text-primary hover:bg-bg-card transition-colors"
-                  onClick={logout}
-                >
-                  Logout
-                </button>
-              </>
-            ) : (
-              <button
-                className="px-3 py-2 rounded-lg text-xs font-medium border border-violet-500/40 text-violet-500 hover:bg-violet-500/10 transition-colors"
-                onClick={login}
-              >
-                Login
-              </button>
-            )
-          )}
-          <button
-            className="px-4 py-2 bg-violet-500 hover:bg-violet-600 transition-all rounded-lg text-white text-sm font-medium flex items-center gap-2 disabled:opacity-50 shadow-sm shadow-violet-500/20"
-            onClick={handleSaveSrtTexts}
-            disabled={isSavingSrt}
-          >
-            <span className="material-icons-round text-sm">save</span>
-            {isSavingSrt ? 'Speichert...' : 'Änderungen speichern'}
-          </button>
-          <button 
-            className="p-2 hover:bg-bg-card rounded-full transition-colors flex items-center justify-center text-text-secondary hover:text-text-primary"
-            onClick={() => setIsConfigModalOpen(true)}
-            title="Prompts & Konfiguration"
-          >
-            <span className="material-icons-round">settings</span>
-          </button>
+          <div className="relative" ref={userMenuRef}>
+            <button
+              className="w-9 h-9 rounded-full border border-border-subtle bg-bg-card hover:bg-bg-base transition-colors overflow-hidden flex items-center justify-center text-sm font-semibold text-text-primary"
+              onClick={() => setIsUserMenuOpen(prev => !prev)}
+              title={authState.authenticated ? userDisplayName : 'Benutzermenü'}
+              aria-label="Benutzermenü öffnen"
+            >
+              {authState.authenticated && authState.user?.picture ? (
+                <img src={authState.user.picture} alt={userDisplayName} className="w-full h-full object-cover" />
+              ) : (
+                <span>{avatarLetter}</span>
+              )}
+            </button>
+            {isUserMenuOpen && (
+              <div className="absolute right-0 mt-2 w-72 rounded-xl border border-border-subtle bg-bg-surface shadow-xl shadow-black/20 overflow-hidden z-50">
+                <div className="px-4 py-3 border-b border-border-subtle">
+                  <p className="text-sm font-semibold text-text-primary truncate" title={userDisplayName}>{userDisplayName}</p>
+                  <p className="text-xs text-text-secondary truncate" title={userSubtitle}>{userSubtitle}</p>
+                </div>
+                <div className="p-2 flex flex-col gap-1">
+                  <button
+                    className="w-full text-left px-3 py-2 rounded-lg text-sm text-text-secondary hover:text-text-primary hover:bg-bg-card transition-colors flex items-center gap-2"
+                    onClick={() => {
+                      setIsConfigModalOpen(true);
+                      setIsUserMenuOpen(false);
+                    }}
+                    title="Prompts & Konfiguration"
+                  >
+                    <span className="material-icons-round text-[18px]">settings</span>
+                    <span>Einstellungen</span>
+                  </button>
+                  {authState.enabled ? (
+                    authState.authenticated ? (
+                      <button
+                        className="w-full text-left px-3 py-2 rounded-lg text-sm text-text-secondary hover:text-text-primary hover:bg-bg-card transition-colors flex items-center gap-2"
+                        onClick={() => {
+                          setIsUserMenuOpen(false);
+                          logout();
+                        }}
+                      >
+                        <span className="material-icons-round text-[18px]">logout</span>
+                        <span>Logout</span>
+                      </button>
+                    ) : (
+                      <button
+                        className="w-full text-left px-3 py-2 rounded-lg text-sm text-violet-500 hover:bg-violet-500/10 transition-colors flex items-center gap-2"
+                        onClick={() => {
+                          setIsUserMenuOpen(false);
+                          login();
+                        }}
+                      >
+                        <span className="material-icons-round text-[18px]">login</span>
+                        <span>Login</span>
+                      </button>
+                    )
+                  ) : (
+                    <div className="px-3 py-2 text-xs text-text-muted">Login ist für diese Instanz nicht aktiviert.</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
