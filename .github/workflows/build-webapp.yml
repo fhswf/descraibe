@@ -29,7 +29,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/audiodeskription-webapp
+  IMAGE_NAME: ${{ github.repository }}/audiodeskription-webapp
 
 jobs:
   build:
