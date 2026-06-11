@@ -15,7 +15,7 @@ spec:
   project: default
 
   source:
-    repoURL: git@github.com:fhswf/Audiodeskriptionen_SS25.git
+    repoURL: git@github.com:fhswf/descraibe.git
     targetRevision: main
     path: k8s/overlays/release
 
