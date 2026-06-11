@@ -3,10 +3,19 @@ kind: Kustomization
 
 namespace: audiodeskription
 
+configMapGenerator:
+  - name: oidc-config
+    literals:
+      - OIDC_ISSUER_URL=https://keycloak.ki.fh-swf.de/realms/public
+      - OIDC_CLIENT_ID=fh-swf-cloud
+      - OIDC_COOKIE_SECURE="true"
+      - OIDC_REDIRECT_URI=https://descraibe.fh-swf.cloud/api/auth/callback
+
 resources:
   - ../../base
   - openai-sealedsecret.yaml
   - cnpg-sealedsecret.yaml
+  - oidc-sealedsecret.yaml
 
 # Updated by release-please for versioned release deployments.
 images:
@@ -14,3 +23,19 @@ images:
     newTag: v0.22.3 # x-release-please-version
   - name: ghcr.io/fhswf/descraibe/audiodeskription-frontend
     newTag: v0.22.3 # x-release-please-version
+
+patches:
+  - target:
+      kind: Deployment
+      name: audiodeskription-backend
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom/-
+        value:
+          secretRef:
+            name: oidc-secret
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom/-
+        value:
+          configMapRef:
+            name: oidc-config

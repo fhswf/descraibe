@@ -4,10 +4,20 @@ kind: Kustomization
 nameSuffix: -staging
 namespace: audiodeskription-staging
 
+configMapGenerator:
+  - name: oidc-config
+    literals:
+      - OIDC_ISSUER_URL=https://keycloak.ki.fh-swf.de/realms/public
+      - OIDC_CLIENT_ID=fh-swf-cloud
+      - OIDC_COOKIE_SECURE="true"
+      - OIDC_REDIRECT_URI=https://descraibe.gawron.cloud/api/auth/callback
+
+
 resources:
   - ../../base
   - openai-sealedsecret.yaml
   - cnpg-sealedsecret.yaml
+  - oidc-sealedsecret.yaml
 
 # Bootstrap values. After every successful push to main, CI replaces both tags
 # with the immutable sha-* tag that it just built and commits the change.
@@ -33,41 +43,15 @@ patches:
         path: /spec/template/spec/containers/0/envFrom/0/secretRef/name
         value: openai-secret-staging
       - op: add
-        path: /spec/template/spec/containers/0/env/-
+        path: /spec/template/spec/containers/0/envFrom/-
         value:
-          name: OIDC_ISSUER_URL
-          value: https://keycloak.ki.fh-swf.de/realms/public
+          secretRef:
+            name: oidc-secret-staging
       - op: add
-        path: /spec/template/spec/containers/0/env/-
+        path: /spec/template/spec/containers/0/envFrom/-
         value:
-          name: OIDC_CLIENT_ID
-          value: fh-swf-cloud
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: OIDC_CLIENT_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: openai-secret-staging
-              key: OIDC_CLIENT_SECRET
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: OIDC_SESSION_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: openai-secret-staging
-              key: OIDC_SESSION_SECRET
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: OIDC_COOKIE_SECURE
-          value: "true"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: OIDC_REDIRECT_URI
-          value: https://descraibe.gawron.cloud/api/auth/callback
+          configMapRef:
+            name: oidc-config-staging
   - target:
       kind: Deployment
       name: audiodeskription-backend
