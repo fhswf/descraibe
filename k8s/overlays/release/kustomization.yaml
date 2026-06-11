@@ -22,7 +22,7 @@ images:
   - name: ghcr.io/fhswf/descraibe/audiodeskription-backend
     newTag: v0.23.0 # x-release-please-version
   - name: ghcr.io/fhswf/descraibe/audiodeskription-frontend
-    newTag: v0.22.3 # x-release-please-version
+    newTag: v0.23.0 # x-release-please-version
 
 patches:
   - target:
