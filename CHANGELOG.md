@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0](https://github.com/fhswf/descraibe/compare/v0.23.0...v1.0.0) (2026-06-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* add unit tests for backend and frontend
+
+### test
+
+* add unit tests for backend and frontend ([8f77948](https://github.com/fhswf/descraibe/commit/8f77948a1267951927fe430bef714672b4f7e9c3))
+
+
+### Features
+
+* **k8s:** add gpt-5.5 preset option to ConfigMap ([ce79b82](https://github.com/fhswf/descraibe/commit/ce79b827c27934a8ea042d9c85853aa65e2966ac))
+
 ## [0.23.0](https://github.com/fhswf/descraibe/compare/v0.22.3...v0.23.0) (2026-06-09)
 
 
