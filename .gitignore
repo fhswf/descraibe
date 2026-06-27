@@ -215,3 +215,7 @@ node_modules/
 webapp/test-results/
 webapp/playwright-report/
 webapp/config/
+
+# Playwright test results
+test-results/
+playwright-report/
