@@ -661,6 +661,7 @@ class Person:
         self.first_seen_ts = first_seen_ts
         self.last_seen_ts = first_seen_ts
         self.appearances: List[Dict[str, Any]] = []
+        self.face_ids: List[int] = []  # Track linked face IDs
         self.attributes: Dict[str, Any] = {}
         self.description: str = ""
         self._face_colors: List[Tuple[float, float, float]] = []
@@ -669,26 +670,30 @@ class Person:
         if embedding is not None:
             self._embeddings.append(embedding)
 
-    def add_appearance(
+    def add_face(
         self,
         timestamp_s: float,
         image_path: str,
         face_bbox: Dict[str, Any],
-        person_region: np.ndarray,
-        attributes: Dict[str, Any],
+        face_id: int,
+        attributes: Optional[Dict[str, Any]] = None,
         embedding: Optional[np.ndarray] = None,
     ) -> None:
+        """Add a face to this person."""
         self.appearances.append({
             "timestamp_s": timestamp_s,
             "image_path": image_path,
             "face_bbox": face_bbox,
+            "face_id": face_id,
         })
+        self.face_ids.append(face_id)
         self.last_seen_ts = timestamp_s
 
         # Merge attributes (prefer first non-None values)
-        for key, value in attributes.items():
-            if key not in self.attributes or self.attributes[key] is None:
-                self.attributes[key] = value
+        if attributes:
+            for key, value in attributes.items():
+                if key not in self.attributes or self.attributes[key] is None:
+                    self.attributes[key] = value
 
         # Store embedding for future matching
         if embedding is not None:
@@ -727,15 +732,75 @@ class Person:
             "first_seen_ts": self.first_seen_ts,
             "last_seen_ts": self.last_seen_ts,
             "appearances_count": len(self.appearances),
+            "face_ids": self.face_ids,
             "attributes": self.attributes,
             "description": self.description,
         }
 
 
+def _save_face_crop(
+    img: np.ndarray, 
+    face_bbox: Dict[str, Any], 
+    job_dir: Path,
+    face_idx: int
+) -> Optional[str]:
+    """Extract and save face crop to disk.
+    
+    Args:
+        img: Full BGR image
+        face_bbox: Face bounding box dict with x, y, w, h
+        job_dir: Job directory path
+        face_idx: Unique face index for filename
+        
+    Returns:
+        Relative path to saved face crop or None on failure
+    """
+    try:
+        x, y, w, h = int(face_bbox["x"]), int(face_bbox["y"]), int(face_bbox["w"]), int(face_bbox["h"])
+        
+        # Add margin around face
+        margin = int(min(w, h) * 0.15)
+        x1 = max(0, x - margin)
+        y1 = max(0, y - margin)
+        x2 = min(img.shape[1], x + w + margin)
+        y2 = min(img.shape[0], y + h + margin)
+        
+        face_crop = img[y1:y2, x1:x2]
+        if face_crop.size == 0 or face_crop.shape[0] < 10 or face_crop.shape[1] < 10:
+            return None
+        
+        # Save to faces directory
+        faces_dir = job_dir / "faces"
+        faces_dir.mkdir(exist_ok=True)
+        
+        # Use PNG for better quality
+        crop_path = faces_dir / f"face_{face_idx:05d}.jpg"
+        success = cv2.imwrite(str(crop_path), face_crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        
+        if success:
+            return str(crop_path.relative_to(job_dir))
+        return None
+    except Exception as e:
+        logger.warning("Failed to save face crop: %s", e)
+        return None
+
+
+def _extract_face_bbox(face_bbox: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract face bbox as dict with x, y, w, h."""
+    return {
+        "x": float(face_bbox.get("x", 0)),
+        "y": float(face_bbox.get("y", 0)),
+        "w": float(face_bbox.get("w", 0)),
+        "h": float(face_bbox.get("h", 0)),
+        "confidence": float(face_bbox.get("confidence", 0.0)) if "confidence" in face_bbox else None,
+    }
+
+
 def track_persons_across_frames(
     detections_by_image: List[Dict[str, Any]],
+    job_dir: Optional[Path] = None,
     progress_cb: Optional[Callable[..., None]] = None,
-) -> List[Person]:
+) -> Tuple[List[Person], List[Dict[str, Any]]]:
     """Match detected persons across images using FaceNet embeddings + temporal cues.
 
     Uses face embeddings for robust person matching across frames, regardless of
@@ -743,13 +808,16 @@ def track_persons_across_frames(
 
     Args:
         detections_by_image: List of dicts with keys: image_path, timestamp_s, faces
+        job_dir: Optional job directory for saving face crops
         progress_cb: Optional callback for progress updates (message, current, total)
 
     Returns:
-        List of Person objects with assigned IDs
+        Tuple of (List of Person objects, List of face dicts)
     """
     persons: List[Person] = []
+    faces: List[Dict[str, Any]] = []  # All detected faces
     next_person_id = 1
+    next_face_id = 1
     total_images = len(detections_by_image)
 
     # Thresholds
@@ -777,12 +845,12 @@ def track_persons_across_frames(
     for idx, detection in enumerate(detections_by_image):
         image_path = detection["image_path"]
         timestamp_s = detection["timestamp_s"]
-        faces = detection["faces"]
+        faces_in_image = detection["faces"]
 
         if (idx + 1) % 20 == 0 or idx == total_images - 1:
             _emit(f"Tracking persons: {idx + 1}/{total_images} frames…", idx + 1)
 
-        if not faces:
+        if not faces_in_image:
             continue
 
         # Load image for color extraction and embedding
@@ -790,18 +858,35 @@ def track_persons_across_frames(
         if img is None:
             continue
 
-        # Try to match each face to existing persons
-        unmatched_faces = []
-        for face_bbox in faces:
-            matched = False
-
+        # Process each face in this frame
+        for face_bbox in faces_in_image:
             # Extract face embedding
             embedding = None
             if face_net_available:
                 embedding = embedding_extractor.extract_from_image(img, face_bbox)
 
+            # Extract face color
             face_color = _face_region_color(img, face_bbox)
 
+            # Extract face crop and save
+            crop_path = None
+            if job_dir is not None:
+                crop_path = _save_face_crop(img, face_bbox, job_dir, next_face_id)
+
+            # Create face record
+            face_record = {
+                "face_id": next_face_id,
+                "image_path": str(image_path),
+                "timestamp_s": timestamp_s,
+                "face_bbox": _extract_face_bbox(face_bbox),
+                "embedding": embedding.tolist() if embedding is not None else None,
+                "crop_path": crop_path,
+                "top_color": None,  # Will be filled later
+            }
+            faces.append(face_record)
+
+            # Try to match this face to existing persons
+            matched = False
             for person in persons:
                 # Check temporal overlap
                 if timestamp_s - person.last_seen_ts > TEMPORAL_GAP:
@@ -814,9 +899,9 @@ def track_persons_across_frames(
                         # Matched via face embedding!
                         person_region = extract_person_region(img, face_bbox)
                         attributes = extract_person_attributes(img, face_bbox, person_region)
-                        person.add_appearance(
-                            timestamp_s, image_path, face_bbox, person_region, attributes,
-                            embedding=embedding
+                        person.add_face(
+                            timestamp_s, image_path, face_bbox, face_id=next_face_id,
+                            attributes=attributes, embedding=embedding
                         )
                         person.update_color(face_color)
                         matched = True
@@ -838,40 +923,39 @@ def track_persons_across_frames(
                 # Matched via fallback!
                 person_region = extract_person_region(img, face_bbox)
                 attributes = extract_person_attributes(img, face_bbox, person_region)
-                person.add_appearance(
-                    timestamp_s, image_path, face_bbox, person_region, attributes,
-                    embedding=embedding
+                person.add_face(
+                    timestamp_s, image_path, face_bbox, face_id=next_face_id,
+                    attributes=attributes, embedding=embedding
                 )
                 person.update_color(face_color)
                 matched = True
                 break
 
+            # Create new person for unmatched face
             if not matched:
-                unmatched_faces.append((face_bbox, face_color, embedding))
+                person = Person(next_person_id, timestamp_s, embedding=embedding)
+                person_region = extract_person_region(img, face_bbox)
+                attributes = extract_person_attributes(img, face_bbox, person_region)
+                person.add_face(
+                    timestamp_s, image_path, face_bbox, face_id=next_face_id,
+                    attributes=attributes, embedding=embedding
+                )
+                person.update_color(face_color)
 
-        # Create new persons for unmatched faces
-        for face_bbox, face_color, embedding in unmatched_faces:
-            person = Person(next_person_id, timestamp_s, embedding=embedding)
-            person_region = extract_person_region(img, face_bbox)
-            attributes = extract_person_attributes(img, face_bbox, person_region)
-            person.add_appearance(
-                timestamp_s, image_path, face_bbox, person_region, attributes,
-                embedding=embedding
-            )
-            person.update_color(face_color)
+                # Try to detect name from this frame
+                name = detect_name_overlay(image_path)
+                if name:
+                    person.name = name
+                    person.description = f"{name}"
 
-            # Try to detect name from this frame
-            name = detect_name_overlay(image_path)
-            if name:
-                person.name = name
-                person.description = f"{name}"
+                persons.append(person)
+                next_person_id += 1
 
-            persons.append(person)
-            next_person_id += 1
+            next_face_id += 1
 
     _emit(f"Building descriptions for {len(persons)} persons…", total_images)
 
-    # Post-process: build descriptions
+    # Post-process: build descriptions and update face colors
     for person in persons:
         attrs = person.attributes
         color_parts = []
@@ -887,8 +971,16 @@ def track_persons_across_frames(
         else:
             person.description = f"Person {person.person_id}"
 
-    logger.info("Tracked %d unique persons across %d images", len(persons), len(detections_by_image))
-    return persons
+        # Update face colors in the faces list
+        for face_id in person.face_ids:
+            for face in faces:
+                if face["face_id"] == face_id:
+                    face["top_color"] = attrs.get("top_color")
+                    break
+
+    logger.info("Tracked %d unique persons and %d faces across %d images", 
+                len(persons), len(faces), len(detections_by_image))
+    return persons, faces
 
 
 # ── Timestamp helpers (shared with image_extraction) ────────────────────────────
@@ -911,18 +1003,20 @@ def _extract_ts_from_filename(path: str) -> Optional[float]:
 
 def analyze_persons(
     scene_images: List[str],
+    job_dir: Optional[str] = None,
     progress_cb: Optional[Callable[..., None]] = None,
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
     """Analyze persons in scene images.
 
     Args:
         scene_images: List of image file paths (with HH-MM-SS-mmm timestamps in names)
+        job_dir: Optional job directory path for saving face crops
         progress_cb: Optional callback for progress updates
 
     Returns:
-        DataFrame with columns: person_id, name, first_seen_ts, last_seen_ts,
-        appearances_count, attributes (JSON), description, representative_image,
-        appearances_count, attributes (JSON), description
+        Tuple of (DataFrame with person info, List of face dicts)
+        DataFrame columns: person_id, name, first_seen_ts, last_seen_ts,
+        appearances_count, face_ids, attributes (JSON), description, representative_image
     """
     _emit_progress(progress_cb, "Detecting persons in images…", 0, len(scene_images))
 
@@ -947,15 +1041,26 @@ def analyze_persons(
             )
 
     _emit_progress(progress_cb, "Tracking persons across frames…")
-    persons = track_persons_across_frames(detections_by_image, progress_cb=progress_cb)
+    job_dir_path = Path(job_dir) if job_dir else None
+    persons, faces = track_persons_across_frames(
+        detections_by_image, job_dir=job_dir_path, progress_cb=progress_cb
+    )
 
     # Build DataFrame
     rows = []
     for person in persons:
-        # Pick representative image from first appearance
+        # Pick representative image and crop from first appearance
         rep_image = None
+        rep_crop = None
         if person.appearances:
             rep_image = person.appearances[0].get("image_path")
+            # Find the corresponding face crop
+            first_face_id = person.face_ids[0] if person.face_ids else None
+            if first_face_id:
+                for face in faces:
+                    if face["face_id"] == first_face_id:
+                        rep_crop = face.get("crop_path")
+                        break
 
         rows.append({
             "person_id": person.person_id,
@@ -963,14 +1068,16 @@ def analyze_persons(
             "first_seen_ts": person.first_seen_ts,
             "last_seen_ts": person.last_seen_ts,
             "appearances_count": len(person.appearances),
+            "face_ids": json.dumps(person.face_ids),
             "attributes": json.dumps(person.attributes),
             "description": person.description,
             "representative_image": rep_image,
+            "representative_crop": rep_crop,
         })
 
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.sort_values("first_seen_ts").reset_index(drop=True)
 
-    _emit_progress(progress_cb, f"Person analysis complete: {len(persons)} persons detected", len(scene_images), len(scene_images))
-    return df
+    _emit_progress(progress_cb, f"Person analysis complete: {len(persons)} persons, {len(faces)} faces", len(scene_images), len(scene_images))
+    return df, faces

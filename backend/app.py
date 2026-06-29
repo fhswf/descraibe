@@ -1341,14 +1341,17 @@ def run_persons(job_id: str, body: dict = Body(default={})):
                     percent = 50
                 _push_progress(job_id, "persons", msg, percent, 100)
 
-            persons_df = persons_mod.analyze_persons(
+            job_dir = sm.job_dir(job_id)
+            persons_df, faces = persons_mod.analyze_persons(
                 job["scene_images"],
+                job_dir=str(job_dir),
                 progress_cb=cb_persons,
             )
 
-            sm.update_job(job_id, persons_df=persons_df)
+            # Store faces list in job state
+            sm.update_job(job_id, persons_df=persons_df, faces=faces)
 
-            # Persist to PostgreSQL if enabled
+            # Persist persons to PostgreSQL if enabled
             if _DATASTORE.enabled and persons_df is not None and not persons_df.empty:
                 persons_list = persons_df.to_dict(orient="records")
                 _DATASTORE.store_persons(job_id, persons_list)
@@ -1357,6 +1360,7 @@ def run_persons(job_id: str, body: dict = Body(default={})):
             _push_progress(job_id, "persons", "Person analysis complete.", 100, 100)
             _push(job_id, "persons_done", {
                 "persons_count": len(persons_df),
+                "faces_count": len(faces),
             })
         except Exception as exc:
             sm.set_status(job_id, "error", str(exc))
@@ -1382,11 +1386,21 @@ def get_persons(job_id: str):
     persons_clean = persons_df.replace({float('nan'): None})
     persons_list = persons_clean.to_dict(orient="records")
 
+    # Parse face_ids from JSON string
+    for person in persons_list:
+        face_ids = person.get("face_ids")
+        if isinstance(face_ids, str):
+            try:
+                person["face_ids"] = json.loads(face_ids) if face_ids else []
+            except:
+                person["face_ids"] = []
+        elif face_ids is None:
+            person["face_ids"] = []
+
     # Backfill representative_image from first_seen_ts if not present
     scene_images = job.get("scene_images") or []
     for person in persons_list:
         if "representative_image" not in person or not person["representative_image"]:
-            # Find image closest to first_seen_ts
             ts = person.get("first_seen_ts", 0)
             if ts and scene_images:
                 def extract_ts(path):
@@ -1399,6 +1413,40 @@ def get_persons(job_id: str):
                 person["representative_image"] = closest
 
     return {"persons": persons_list}
+
+
+@app.get("/api/jobs/{job_id}/faces")
+def get_faces(job_id: str):
+    """Return all detected faces for a job."""
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+
+    faces = job.get("faces")
+    if faces is None:
+        return {"faces": []}
+
+    return {"faces": faces}
+
+
+# ── Face Image Endpoint ─────────────────────────────────────────────────────────
+
+@app.get("/api/jobs/{job_id}/faces/{face_id}")
+def get_face_image(job_id: str, face_id: int):
+    """Return the face crop image for a face."""
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+
+    faces = job.get("faces") or []
+    for face in faces:
+        if face.get("face_id") == face_id and face.get("crop_path"):
+            job_path = sm.job_dir(job_id)
+            crop_path = job_path / face["crop_path"]
+            if crop_path.exists():
+                return FileResponse(crop_path, media_type="image/jpeg")
+
+    return JSONResponse({"error": "Face not found"}, status_code=404)
 
 
 # ── GPT Description ────────────────────────────────────────────────────────────

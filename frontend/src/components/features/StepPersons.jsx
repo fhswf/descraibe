@@ -292,9 +292,13 @@ function EditPersonDialog({ person, onSave, onClose }) {
 
 function PersonCard({ person, onEdit, jobId }) {
     const [imgError, setImgError] = useState(false);
-    // Extract just the filename from the full path
+    // Use face crop if available, otherwise fall back to full frame
+    const faceCrop = person.representative_crop;
     const imageName = person.representative_image ? person.representative_image.split('/').pop() : null;
-    const imageUrl = imageName && jobId ? `/api/jobs/${jobId}/images/${imageName}` : null;
+    // Face crop URL: /api/jobs/{jobId}/faces/{faceId}
+    const faceId = faceCrop ? parseInt(faceCrop.match(/face_(\d+)/)?.[1]) : null;
+    const faceImageUrl = faceId && jobId ? `/api/jobs/${jobId}/faces/${faceId}` : null;
+    const frameImageUrl = imageName && jobId ? `/api/jobs/${jobId}/images/${imageName}` : null;
 
     const attributes = person.attributes ? (typeof person.attributes === 'string' ? JSON.parse(person.attributes) : person.attributes) : {};
     
@@ -302,9 +306,16 @@ function PersonCard({ person, onEdit, jobId }) {
         <div className="flex flex-col gap-2 p-3 bg-bg-card border border-border-subtle rounded-lg">
             <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2">
-                    {imageUrl && !imgError ? (
+                    {faceImageUrl && !imgError ? (
                         <img
-                            src={imageUrl}
+                            src={faceImageUrl}
+                            alt={`Person ${person.person_id}`}
+                            className="w-12 h-12 rounded-full object-cover ring-2 ring-primary/30"
+                            onError={() => setImgError(true)}
+                        />
+                    ) : frameImageUrl && !imgError ? (
+                        <img
+                            src={frameImageUrl}
                             alt={`Person ${person.person_id}`}
                             className="w-12 h-12 rounded-lg object-cover ring-1 ring-border-subtle"
                             onError={() => setImgError(true)}
