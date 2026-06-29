@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
 
 function formatTimestamp(seconds) {
@@ -201,6 +201,30 @@ export function StepPersons() {
     const [persons, setPersons] = useState([]);
     const [loading, setLoading] = useState(false);
     const [editingPerson, setEditingPerson] = useState(null);
+    const jobDataRef = useRef(jobData);
+    const isRunningRef = useRef(false);
+
+    // Keep refs in sync
+    useEffect(() => {
+        jobDataRef.current = jobData;
+    }, [jobData]);
+
+    // Update isRunningRef when progress changes
+    useEffect(() => {
+        isRunningRef.current = progressData?.persons !== null && progressData?.persons !== undefined;
+    }, [progressData?.persons]);
+
+    // Load persons data when not running
+    useEffect(() => {
+        const jobId = jobDataRef.current?.id;
+        if (!jobId) return;
+
+        setLoading(true);
+        apiFetch(`/api/jobs/${jobId}/persons`)
+            .then(data => setPersons(data.persons || []))
+            .catch(() => setPersons([]))
+            .finally(() => setLoading(false));
+    }, [apiFetch, progressData?.persons]);
 
     if (currentStep !== 5) return null;
 
@@ -208,17 +232,6 @@ export function StepPersons() {
     const isRunning = progressData?.persons !== null && progressData?.persons !== undefined;
     const progressMsg = progressData?.persons?.msg || null;
     const progressPercent = progressData?.persons?.percent || null;
-
-    // Load persons data when not running
-    useEffect(() => {
-        if (!isRunning && jobData?.id) {
-            setLoading(true);
-            apiFetch(`/api/jobs/${jobData.id}/persons`)
-                .then(data => setPersons(data.persons || []))
-                .catch(() => setPersons([]))
-                .finally(() => setLoading(false));
-        }
-    }, [isRunning, jobData?.id]);
 
     const handleSavePerson = async (personId, updates) => {
         // Update local state
