@@ -265,3 +265,77 @@ class TestYuNetDetector:
         d1 = YuNetDetector()
         d2 = YuNetDetector()
         assert d1 is d2
+
+    def test_detector_output_format(self):
+        """Test that detector returns correct output format (x, y, w, h, confidence)."""
+        from backend.pipeline.person_analysis import YuNetDetector
+
+        # Reset singleton
+        YuNetDetector._instance = None
+        YuNetDetector._model = None
+
+        # Create mock model that returns a valid result
+        mock_model = MagicMock()
+        # Simulate FaceDetectorYN output: (1, 15) = [x, y, w, h, 5_landmarks..., conf]
+        mock_result = np.array([[100, 100, 50, 60, 130, 130, 150, 130, 155, 135, 130, 140, 155, 145, 0.9]], dtype=np.float32)
+        mock_model.detect.return_value = (None, mock_result)
+        mock_model.setInputSize = MagicMock()
+
+        with patch.object(YuNetDetector, "_ensure_model", return_value=True):
+            with patch.object(YuNetDetector, "_model", mock_model):
+                detector = YuNetDetector()
+                img = np.zeros((480, 640, 3), dtype=np.uint8)
+                faces = detector.detect(img)
+
+                assert len(faces) == 1
+                face = faces[0]
+                assert "x" in face
+                assert "y" in face
+                assert "w" in face
+                assert "h" in face
+                assert "confidence" in face
+                assert face["x"] == 100
+                assert face["y"] == 100
+                assert face["w"] == 50
+                assert face["h"] == 60
+                assert abs(face["confidence"] - 0.9) < 0.01
+
+    def test_detector_handles_none_results(self):
+        """Test that detector handles None results gracefully."""
+        from backend.pipeline.person_analysis import YuNetDetector
+
+        # Reset singleton
+        YuNetDetector._instance = None
+        YuNetDetector._model = None
+
+        mock_model = MagicMock()
+        mock_model.detect.return_value = (None, None)
+        mock_model.setInputSize = MagicMock()
+
+        with patch.object(YuNetDetector, "_ensure_model", return_value=True):
+            with patch.object(YuNetDetector, "_model", mock_model):
+                detector = YuNetDetector()
+                img = np.zeros((480, 640, 3), dtype=np.uint8)
+                faces = detector.detect(img)
+
+                assert faces == []
+
+    def test_detector_handles_empty_results(self):
+        """Test that detector handles empty array results gracefully."""
+        from backend.pipeline.person_analysis import YuNetDetector
+
+        # Reset singleton
+        YuNetDetector._instance = None
+        YuNetDetector._model = None
+
+        mock_model = MagicMock()
+        mock_model.detect.return_value = (None, np.array([], dtype=np.float32).reshape(0, 15))
+        mock_model.setInputSize = MagicMock()
+
+        with patch.object(YuNetDetector, "_ensure_model", return_value=True):
+            with patch.object(YuNetDetector, "_model", mock_model):
+                detector = YuNetDetector()
+                img = np.zeros((480, 640, 3), dtype=np.uint8)
+                faces = detector.detect(img)
+
+                assert faces == []
