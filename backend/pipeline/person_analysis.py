@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 _YU_NET_MODEL_PATH = os.environ.get(
     "YU_NET_MODEL_PATH",
-    str(Path(__file__).parent.parent.parent / "models" / "face_detection_yunet_2026may.onnx")
+    str(Path(__file__).parent.parent.parent / "models" / "face_detection_yunet_2023mar.onnx")
 )
 _TESSERACT_CMD = os.environ.get("TESSERACT_CMD", "").strip() or None
 _TESSERACT_LANG = os.environ.get("TESSERACT_LANG", "deu+eng").strip()
@@ -56,16 +56,20 @@ def _emit_progress(
 
 _YU_NET_MODEL_URL = (
     "https://raw.githubusercontent.com/opencv/opencv_zoo/main/"
-    "models/face_detection_yunet/face_detection_yunet_2026may.onnx"
+    "models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 )
 
 
 def _download_yunet_model(model_path: Path) -> bool:
-    """Download YuNet ONNX model if not present."""
+    """Download YuNet ONNX model if not present or corrupted."""
     import urllib.request
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = model_path.with_suffix(".tmp")
+
+    # Remove any existing (potentially corrupted) model file
+    if model_path.exists():
+        model_path.unlink()
 
     logger.info("Downloading YuNet model from %s to %s", _YU_NET_MODEL_URL, model_path)
 
@@ -121,7 +125,18 @@ class YuNetDetector:
             logger.info("YuNet face detector loaded from %s", model_path)
             return True
         except Exception as exc:
-            logger.warning("Failed to load YuNet model: %s", exc)
+            # Model file exists but is corrupted - try re-downloading
+            logger.warning(
+                "Failed to load YuNet model (possibly corrupted): %s. Attempting re-download...",
+                exc,
+            )
+            if _download_yunet_model(model_path):
+                try:
+                    self._model = cv2.dnn.readNet(str(model_path))
+                    logger.info("YuNet face detector loaded after re-download from %s", model_path)
+                    return True
+                except Exception as exc2:
+                    logger.warning("Failed to load re-downloaded model: %s", exc2)
             return False
 
     def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
