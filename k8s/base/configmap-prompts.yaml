@@ -46,6 +46,22 @@ data:
         5.1 Beschreibe schnelle oder komplexe Szenen kompakt.
         5.2 Zeige Emotionen nur, wenn sie visuell eindeutig sind.
         5.3 Berücksichtige kulturelle Hinweise, falls relevant.
+
+    6. Personenbeschreibung – Erstnennung vs. Folgebenennung:
+        6.1 ERSTNENNUNG: Beim ersten Erscheinen einer Person im Video:
+            - Nenne den vollständigen Namen (falls aus Bauchbinden/OCR bekannt)
+            - Beschreibe kurz die visuelle Erscheinung: Kleidung, Haarfarbe, etc.
+            - Beispiel: "Maria trägt ein blaues Oberteil." oder "Ein Mann mit schwarzer Jacke."
+        6.2 FOLGEBENENNUNG: Bei subsequent Erwähnungen:
+            - Nur den Namen oder ein Pronomen verwenden
+            - Keine erneute Beschreibung der Kleidung/Optik
+            - Beispiel: "Maria lächelt." oder "Er nickt."
+        6.3 Verwende die [ERSTNENNUNG] und [FOLGEBENENNUNG] Marker aus dem Persons-Kontext.
+
+    7. Personen-Tracking über Szenen hinweg:
+        7.1 Wenn eine Person bereits in einem früheren Slot erwähnt wurde, ist jede weitere Erwähnung FOLGEBENENNUNG.
+        7.2 Auch wenn die Kleidung sich ändert, ist der Name bereits bekannt → FOLGEBENENNUNG.
+        7.3 Füge keine neuen visuellen Beschreibungen hinzu, wenn der Name bereits bekannt ist.
   user_instruction.txt: |
     Hier ist deine Aufgabe für die Sprechpause von {Start} bis {Ende} ({Sprechpause:.2f}s).
 
@@ -60,6 +76,9 @@ data:
     KONTEXT: GEDÄCHTNIS (NICHT WIEDERHOLEN!):
     Folgende Dinge wurden bereits beschrieben. Wiederhole diese Informationen NICHT.
     {Gedaechnis}
+    ---
+    KONTEXT: PERSONEN IM SLOT (Erstnennung vs. Folgebenennung beachten!):
+    {Personen}
     ---
     **FINALE ANWEISUNG UND LÄNGENLIMIT:**
 

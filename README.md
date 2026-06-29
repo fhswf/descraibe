@@ -182,6 +182,9 @@ git push
 | `OIDC_ID_TOKEN_COOKIE_NAME` | `oidc_id_token` | No | Cookie name used to store the OIDC ID token (JWT). |
 | `AD_DATABASE_URL` | *(unset)* | No | PostgreSQL DSN for relational metadata storage (users, user config, presets). Example: `postgresql://user:pass@host:5432/descraibe`. If unset, the app uses file-based fallback for user config/presets. |
 | `AD_USER_CONFIG_DIR` | `${AD_JOBS_DIR}/users` | No | Directory for per-user config storage (`jobs`, `saved metadata`, and pipeline settings) for logged-in users. |
+| `YU_NET_MODEL_PATH` | `/app/models/face_detection_yunet_2023mar.onnx` | No | Path to the YuNet ONNX face detection model. If the file is missing, face detection is skipped gracefully. |
+| `TESSERACT_CMD` | *(system PATH)* | No | Path to the Tesseract binary. If unset, uses `tesseract` from system PATH. |
+| `TESSERACT_LANG` | `deu+eng` | No | Tesseract language packs for OCR (German + English). |
 
 > [!IMPORTANT]
 > `OPENAI_API_KEY` is the only **required** environment variable. The container will start without it, but calls to `/api/run/gpt` will return a `400` error until it is provided.
@@ -306,6 +309,80 @@ restart the pod. The `GPT_PROMPTS_DIR=/app/config/prompts` env var is already se
 
 ---
 
+## Person Analysis
+
+The Person Analysis step (Step 06) automatically detects and tracks persons in video frames using computer vision:
+
+### Features
+
+- **Face Detection**: Uses OpenCV DNN YuNet face detector (MIT-licensed) to identify faces
+- **Name Recognition**: OCR-based detection of Bauchbinden/name overlays using Tesseract
+- **Visual Attributes**: Extracts clothing colors (top/bottom) via k-means clustering
+- **Person Tracking**: Matches detected persons across frames using IoU + color similarity
+- **Prompt Integration**: Injects person context into GPT prompts with Erstnennung/Folgebenennung flags
+
+### How It Works
+
+1. After scene images are extracted, the Person Analysis step processes each image
+2. YuNet detects faces in each frame
+3. Tesseract OCR looks for name overlays (Bauchbinden) near frame edges
+4. Persons are tracked across frames using face bounding box IoU and color matching
+5. Visual attributes (clothing colors) are extracted from person regions
+6. Person data is stored in `persons_df` and optionally persisted to PostgreSQL
+7. GPT prompts receive person context with Erstnennung (first mention) vs Folgebenennung (subsequent) flags
+
+### AD Naming Conventions
+
+The system enforces German AD naming rules:
+- **Erstnennung** (first mention): Full name + brief visual description
+  - Example: "Maria trägt ein blaues Oberteil."
+- **Folgebenennung** (subsequent mentions): Name only or pronoun
+  - Example: "Maria lächelt." or "Er nickt."
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/jobs/{job_id}/persons` | Trigger person analysis |
+| GET | `/api/jobs/{job_id}/persons` | Get detected persons list |
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `YU_NET_MODEL_PATH` | Path to YuNet ONNX model (auto-downloaded if missing) |
+| `TESSERACT_CMD` | Tesseract binary path |
+| `TESSERACT_LANG` | Tesseract languages (default: `deu+eng`) |
+
+### PostgreSQL Schema
+
+Person data is stored in the `job_persons` table (migration `0013_job_persons.sql`):
+
+```sql
+CREATE TABLE job_persons (
+    id              BIGSERIAL PRIMARY KEY,
+    job_id          TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    person_id       INTEGER NOT NULL,
+    name            TEXT,
+    attributes      JSONB,
+    first_seen_ts   DOUBLE PRECISION,
+    last_seen_ts    DOUBLE PRECISION,
+    description     TEXT,
+    appearances     JSONB,
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+```
+
+### Tesseract Installation
+
+The backend requires Tesseract OCR with German language support. This is automatically installed in Docker/Kubernetes:
+
+```dockerfile
+RUN apt-get install -y tesseract-ocr tesseract-ocr-deu
+```
+
+---
+
 ## Development (without Docker)
 
 ### Prerequisites
@@ -396,6 +473,15 @@ the `torch`/`torchaudio` versions in `uv.lock`.
 
 ## Running Tests
 
+Backend unit and integration tests use [pytest](https://pytest.org/):
+
+```bash
+cd webapp
+uv run pytest backend/tests/ -v           # Run all backend tests
+uv run pytest backend/tests/test_person_analysis.py -v  # Person analysis tests
+uv run pytest backend/tests/test_person_pipeline.py -v   # Pipeline integration tests
+```
+
 End-to-end UI tests use [Playwright](https://playwright.dev/):
 
 ```bash
@@ -404,4 +490,4 @@ npm install          # install Playwright
 npm run test         # or: npx playwright test
 ```
 
-The backend must be running on `http://localhost:5000` before executing tests.
+The backend must be running on `http://localhost:5000` before executing UI tests.

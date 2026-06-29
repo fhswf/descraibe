@@ -750,6 +750,19 @@ export function JobProvider({ children }) {
         } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
     }, [jobId, imagesParams, markJobStarted]);
 
+    const handleRunPersons = useCallback(async () => {
+        if (!jobId) return;
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/persons`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            if (!res.ok) throw new Error("Failed to analyze persons");
+            markJobStarted('persons', 'Personen analysieren...');
+        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+    }, [jobId, markJobStarted]);
+
     const handleRunGPT = useCallback(async () => {
         if (!jobId) return;
         if (!gptParams) {
@@ -865,8 +878,12 @@ export function JobProvider({ children }) {
                 setDoneSteps(prev => new Set(prev).add(4));
                 setCurrentStep(5);
                 setProgressData(prev => ({ ...prev, images: null }));
-            } else if (event === 'gpt_done') {
+            } else if (event === 'persons_done') {
                 setDoneSteps(prev => new Set(prev).add(5));
+                setCurrentStep(6);
+                setProgressData(prev => ({ ...prev, persons: null }));
+            } else if (event === 'gpt_done') {
+                setDoneSteps(prev => new Set(prev).add(6));
                 setCurrentStep(6);
                 fetchJobData(jobId); // Need full update for outputs
                 setProgressData(prev => ({ ...prev, gpt: null }));
@@ -875,8 +892,8 @@ export function JobProvider({ children }) {
                     alert(`${data.error_count} GPT-Slot(s) konnten nicht generiert werden. Bitte im Slot Manager prüfen oder GPT erneut starten.`);
                 }
             } else if (event === 'tts_done') {
-                setDoneSteps(prev => new Set(prev).add(6));
-                setCurrentStep(7);
+                setDoneSteps(prev => new Set(prev).add(7));
+                setCurrentStep(8);
                 fetchJobData(jobId);
                 setProgressData(prev => ({ ...prev, tts: null }));
                 setIsRunAllActive(false); // Finished all automatic steps
@@ -893,6 +910,8 @@ export function JobProvider({ children }) {
                 } else if (event === 'slots_done') {
                     handleRunImages();
                 } else if (event === 'images_done') {
+                    handleRunPersons();
+                } else if (event === 'persons_done') {
                     handleRunGPT();
                 } else if (event === 'gpt_done' && !(data.error_count || 0)) {
                     handleRunTTS();
@@ -902,7 +921,7 @@ export function JobProvider({ children }) {
     }, [
         jobId, fetchJobData, updateSavedJobMeta, setProgressData, setDoneSteps,
         setCurrentStep, isRunAllActive, handleRunTranscribe, handleRunSlots,
-        handleRunImages, handleRunGPT, handleRunTTS
+        handleRunImages, handleRunPersons, handleRunGPT, handleRunTTS
     ]);
 
     useEffect(() => {
@@ -936,10 +955,11 @@ export function JobProvider({ children }) {
         else if (!doneSteps.has(2)) handleRunTranscribe();
         else if (!doneSteps.has(3)) handleRunSlots();
         else if (!doneSteps.has(4)) handleRunImages();
-        else if (!doneSteps.has(5)) handleRunGPT();
-        else if (!doneSteps.has(6)) handleRunTTS();
+        else if (!doneSteps.has(5)) handleRunPersons();
+        else if (!doneSteps.has(6)) handleRunGPT();
+        else if (!doneSteps.has(7)) handleRunTTS();
         else setIsRunAllActive(false); // all done
-    }, [doneSteps, handleRunGPT, handleRunImages, handleRunSlots, handleRunTTS, handleRunTranscribe, handleRunVAD, jobId]);
+    }, [doneSteps, handleRunGPT, handleRunPersons, handleRunImages, handleRunSlots, handleRunTTS, handleRunTranscribe, handleRunVAD, jobId]);
 
     const stopRunAll = useCallback(() => {
         setIsRunAllActive(false);
@@ -1000,6 +1020,7 @@ export function JobProvider({ children }) {
         handleRunTranscribe,
         handleRunSlots,
         handleRunImages,
+        handleRunPersons,
         handleRunGPT,
         handleUpdateGPTRecord,
         handleRunTTS,
@@ -1017,7 +1038,7 @@ export function JobProvider({ children }) {
         isConfigModalOpen, setIsConfigModalOpen, gptParams, setGptParams, availableModels, setAvailableModels,
         vadParams, setVadParams, transcribeParams, setTranscribeParams, slotsParams, setSlotsParams,
         ttsParams, setTtsParams, imagesParams, setImagesParams, handleRunVAD, handleRunTranscribe,
-        handleRunSlots, handleRunImages, handleRunGPT, handleUpdateGPTRecord, handleRunTTS, runAllSteps,
+        handleRunSlots, handleRunImages, handleRunPersons, handleRunGPT, handleUpdateGPTRecord, handleRunTTS, runAllSteps,
         isRunAllActive, stopRunAll, authState, login, logout, refreshAuthState
     ]);
 
