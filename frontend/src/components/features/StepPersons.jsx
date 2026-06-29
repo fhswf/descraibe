@@ -374,7 +374,7 @@ export function StepPersons() {
             .finally(() => setLoading(false));
     }, [jobData?.id]);
 
-    if (currentStep !== 5) return null;
+    if (currentStep < 5) return null;
 
     const personsCount = jobData?.persons_count || 0;
     const isRunning = progressData?.persons !== null && progressData?.persons !== undefined;
