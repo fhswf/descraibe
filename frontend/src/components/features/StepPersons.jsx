@@ -1,8 +1,78 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
 
+function formatTimestamp(seconds) {
+    if (!seconds && seconds !== 0) return '-';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function ColorBadge({ color, label }) {
+    if (!color) return null;
+    const colorMap = {
+        'rot': 'bg-red-600', 'blau': 'bg-blue-600', 'grün': 'bg-green-600',
+        'gelb': 'bg-yellow-500', 'schwarz': 'bg-gray-900', 'weiß': 'bg-white',
+        'braun': 'bg-amber-800', 'grau': 'bg-gray-500', 'orange': 'bg-orange-500',
+        'violett': 'bg-purple-600', 'rosa': 'bg-pink-400', 'dunkelblau': 'bg-blue-900',
+        'dunkelbraun': 'bg-amber-950', 'hellgrau': 'bg-gray-300', 'dunkelgrau': 'bg-gray-700',
+        'türkis': 'bg-teal-500', 'olivgrün': 'bg-green-900', 'navy': 'bg-blue-950',
+    };
+    const bgClass = colorMap[color] || 'bg-gray-400';
+    return (
+        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs text-white ${bgClass}`}>
+            {label && <span className="opacity-75">{label}:</span>}
+            {color}
+        </span>
+    );
+}
+
+function PersonCard({ person }) {
+    const attributes = person.attributes ? (typeof person.attributes === 'string' ? JSON.parse(person.attributes) : person.attributes) : {};
+    
+    return (
+        <div className="flex flex-col gap-2 p-3 bg-bg-card border border-border-subtle rounded-lg">
+            <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2">
+                    <span className="text-lg">👤</span>
+                    <div>
+                        <div className="font-medium text-sm">
+                            {person.name || `Person ${person.person_id}`}
+                        </div>
+                        {person.name && (
+                            <div className="text-xs text-text-muted">
+                                Person {person.person_id}
+                            </div>
+                        )}
+                    </div>
+                </div>
+                <div className="text-xs text-text-muted text-right">
+                    <div>{person.appearances_count} Auftritt{person.appearances_count !== 1 ? 'e' : ''}</div>
+                    <div>{formatTimestamp(person.first_seen_ts)} - {formatTimestamp(person.last_seen_ts)}</div>
+                </div>
+            </div>
+            
+            {(attributes.top_color || attributes.bottom_color || attributes.dominant_color) && (
+                <div className="flex flex-wrap gap-1.5">
+                    <ColorBadge color={attributes.top_color} label="Oben" />
+                    <ColorBadge color={attributes.bottom_color} label="Unten" />
+                    <ColorBadge color={attributes.dominant_color} label="Hauptfarbe" />
+                </div>
+            )}
+            
+            {person.description && (
+                <div className="text-xs text-text-secondary pt-1 border-t border-border-subtle">
+                    {person.description}
+                </div>
+            )}
+        </div>
+    );
+}
+
 export function StepPersons() {
-    const { currentStep, jobData, handleRunPersons, progressData } = useJob();
+    const { currentStep, jobData, handleRunPersons, progressData, apiFetch } = useJob();
+    const [persons, setPersons] = useState([]);
+    const [loading, setLoading] = useState(false);
 
     if (currentStep !== 5) return null;
 
@@ -10,6 +80,17 @@ export function StepPersons() {
     const isRunning = progressData?.persons !== null && progressData?.persons !== undefined;
     const progressMsg = progressData?.persons?.msg || null;
     const progressPercent = progressData?.persons?.percent || null;
+
+    // Load persons data when not running
+    useEffect(() => {
+        if (!isRunning && jobData?.id) {
+            setLoading(true);
+            apiFetch(`/api/jobs/${jobData.id}/persons`)
+                .then(data => setPersons(data.persons || []))
+                .catch(() => setPersons([]))
+                .finally(() => setLoading(false));
+        }
+    }, [isRunning, jobData?.id]);
 
     return (
         <div className="flex flex-col gap-5">
@@ -47,14 +128,37 @@ export function StepPersons() {
                 )}
 
                 {/* Results section */}
-                {personsCount > 0 && !isRunning && (
-                    <div className="flex flex-col gap-2 p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
+                {personsCount > 0 && !isRunning && !loading && (
+                    <div className="flex flex-col gap-3">
                         <div className="flex items-center gap-2">
                             <span className="material-icons-round text-green-500 text-lg">check_circle</span>
                             <span className="text-sm font-medium text-green-300">
                                 {personsCount} {personsCount === 1 ? 'Person' : 'Personen'} erkannt
                             </span>
                         </div>
+                        
+                        {/* Person cards */}
+                        <div className="flex flex-col gap-2">
+                            {persons.map(person => (
+                                <PersonCard key={person.person_id} person={person} />
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {personsCount === 0 && !isRunning && !loading && (
+                    <div className="flex items-center gap-2 p-3 bg-bg-card border border-border-subtle rounded-lg">
+                        <span className="material-icons-round text-text-muted text-lg">info</span>
+                        <span className="text-sm text-text-secondary">
+                            Keine Personen in den extrahierten Frames gefunden.
+                        </span>
+                    </div>
+                )}
+
+                {loading && !isRunning && (
+                    <div className="flex items-center gap-2 p-3 text-sm text-text-muted">
+                        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                        Lade Personendaten...
                     </div>
                 )}
 
