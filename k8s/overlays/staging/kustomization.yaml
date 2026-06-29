@@ -23,9 +23,9 @@ resources:
 # with the immutable sha-* tag that it just built and commits the change.
 images:
   - name: ghcr.io/fhswf/descraibe/audiodeskription-backend
-    newTag: sha-fd42757
+    newTag: sha-9a63982
   - name: ghcr.io/fhswf/descraibe/audiodeskription-frontend
-    newTag: sha-fd42757
+    newTag: sha-9a63982
 
 patches:
   - target:
