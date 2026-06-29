@@ -54,8 +54,9 @@ def _emit_progress(
 
 # ── YuNet model download ────────────────────────────────────────────────────────
 
+# Use media.githubusercontent.com for GitHub LFS files
 _YU_NET_MODEL_URL = (
-    "https://raw.githubusercontent.com/opencv/opencv_zoo/main/"
+    "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/"
     "models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 )
 
