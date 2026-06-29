@@ -921,6 +921,7 @@ def analyze_persons(
 
     Returns:
         DataFrame with columns: person_id, name, first_seen_ts, last_seen_ts,
+        appearances_count, attributes (JSON), description, representative_image,
         appearances_count, attributes (JSON), description
     """
     _emit_progress(progress_cb, "Detecting persons in images…", 0, len(scene_images))
@@ -951,6 +952,11 @@ def analyze_persons(
     # Build DataFrame
     rows = []
     for person in persons:
+        # Pick representative image from first appearance
+        rep_image = None
+        if person.appearances:
+            rep_image = person.appearances[0].get("image_path")
+
         rows.append({
             "person_id": person.person_id,
             "name": person.name,
@@ -959,6 +965,7 @@ def analyze_persons(
             "appearances_count": len(person.appearances),
             "attributes": json.dumps(person.attributes),
             "description": person.description,
+            "representative_image": rep_image,
         })
 
     df = pd.DataFrame(rows)

@@ -290,14 +290,28 @@ function EditPersonDialog({ person, onSave, onClose }) {
     );
 }
 
-function PersonCard({ person, onEdit }) {
+function PersonCard({ person, onEdit, jobId }) {
+    const [imgError, setImgError] = useState(false);
+    // Extract just the filename from the full path
+    const imageName = person.representative_image ? person.representative_image.split('/').pop() : null;
+    const imageUrl = imageName && jobId ? `/api/jobs/${jobId}/images/${imageName}` : null;
+
     const attributes = person.attributes ? (typeof person.attributes === 'string' ? JSON.parse(person.attributes) : person.attributes) : {};
     
     return (
         <div className="flex flex-col gap-2 p-3 bg-bg-card border border-border-subtle rounded-lg">
             <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2">
-                    <span className="text-lg">👤</span>
+                    {imageUrl && !imgError ? (
+                        <img
+                            src={imageUrl}
+                            alt={`Person ${person.person_id}`}
+                            className="w-12 h-12 rounded-lg object-cover ring-1 ring-border-subtle"
+                            onError={() => setImgError(true)}
+                        />
+                    ) : (
+                        <span className="text-lg">👤</span>
+                    )}
                     <div>
                         <div className="font-medium text-sm">
                             {person.name || `Person ${person.person_id}`}
@@ -539,6 +553,7 @@ export function StepPersons() {
                                             key={person.person_id} 
                                             person={person} 
                                             onEdit={setEditingPerson}
+                                            jobId={jobData?.job_id}
                                         />
                                     ))
                             )}
