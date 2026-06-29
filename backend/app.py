@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import logging
 import os
 import queue
@@ -1379,7 +1380,25 @@ def get_persons(job_id: str):
 
     # Replace NaN with None and convert to dict
     persons_clean = persons_df.replace({float('nan'): None})
-    return {"persons": persons_clean.to_dict(orient="records")}
+    persons_list = persons_clean.to_dict(orient="records")
+
+    # Backfill representative_image from first_seen_ts if not present
+    scene_images = job.get("scene_images") or []
+    for person in persons_list:
+        if "representative_image" not in person or not person["representative_image"]:
+            # Find image closest to first_seen_ts
+            ts = person.get("first_seen_ts", 0)
+            if ts and scene_images:
+                def extract_ts(path):
+                    m = re.search(r'(\d{2})-(\d{2})-(\d{2})-(\d{3})', path)
+                    if m:
+                        h, mn, s, ms = map(int, m.groups())
+                        return h * 3600 + mn * 60 + s + ms / 1000
+                    return 0
+                closest = min(scene_images, key=lambda p: abs(extract_ts(p) - ts), default=None)
+                person["representative_image"] = closest
+
+    return {"persons": persons_list}
 
 
 # ── GPT Description ────────────────────────────────────────────────────────────
