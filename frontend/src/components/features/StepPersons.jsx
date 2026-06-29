@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
+import { FaceMergeDialog } from './FaceMergeDialog.jsx';
 
 function formatTimestamp(seconds) {
     if (!seconds && seconds !== 0) return '-';
@@ -290,7 +291,7 @@ function EditPersonDialog({ person, onSave, onClose }) {
     );
 }
 
-function PersonCard({ person, onEdit, jobId }) {
+function PersonCard({ person, onEdit, onMergeFaces, jobId }) {
     const [imgError, setImgError] = useState(false);
     // Use face crop if available, otherwise fall back to full frame
     const faceCrop = person.representative_crop;
@@ -346,6 +347,13 @@ function PersonCard({ person, onEdit, jobId }) {
                     >
                         <span className="material-icons-round text-sm text-text-muted hover:text-text-primary">edit</span>
                     </button>
+                    <button
+                        onClick={() => onMergeFaces(person)}
+                        className="p-1.5 hover:bg-bg-primary rounded-lg transition-colors"
+                        title="Gesichter zuweisen"
+                    >
+                        <span className="material-icons-round text-sm text-text-muted hover:text-text-primary">face</span>
+                    </button>
                 </div>
             </div>
             
@@ -373,6 +381,7 @@ export function StepPersons() {
     const [editingPerson, setEditingPerson] = useState(null);
     const [mergingPersons, setMergingPersons] = useState(false);
     const [filter, setFilter] = useState('main'); // 'all', 'main', 'statists'
+    const [mergingFacesPerson, setMergingFacesPerson] = useState(null);
     const jobDataRef = useRef(jobData);
     const isRunningRef = useRef(false);
 
@@ -417,6 +426,16 @@ export function StepPersons() {
     // Count by filter
     const mainCastCount = persons.filter(p => (p.appearances_count || 1) >= 5).length;
     const statistsCount = persons.filter(p => (p.appearances_count || 1) < 5).length;
+
+    const handleMergeFacesRefresh = () => {
+        // Refresh persons from API
+        const jobId = jobDataRef.current?.job_id;
+        if (jobId) {
+            fetch(`/api/jobs/${jobId}/persons`)
+                .then(res => res.json())
+                .then(data => setPersons(data.persons || []));
+        }
+    };
 
     const handleSavePerson = async (personId, updates) => {
         setPersons(prev => prev.map(p => 
@@ -472,7 +491,16 @@ export function StepPersons() {
                     onClose={() => setMergingPersons(false)}
                 />
             )}
-            
+
+            {mergingFacesPerson && (
+                <FaceMergeDialog
+                    person={mergingFacesPerson}
+                    jobId={jobData?.job_id}
+                    onClose={() => setMergingFacesPerson(null)}
+                    onRefresh={handleMergeFacesRefresh}
+                />
+            )}
+
             <div className="flex items-start justify-between gap-4 pb-4 border-b border-border-subtle">
                 <div className="flex gap-4">
                     <div className="text-3xl leading-none">👤</div>

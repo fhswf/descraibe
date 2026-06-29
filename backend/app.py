@@ -2082,3 +2082,183 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ── Similar Faces Endpoint ─────────────────────────────────────────────────────
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    import math
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+@app.get("/api/jobs/{job_id}/persons/{person_id}/similar-faces")
+def get_similar_faces(job_id: str, person_id: int, threshold: float = 0.5):
+    """Find faces similar to a person's faces that might belong to the same person."""
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+
+    faces = job.get("faces") or []
+    if not faces:
+        return {"similar_faces": [], "unassigned_faces": []}
+
+    # Get person's face IDs
+    persons_df = job.get("persons_df")
+    if persons_df is None or persons_df.empty:
+        return {"similar_faces": [], "unassigned_faces": []}
+
+    # Find the person
+    person_row = persons_df[persons_df["person_id"] == person_id]
+    if person_row.empty:
+        return JSONResponse({"error": "Person not found"}, status_code=404)
+
+    # Parse face_ids
+    face_ids_str = person_row.iloc[0].get("face_ids", "[]")
+    if isinstance(face_ids_str, str):
+        try:
+            person_face_ids = set(json.loads(face_ids_str) or [])
+        except:
+            person_face_ids = set()
+    else:
+        person_face_ids = set(face_ids_str or [])
+
+    # Get all face embeddings
+    faces_with_embeddings = [f for f in faces if f.get("embedding")]
+    if not faces_with_embeddings:
+        return {"similar_faces": [], "unassigned_faces": []}
+
+    # Collect person's embeddings
+    person_embeddings = []
+    for fid in person_face_ids:
+        for f in faces_with_embeddings:
+            if f.get("face_id") == fid:
+                person_embeddings.append(f)
+                break
+
+    if not person_embeddings:
+        return {"similar_faces": [], "unassigned_faces": []}
+
+    # Find faces similar to any of person's faces
+    similar = []
+    unassigned = []
+
+    for face in faces_with_embeddings:
+        if face.get("face_id") in person_face_ids:
+            continue  # Skip own faces
+
+        # Check similarity to any of person's faces
+        max_sim = 0.0
+        best_match = None
+        for person_face in person_embeddings:
+            sim = _cosine_similarity(face.get("embedding", []), person_face.get("embedding", []))
+            if sim > max_sim:
+                max_sim = sim
+                best_match = person_face.get("face_id")
+
+        if max_sim >= threshold:
+            similar.append({
+                "face": face,
+                "similarity": round(max_sim, 3),
+                "matches_face_id": best_match,
+            })
+        else:
+            # Check if unassigned (not in any person's face_ids)
+            is_assigned = False
+            for _, p_row in persons_df.iterrows():
+                p_face_ids_str = p_row.get("face_ids", "[]")
+                if isinstance(p_face_ids_str, str):
+                    try:
+                        p_face_ids = set(json.loads(p_face_ids_str) or [])
+                    except:
+                        p_face_ids = set()
+                else:
+                    p_face_ids = set(p_face_ids_str or [])
+                if face.get("face_id") in p_face_ids:
+                    is_assigned = True
+                    break
+            if not is_assigned:
+                unassigned.append(face)
+
+    # Sort similar faces by similarity (highest first)
+    similar.sort(key=lambda x: x["similarity"], reverse=True)
+
+    return {
+        "similar_faces": similar[:20],  # Top 20 similar
+        "unassigned_faces": unassigned[:20],  # Top 20 unassigned
+    }
+
+
+@app.post("/api/jobs/{job_id}/faces/merge")
+def merge_faces(job_id: str, body: dict = Body(...)):
+    """Move faces between persons or merge two persons."""
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+
+    action = body.get("action")  # "merge_to_person" or "split_from_person"
+    face_ids = body.get("face_ids", [])  # List of face IDs to move
+    target_person_id = body.get("target_person_id")  # Target person ID (for merge)
+    source_person_id = body.get("source_person_id")  # Source person ID (for split)
+
+    if not face_ids:
+        return JSONResponse({"error": "No face_ids provided"}, status_code=400)
+
+    persons_df = job.get("persons_df")
+    if persons_df is None or persons_df.empty:
+        return JSONResponse({"error": "No persons found"}, status_code=400)
+
+    faces = job.get("faces") or []
+    face_id_set = set(face_ids)
+
+    # Validate faces exist
+    valid_face_ids = set()
+    for f in faces:
+        if f.get("face_id") in face_id_set:
+            valid_face_ids.add(f.get("face_id"))
+
+    if not valid_face_ids:
+        return JSONResponse({"error": "No valid faces found"}, status_code=400)
+
+    # Update persons_df
+    df_list = persons_df.to_dict(orient="records")
+    modified = False
+
+    for person in df_list:
+        face_ids_str = person.get("face_ids", "[]")
+        if isinstance(face_ids_str, str):
+            try:
+                p_face_ids = json.loads(face_ids_str) if face_ids_str else []
+            except:
+                p_face_ids = []
+        else:
+            p_face_ids = face_ids_str or []
+
+        p_face_ids_set = set(p_face_ids)
+
+        if action == "merge_to_person":
+            # Add faces TO target person
+            if person["person_id"] == target_person_id:
+                new_face_ids = list(p_face_ids_set | valid_face_ids)
+                person["face_ids"] = json.dumps(new_face_ids)
+                modified = True
+
+        elif action == "split_from_person":
+            # Remove faces FROM source person
+            if person["person_id"] == source_person_id:
+                new_face_ids = list(p_face_ids_set - valid_face_ids)
+                person["face_ids"] = json.dumps(new_face_ids)
+                modified = True
+
+    if modified:
+        # Reconstruct DataFrame
+        new_df = pd.DataFrame(df_list)
+        new_df = new_df.sort_values("first_seen_ts").reset_index(drop=True)
+        sm.update_job(job_id, persons_df=new_df)
+
+    return {"status": "ok", "modified": modified, "face_ids": list(valid_face_ids)}
