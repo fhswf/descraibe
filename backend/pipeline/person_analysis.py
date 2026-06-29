@@ -52,6 +52,35 @@ def _emit_progress(
         progress_cb(message)
 
 
+# ── YuNet model download ────────────────────────────────────────────────────────
+
+_YU_NET_MODEL_URL = (
+    "https://github.com/ShiqiYu/libfacedetection.train/"
+    "releases/download/v1.2.4/face_detection_yunet_2023mar.onnx"
+)
+
+
+def _download_yunet_model(model_path: Path) -> bool:
+    """Download YuNet ONNX model if not present."""
+    import urllib.request
+
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = model_path.with_suffix(".tmp")
+
+    logger.info("Downloading YuNet model from %s to %s", _YU_NET_MODEL_URL, model_path)
+
+    try:
+        urllib.request.urlretrieve(_YU_NET_MODEL_URL, str(tmp_path))
+        tmp_path.replace(model_path)
+        logger.info("YuNet model downloaded successfully to %s", model_path)
+        return True
+    except Exception as exc:
+        logger.warning("Failed to download YuNet model: %s", exc)
+        if tmp_path.exists():
+            tmp_path.unlink()
+        return False
+
+
 # ── YuNet face detector ─────────────────────────────────────────────────────────
 
 class YuNetDetector:
@@ -74,13 +103,18 @@ class YuNetDetector:
 
         model_path = Path(_YU_NET_MODEL_PATH)
         if not model_path.exists():
-            logger.warning(
-                "YuNet model not found at %s. Face detection will be skipped. "
-                "Set YU_NET_MODEL_PATH or download from "
-                "https://github.com/ShiqiYu/libfacedetection.train/tree/main/tasks/task1/onnx",
+            logger.info(
+                "YuNet model not found at %s. Attempting to download...",
                 model_path,
             )
-            return False
+            if not _download_yunet_model(model_path):
+                logger.warning(
+                    "Could not download YuNet model. Face detection will be skipped. "
+                    "To fix: either download the model manually from %s "
+                    "or set YU_NET_MODEL_PATH to a valid model file.",
+                    _YU_NET_MODEL_URL,
+                )
+                return False
 
         try:
             self._model = cv2.dnn.readNet(str(model_path))
