@@ -342,7 +342,7 @@ function PersonCard({ person, onEdit }) {
 }
 
 export function StepPersons() {
-    const { currentStep, jobData, handleRunPersons, progressData, apiFetch } = useJob();
+    const { currentStep, jobData, handleRunPersons, progressData } = useJob();
     const [persons, setPersons] = useState([]);
     const [loading, setLoading] = useState(false);
     const [editingPerson, setEditingPerson] = useState(null);
@@ -361,17 +361,18 @@ export function StepPersons() {
         isRunningRef.current = progressData?.persons !== null && progressData?.persons !== undefined;
     }, [progressData?.persons]);
 
-    // Load persons data when not running
+    // Load persons data when job is loaded
     useEffect(() => {
         const jobId = jobDataRef.current?.id;
         if (!jobId) return;
 
         setLoading(true);
-        apiFetch(`/api/jobs/${jobId}/persons`)
+        fetch(`/api/jobs/${jobId}/persons`)
+            .then(res => res.json())
             .then(data => setPersons(data.persons || []))
             .catch(() => setPersons([]))
             .finally(() => setLoading(false));
-    }, [apiFetch, progressData?.persons]);
+    }, [jobData?.id]);
 
     if (currentStep !== 5) return null;
 
