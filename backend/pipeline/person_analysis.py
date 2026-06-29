@@ -564,25 +564,40 @@ class Person:
 
 def track_persons_across_frames(
     detections_by_image: List[Dict[str, Any]],
+    progress_cb: Optional[Callable[..., None]] = None,
 ) -> List[Person]:
     """Match detected persons across images using timecode + visual similarity.
 
     Args:
         detections_by_image: List of dicts with keys: image_path, timestamp_s, faces
+        progress_cb: Optional callback for progress updates (message, current, total)
 
     Returns:
         List of Person objects with assigned IDs
     """
     persons: List[Person] = []
     next_person_id = 1
+    total_images = len(detections_by_image)
 
     IOU_THRESHOLD = 0.3
     COLOR_THRESHOLD = 80.0  # BGR Euclidean distance
 
-    for detection in detections_by_image:
+    def _emit(message: str, current: int) -> None:
+        if progress_cb:
+            try:
+                progress_cb(message, current, total_images)
+            except TypeError:
+                progress_cb(message)
+
+    _emit(f"Tracking persons across {total_images} frames…", 0)
+
+    for idx, detection in enumerate(detections_by_image):
         image_path = detection["image_path"]
         timestamp_s = detection["timestamp_s"]
         faces = detection["faces"]
+
+        if (idx + 1) % 20 == 0 or idx == total_images - 1:
+            _emit(f"Tracking persons: {idx + 1}/{total_images} frames…", idx + 1)
 
         if not faces:
             continue
@@ -641,6 +656,8 @@ def track_persons_across_frames(
 
             persons.append(person)
             next_person_id += 1
+
+    _emit(f"Building descriptions for {len(persons)} persons…", total_images)
 
     # Post-process: build descriptions
     for person in persons:
@@ -717,7 +734,7 @@ def analyze_persons(
             )
 
     _emit_progress(progress_cb, "Tracking persons across frames…")
-    persons = track_persons_across_frames(detections_by_image)
+    persons = track_persons_across_frames(detections_by_image, progress_cb=progress_cb)
 
     # Build DataFrame
     rows = []
