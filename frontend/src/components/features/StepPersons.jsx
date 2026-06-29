@@ -363,7 +363,7 @@ export function StepPersons() {
 
     // Load persons data when job is loaded
     useEffect(() => {
-        const jobId = jobDataRef.current?.id;
+        const jobId = jobDataRef.current?.job_id;
         if (!jobId) return;
 
         setLoading(true);
@@ -372,7 +372,7 @@ export function StepPersons() {
             .then(data => setPersons(data.persons || []))
             .catch(() => setPersons([]))
             .finally(() => setLoading(false));
-    }, [jobData?.id]);
+    }, [jobData?.job_id]);
 
     if (currentStep < 5) return null;
 
