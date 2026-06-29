@@ -339,3 +339,114 @@ class TestYuNetDetector:
                 faces = detector.detect(img)
 
                 assert faces == []
+
+
+class TestFaceNetEmbedding:
+    """Tests for FaceNet embedding extractor."""
+
+    def test_cosine_similarity_same_vector(self):
+        """Cosine similarity of same vector should be 1.0."""
+        from backend.pipeline.person_analysis import _cosine_similarity
+        import numpy as np
+
+        v = np.array([1.0, 2.0, 3.0])
+        assert abs(_cosine_similarity(v, v) - 1.0) < 1e-6
+
+    def test_cosine_similarity_opposite_vectors(self):
+        """Cosine similarity of opposite vectors should be -1.0."""
+        from backend.pipeline.person_analysis import _cosine_similarity
+        import numpy as np
+
+        v1 = np.array([1.0, 2.0, 3.0])
+        v2 = np.array([-1.0, -2.0, -3.0])
+        assert abs(_cosine_similarity(v1, v2) - (-1.0)) < 1e-6
+
+    def test_cosine_similarity_orthogonal_vectors(self):
+        """Cosine similarity of orthogonal vectors should be 0.0."""
+        from backend.pipeline.person_analysis import _cosine_similarity
+        import numpy as np
+
+        v1 = np.array([1.0, 0.0, 0.0])
+        v2 = np.array([0.0, 1.0, 0.0])
+        assert abs(_cosine_similarity(v1, v2)) < 1e-6
+
+    def test_cosine_similarity_zero_vector(self):
+        """Cosine similarity with zero vector should be 0.0."""
+        from backend.pipeline.person_analysis import _cosine_similarity
+        import numpy as np
+
+        v1 = np.array([1.0, 2.0, 3.0])
+        v2 = np.array([0.0, 0.0, 0.0])
+        assert _cosine_similarity(v1, v2) == 0.0
+
+    def test_person_embedding_similarity(self):
+        """Test Person class embedding similarity method."""
+        from backend.pipeline.person_analysis import Person
+        import numpy as np
+
+        # Create person with initial embedding
+        emb1 = np.random.randn(512)
+        person = Person(1, 0.0, embedding=emb1)
+
+        # Similar embedding should have high similarity
+        emb2 = emb1 + np.random.randn(512) * 0.1
+        sim = person.embedding_similarity(emb2)
+        assert sim > 0.8, "Similar embedding should have high similarity"
+
+        # Different embedding should have lower similarity
+        emb3 = np.random.randn(512)
+        sim3 = person.embedding_similarity(emb3)
+        assert sim3 < 0.9, "Different embedding should have lower similarity"
+
+    def test_person_mean_embedding(self):
+        """Test Person mean embedding calculation."""
+        from backend.pipeline.person_analysis import Person
+        import numpy as np
+
+        person = Person(1, 0.0)
+
+        # No embeddings should return None
+        assert person.mean_embedding() is None
+
+        # Add embeddings
+        emb1 = np.array([1.0, 0.0, 0.0])
+        emb2 = np.array([2.0, 0.0, 0.0])
+        person._embeddings = [emb1, emb2]
+
+        mean_emb = person.mean_embedding()
+        expected = np.array([1.5, 0.0, 0.0])
+        assert np.allclose(mean_emb, expected)
+
+
+class TestFaceEmbeddingExtractor:
+    """Tests for FaceEmbeddingExtractor class."""
+
+    def test_extractor_singleton(self):
+        """Test that extractor is a singleton."""
+        from backend.pipeline.person_analysis import FaceEmbeddingExtractor
+
+        # Reset singleton for test
+        FaceEmbeddingExtractor._instance = None
+        FaceEmbeddingExtractor._mtcnn = None
+        FaceEmbeddingExtractor._resnet = None
+
+        e1 = FaceEmbeddingExtractor()
+        e2 = FaceEmbeddingExtractor()
+        assert e1 is e2
+
+    def test_extractor_fallback_when_models_unavailable(self):
+        """Test graceful fallback when FaceNet models can't load."""
+        from backend.pipeline.person_analysis import FaceEmbeddingExtractor
+
+        # Reset singleton
+        FaceEmbeddingExtractor._instance = None
+        FaceEmbeddingExtractor._mtcnn = None
+        FaceEmbeddingExtractor._resnet = None
+
+        extractor = FaceEmbeddingExtractor()
+
+        # Mock _ensure_models to return False
+        with patch.object(extractor, "_ensure_models", return_value=False):
+            img = np.zeros((100, 100, 3), dtype=np.uint8)
+            result = extractor.extract_from_image(img, {"x": 10, "y": 10, "w": 30, "h": 30})
+            assert result is None

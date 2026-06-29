@@ -2,11 +2,12 @@
 
 This module:
 1. Detects faces in scene images using OpenCV DNN YuNet face detector
-2. Extracts person regions (full body from face bounding box)
-3. Detects name overlays (Bauchbinden) via Tesseract OCR
-4. Tracks persons across frames using timecode + visual similarity
-5. Extracts visual attributes (clothing colors, etc.)
-6. Returns a persons_df DataFrame for prompt injection
+2. Extracts face embeddings using FaceNet (facenet-pytorch) for robust person matching
+3. Extracts person regions (full body from face bounding box)
+4. Detects name overlays (Bauchbinden) via Tesseract OCR
+5. Tracks persons across frames using timecode + face embeddings
+6. Extracts visual attributes (clothing colors, etc.)
+7. Returns a persons_df DataFrame for prompt injection
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ _YU_NET_MODEL_PATH = os.environ.get(
 )
 _TESSERACT_CMD = os.environ.get("TESSERACT_CMD", "").strip() or None
 _TESSERACT_LANG = os.environ.get("TESSERACT_LANG", "deu+eng").strip()
+_EMBEDDING_THRESHOLD = float(os.environ.get("FACE_EMBEDDING_THRESHOLD", "0.7"))
 
 
 # ── Progress helpers ────────────────────────────────────────────────────────────
@@ -50,6 +52,148 @@ def _emit_progress(
             progress_cb(message, current, total)
     except TypeError:
         progress_cb(message)
+
+
+# ── FaceNet embedding extractor ─────────────────────────────────────────────────
+
+class FaceEmbeddingExtractor:
+    """Extract face embeddings using MTCNN + InceptionResnetV1 (FaceNet)."""
+
+    _instance: Optional["FaceEmbeddingExtractor"] = None
+    _mtcnn: Optional[Any] = None
+    _resnet: Optional[Any] = None
+    _device: Optional[str] = None
+
+    def __new__(cls) -> "FaceEmbeddingExtractor":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    @property
+    def device(self) -> str:
+        if self._device is None:
+            import torch
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info("FaceEmbeddingExtractor using device: %s", self._device)
+        return self._device
+
+    def _ensure_models(self) -> bool:
+        """Lazy-load MTCNN and InceptionResnetV1 models."""
+        if self._mtcnn is not None and self._resnet is not None:
+            return True
+
+        try:
+            from facenet_pytorch import MTCNN, InceptionResnetV1
+            import torch
+
+            logger.info("Loading FaceNet models (MTCNN + InceptionResnetV1)…")
+            self._mtcnn = MTCNN(
+                image_size=160,
+                margin=20,
+                min_face_size=20,
+                thresholds=[0.6, 0.7, 0.7],
+                factor=0.709,
+                post_process=True,
+                device=self.device,
+            )
+            self._resnet = InceptionResnetV1(pretrained="vggface2").eval().to(self.device)
+            logger.info("FaceNet models loaded successfully")
+            return True
+        except Exception as exc:
+            logger.warning("Failed to load FaceNet models: %s", exc)
+            return False
+
+    def extract_embedding(self, face_image: np.ndarray) -> Optional[np.ndarray]:
+        """Extract 512-dim face embedding from a cropped face image.
+
+        Args:
+            face_image: BGR image of a face (already cropped from YuNet bbox)
+
+        Returns:
+            512-dim embedding vector or None if extraction fails
+        """
+        if not self._ensure_models():
+            return None
+
+        try:
+            from facenet_pytorch import fixed_image_standardization
+
+            # Convert BGR to RGB
+            face_rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
+
+            # Prewhiten (FaceNet preprocessing)
+            prewhitened = fixed_image_standardization(face_rgb)
+
+            # Convert to tensor [1, 3, 160, 160]
+            import torch
+            x = torch.from_numpy(prewhitened).permute(2, 0, 1).unsqueeze(0).float().to(self.device)
+
+            # Get embedding
+            with torch.no_grad():
+                embedding = self._resnet(x)
+
+            return embedding.cpu().numpy().flatten()
+
+        except Exception as exc:
+            logger.debug("Failed to extract face embedding: %s", exc)
+            return None
+
+    def extract_from_image(self, image: np.ndarray, face_bbox: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Extract face embedding directly from full image using YuNet bbox.
+
+        Args:
+            image: Full BGR image
+            face_bbox: Dict with x, y, w, h of face
+
+        Returns:
+            512-dim embedding vector or None
+        """
+        if not self._ensure_models():
+            return None
+
+        x, y, w, h = int(face_bbox["x"]), int(face_bbox["y"]), int(face_bbox["w"]), int(face_bbox["h"])
+
+        # Add margin around face
+        margin = int(min(w, h) * 0.2)
+        x1 = max(0, x - margin)
+        y1 = max(0, y - margin)
+        x2 = min(image.shape[1], x + w + margin)
+        y2 = min(image.shape[0], y + h + margin)
+
+        face_crop = image[y1:y2, x1:x2]
+        if face_crop.size == 0:
+            return None
+
+        # MTCNN expects RGB uint8
+        face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
+
+        try:
+            from facenet_pytorch import fixed_image_standardization
+            import torch
+
+            # Prewhiten
+            prewhitened = fixed_image_standardization(face_rgb)
+
+            # Convert to tensor
+            x = torch.from_numpy(prewhitened).permute(2, 0, 1).unsqueeze(0).float().to(self.device)
+
+            with torch.no_grad():
+                embedding = self._resnet(x)
+
+            return embedding.cpu().numpy().flatten()
+
+        except Exception as exc:
+            logger.debug("Failed to extract embedding from image: %s", exc)
+            return None
+
+
+def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Compute cosine similarity between two embedding vectors."""
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return float(np.dot(a, b) / (norm_a * norm_b))
 
 
 # ── YuNet model download ────────────────────────────────────────────────────────
@@ -510,6 +654,7 @@ class Person:
         person_id: int,
         first_seen_ts: float,
         name: Optional[str] = None,
+        embedding: Optional[np.ndarray] = None,
     ):
         self.person_id = person_id
         self.name = name
@@ -519,6 +664,10 @@ class Person:
         self.attributes: Dict[str, Any] = {}
         self.description: str = ""
         self._face_colors: List[Tuple[float, float, float]] = []
+        # Store face embeddings for matching
+        self._embeddings: List[np.ndarray] = []
+        if embedding is not None:
+            self._embeddings.append(embedding)
 
     def add_appearance(
         self,
@@ -527,6 +676,7 @@ class Person:
         face_bbox: Dict[str, Any],
         person_region: np.ndarray,
         attributes: Dict[str, Any],
+        embedding: Optional[np.ndarray] = None,
     ) -> None:
         self.appearances.append({
             "timestamp_s": timestamp_s,
@@ -540,6 +690,13 @@ class Person:
             if key not in self.attributes or self.attributes[key] is None:
                 self.attributes[key] = value
 
+        # Store embedding for future matching
+        if embedding is not None:
+            self._embeddings.append(embedding)
+            # Keep only last 5 embeddings
+            if len(self._embeddings) > 5:
+                self._embeddings.pop(0)
+
     def update_color(self, color: Tuple[float, float, float]) -> None:
         self._face_colors.append(color)
         if len(self._face_colors) > 5:
@@ -549,6 +706,19 @@ class Person:
         if not self._face_colors:
             return (0.0, 0.0, 0.0)
         return tuple(sum(colors) / len(self._face_colors) for colors in zip(*self._face_colors))
+
+    def mean_embedding(self) -> Optional[np.ndarray]:
+        """Get mean face embedding across all appearances."""
+        if not self._embeddings:
+            return None
+        return np.mean(self._embeddings, axis=0)
+
+    def embedding_similarity(self, other_embedding: np.ndarray) -> float:
+        """Compute cosine similarity between given embedding and this person's mean embedding."""
+        mean_emb = self.mean_embedding()
+        if mean_emb is None:
+            return 0.0
+        return _cosine_similarity(mean_emb, other_embedding)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -564,30 +734,58 @@ class Person:
 
 def track_persons_across_frames(
     detections_by_image: List[Dict[str, Any]],
+    progress_cb: Optional[Callable[..., None]] = None,
 ) -> List[Person]:
-    """Match detected persons across images using timecode + visual similarity.
+    """Match detected persons across images using FaceNet embeddings + temporal cues.
+
+    Uses face embeddings for robust person matching across frames, regardless of
+    clothing changes, lighting variations, or partial occlusion.
 
     Args:
         detections_by_image: List of dicts with keys: image_path, timestamp_s, faces
+        progress_cb: Optional callback for progress updates (message, current, total)
 
     Returns:
         List of Person objects with assigned IDs
     """
     persons: List[Person] = []
     next_person_id = 1
+    total_images = len(detections_by_image)
 
-    IOU_THRESHOLD = 0.3
-    COLOR_THRESHOLD = 80.0  # BGR Euclidean distance
+    # Thresholds
+    TEMPORAL_GAP = 30.0  # seconds - max gap before considering different person
+    IOU_THRESHOLD = 0.2   # Low IoU threshold, relying more on embeddings
+    EMBEDDING_THRESHOLD = _EMBEDDING_THRESHOLD  # Cosine similarity threshold (0.7 default)
 
-    for detection in detections_by_image:
+    # Initialize FaceNet extractor
+    embedding_extractor = FaceEmbeddingExtractor()
+    face_net_available = embedding_extractor._ensure_models()
+    if face_net_available:
+        logger.info("FaceNet embedding-based tracking enabled")
+    else:
+        logger.warning("FaceNet unavailable, falling back to IoU+color tracking")
+
+    def _emit(message: str, current: int) -> None:
+        if progress_cb:
+            try:
+                progress_cb(message, current, total_images)
+            except TypeError:
+                progress_cb(message)
+
+    _emit(f"Tracking persons across {total_images} frames…", 0)
+
+    for idx, detection in enumerate(detections_by_image):
         image_path = detection["image_path"]
         timestamp_s = detection["timestamp_s"]
         faces = detection["faces"]
 
+        if (idx + 1) % 20 == 0 or idx == total_images - 1:
+            _emit(f"Tracking persons: {idx + 1}/{total_images} frames…", idx + 1)
+
         if not faces:
             continue
 
-        # Load image for color extraction
+        # Load image for color extraction and embedding
         img = cv2.imread(str(image_path))
         if img is None:
             continue
@@ -596,41 +794,70 @@ def track_persons_across_frames(
         unmatched_faces = []
         for face_bbox in faces:
             matched = False
+
+            # Extract face embedding
+            embedding = None
+            if face_net_available:
+                embedding = embedding_extractor.extract_from_image(img, face_bbox)
+
             face_color = _face_region_color(img, face_bbox)
 
             for person in persons:
-                # Check temporal overlap (person can only be in consecutive frames)
-                if timestamp_s - person.last_seen_ts > 30.0:  # 30s gap = different person
+                # Check temporal overlap
+                if timestamp_s - person.last_seen_ts > TEMPORAL_GAP:
                     continue
 
-                # Check visual similarity
+                # Check embedding similarity (primary match criterion)
+                if embedding is not None and person._embeddings:
+                    sim = person.embedding_similarity(embedding)
+                    if sim >= EMBEDDING_THRESHOLD:
+                        # Matched via face embedding!
+                        person_region = extract_person_region(img, face_bbox)
+                        attributes = extract_person_attributes(img, face_bbox, person_region)
+                        person.add_appearance(
+                            timestamp_s, image_path, face_bbox, person_region, attributes,
+                            embedding=embedding
+                        )
+                        person.update_color(face_color)
+                        matched = True
+                        break
+
+                # Fallback: IoU + color if embeddings not available/matched
+                if face_net_available and embedding is not None:
+                    continue  # Skip fallback if we have embeddings but no match
+
                 person_color = person.mean_color()
-                if _color_distance(face_color, person_color) > COLOR_THRESHOLD:
+                if _color_distance(face_color, person_color) > 100:  # Relaxed color threshold
                     continue
 
-                # Check IoU with last appearance
                 if person.appearances:
                     last_bbox = person.appearances[-1]["face_bbox"]
                     if _compute_iou(face_bbox, last_bbox) < IOU_THRESHOLD:
                         continue
 
-                # Matched!
+                # Matched via fallback!
                 person_region = extract_person_region(img, face_bbox)
                 attributes = extract_person_attributes(img, face_bbox, person_region)
-                person.add_appearance(timestamp_s, image_path, face_bbox, person_region, attributes)
+                person.add_appearance(
+                    timestamp_s, image_path, face_bbox, person_region, attributes,
+                    embedding=embedding
+                )
                 person.update_color(face_color)
                 matched = True
                 break
 
             if not matched:
-                unmatched_faces.append((face_bbox, face_color))
+                unmatched_faces.append((face_bbox, face_color, embedding))
 
         # Create new persons for unmatched faces
-        for face_bbox, face_color in unmatched_faces:
-            person = Person(next_person_id, timestamp_s)
+        for face_bbox, face_color, embedding in unmatched_faces:
+            person = Person(next_person_id, timestamp_s, embedding=embedding)
             person_region = extract_person_region(img, face_bbox)
             attributes = extract_person_attributes(img, face_bbox, person_region)
-            person.add_appearance(timestamp_s, image_path, face_bbox, person_region, attributes)
+            person.add_appearance(
+                timestamp_s, image_path, face_bbox, person_region, attributes,
+                embedding=embedding
+            )
             person.update_color(face_color)
 
             # Try to detect name from this frame
@@ -641,6 +868,8 @@ def track_persons_across_frames(
 
             persons.append(person)
             next_person_id += 1
+
+    _emit(f"Building descriptions for {len(persons)} persons…", total_images)
 
     # Post-process: build descriptions
     for person in persons:
@@ -717,7 +946,7 @@ def analyze_persons(
             )
 
     _emit_progress(progress_cb, "Tracking persons across frames…")
-    persons = track_persons_across_frames(detections_by_image)
+    persons = track_persons_across_frames(detections_by_image, progress_cb=progress_cb)
 
     # Build DataFrame
     rows = []
