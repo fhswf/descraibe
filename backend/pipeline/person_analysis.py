@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 _YU_NET_MODEL_PATH = os.environ.get(
     "YU_NET_MODEL_PATH",
-    str(Path(__file__).parent.parent.parent / "models" / "face_detection_yunet_2023mar.onnx")
+    str(Path(__file__).parent.parent.parent / "models" / "face_detection_yunet_2026may.onnx")
 )
 _TESSERACT_CMD = os.environ.get("TESSERACT_CMD", "").strip() or None
 _TESSERACT_LANG = os.environ.get("TESSERACT_LANG", "deu+eng").strip()
@@ -55,8 +55,8 @@ def _emit_progress(
 # ── YuNet model download ────────────────────────────────────────────────────────
 
 _YU_NET_MODEL_URL = (
-    "https://github.com/ShiqiYu/libfacedetection.train/"
-    "releases/download/v1.2.4/face_detection_yunet_2023mar.onnx"
+    "https://raw.githubusercontent.com/opencv/opencv_zoo/main/"
+    "models/face_detection_yunet/face_detection_yunet_2026may.onnx"
 )
 
 
