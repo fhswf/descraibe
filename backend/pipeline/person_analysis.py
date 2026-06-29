@@ -89,7 +89,7 @@ def _download_yunet_model(model_path: Path) -> bool:
 # ── YuNet face detector ─────────────────────────────────────────────────────────
 
 class YuNetDetector:
-    """OpenCV DNN-based YuNet face detector with graceful fallback."""
+    """OpenCV FaceDetectorYN-based YuNet face detector with graceful fallback."""
 
     _instance: Optional["YuNetDetector"] = None
     _model: Optional[Any] = None
@@ -122,7 +122,15 @@ class YuNetDetector:
                 return False
 
         try:
-            self._model = cv2.dnn.readNet(str(model_path))
+            # Use OpenCV's built-in FaceDetectorYN which handles YuNet models correctly
+            self._model = cv2.FaceDetectorYN.create(
+                model=str(model_path),
+                config="",
+                input_size=self._model_size,
+                score_threshold=self._score_threshold,
+                nms_threshold=self._nms_threshold,
+                top_k=5000,
+            )
             logger.info("YuNet face detector loaded from %s", model_path)
             return True
         except Exception as exc:
@@ -133,7 +141,14 @@ class YuNetDetector:
             )
             if _download_yunet_model(model_path):
                 try:
-                    self._model = cv2.dnn.readNet(str(model_path))
+                    self._model = cv2.FaceDetectorYN.create(
+                        model=str(model_path),
+                        config="",
+                        input_size=self._model_size,
+                        score_threshold=self._score_threshold,
+                        nms_threshold=self._nms_threshold,
+                        top_k=5000,
+                    )
                     logger.info("YuNet face detector loaded after re-download from %s", model_path)
                     return True
                 except Exception as exc2:
@@ -150,60 +165,35 @@ class YuNetDetector:
 
         h, w = image.shape[:2]
 
-        # Prepare blob
-        blob = cv2.dnn.blobFromImage(
-            image, 1.0 / 255.0, self._model_size, (104, 117, 123), swapRB=True
-        )
-        self._model.setInput(blob)
+        # Set input size to match image dimensions
+        self._model.setInputSize((w, h))
 
         try:
-            # YuNet outputs: detection (1xN or 1x7 depending on version)
-            outputs = self._model.forward(self._model.getUnconnectedOutLayersNames())
-            if isinstance(outputs, (list, tuple)):
-                outputs = outputs[0] if len(outputs) == 1 else np.concatenate(outputs, axis=0)
+            _, results = self._model.detect(image)
         except Exception as exc:
             logger.warning("YuNet inference failed: %s", exc)
             return []
 
+        if results is None:
+            return []
+
         detections: List[Dict[str, Any]] = []
 
-        # Parse outputs (shape depends on model version; handle both formats)
-        for i in range(outputs.shape[0] if len(outputs.shape) > 1 else outputs.shape[1]):
-            if len(outputs.shape) == 2:
-                row = outputs[i]
-            else:
-                row = outputs[:, i] if outputs.shape[0] < outputs.shape[1] else outputs[i]
-                if row.shape[0] > 5:
-                    row = row.flatten()
+        # Results format: (num_dets, 15) = [x, y, w, h, 5_landmarks..., conf]
+        for row in results:
+            if len(row) < 15:
+                continue
 
-            if len(row) >= 5:
-                confidence = float(row[14]) if len(row) > 14 else float(row[4])
-                if confidence < self._score_threshold:
-                    continue
+            x, y, bw, bh = int(row[0]), int(row[1]), int(row[2]), int(row[3])
+            confidence = float(row[-1])  # Confidence is the last value
 
-                # Handle different output formats
-                if len(row) >= 15:
-                    # Full format: x1, y1, x2, y2, conf, ...
-                    x1, y1, x2, y2 = float(row[0]), float(row[1]), float(row[2]), float(row[3])
-                else:
-                    # Compact format: rel_x, rel_y, w, h, conf
-                    rel_x, rel_y, bw, bh, conf = row[:5]
-                    x1 = rel_x * w
-                    y1 = rel_y * h
-                    x2 = x1 + bw * w
-                    y2 = y1 + bh * h
-
-                x, y = max(0.0, min(float(x1), w - 1)), max(0.0, min(float(y1), h - 1))
-                bw = max(1, int(min(float(x2 - x1), w - x)))
-                bh = max(1, int(min(float(y2 - y1), h - y)))
-
-                detections.append({
-                    "x": int(x),
-                    "y": int(y),
-                    "w": bw,
-                    "h": bh,
-                    "confidence": confidence,
-                })
+            detections.append({
+                "x": x,
+                "y": y,
+                "w": bw,
+                "h": bh,
+                "confidence": confidence,
+            })
 
         return detections
 
