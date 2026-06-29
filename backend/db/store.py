@@ -375,3 +375,89 @@ class DataStore:
                 deleted = cur.rowcount > 0
                 conn.commit()
                 return deleted
+
+    # ── Person storage ─────────────────────────────────────────────────────────
+
+    def store_persons(self, job_id: str, persons_list: list[dict[str, Any]]) -> None:
+        """Store or update person records for a job."""
+        if not job_id or not persons_list:
+            return
+
+        if not self.enabled:
+            self.logger.debug("DB not enabled, persons stored in Parquet only")
+            return
+
+        try:
+            with self._psycopg.connect(self.database_url) as conn:
+                with conn.cursor() as cur:
+                    for person in persons_list:
+                        attributes_json = json.dumps(person.get("attributes") or {}, ensure_ascii=False)
+                        appearances_json = json.dumps(person.get("appearances") or [], ensure_ascii=False)
+                        cur.execute(
+                            """
+                            INSERT INTO job_persons (
+                                job_id, person_id, name, attributes,
+                                first_seen_ts, last_seen_ts, description, appearances
+                            ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb)
+                            ON CONFLICT (job_id, person_id) DO UPDATE SET
+                                name = EXCLUDED.name,
+                                attributes = EXCLUDED.attributes,
+                                last_seen_ts = EXCLUDED.last_seen_ts,
+                                description = EXCLUDED.description,
+                                appearances = EXCLUDED.appearances
+                            """,
+                            (
+                                job_id,
+                                int(person.get("person_id", 0)),
+                                person.get("name"),
+                                attributes_json,
+                                float(person.get("first_seen_ts", 0.0)),
+                                float(person.get("last_seen_ts", 0.0)),
+                                person.get("description"),
+                                appearances_json,
+                            ),
+                        )
+                    conn.commit()
+            self.logger.info("Stored %d persons for job %s", len(persons_list), job_id)
+        except Exception as exc:
+            self.logger.warning("DB store_persons failed: %s", exc)
+
+    def get_persons(self, job_id: str) -> list[dict[str, Any]]:
+        """Retrieve person records for a job."""
+        if not job_id:
+            return []
+
+        if not self.enabled:
+            return []
+
+        try:
+            with self._psycopg.connect(self.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT person_id, name, attributes, first_seen_ts, last_seen_ts,
+                               description, appearances
+                        FROM job_persons
+                        WHERE job_id = %s
+                        ORDER BY person_id
+                        """,
+                        (job_id,),
+                    )
+                    rows = cur.fetchall()
+                    conn.commit()
+
+            return [
+                {
+                    "person_id": row[0],
+                    "name": row[1],
+                    "attributes": row[2] if isinstance(row[2], dict) else {},
+                    "first_seen_ts": float(row[3]) if row[3] is not None else 0.0,
+                    "last_seen_ts": float(row[4]) if row[4] is not None else 0.0,
+                    "description": row[5],
+                    "appearances": row[6] if isinstance(row[6], list) else [],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            self.logger.warning("DB get_persons failed: %s", exc)
+            return []

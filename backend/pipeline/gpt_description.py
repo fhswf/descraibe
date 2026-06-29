@@ -222,6 +222,61 @@ def _build_context_block(
     return "\n".join(parts)
 
 
+def _build_persons_context(
+    persons_df: Optional[pd.DataFrame],
+    slot_start_s: float,
+    slot_end_s: float,
+) -> str:
+    """Build a context block with person information for a specific slot.
+
+    Identifies persons appearing in the given time window and provides
+    their names and visual descriptions. Also indicates first mentions
+    (Erstnennung) vs subsequent mentions (Folgebenennung).
+
+    Args:
+        persons_df: DataFrame with person data from person_analysis
+        slot_start_s: Start time of the current AD slot
+        slot_end_s: End time of the current AD slot
+
+    Returns:
+        Formatted context string with person information
+    """
+    if persons_df is None or persons_df.empty:
+        return ""
+
+    # Find persons that appear in this time window
+    persons_in_slot = persons_df[
+        (persons_df["first_seen_ts"] <= slot_end_s) &
+        (persons_df["last_seen_ts"] >= slot_start_s)
+    ]
+
+    if persons_in_slot.empty:
+        return ""
+
+    parts = ["", "### Personen im Slot"]
+
+    for _, person in persons_in_slot.iterrows():
+        name = str(person.get("name") or f"Person {person.get('person_id', '?')}")
+        description = str(person.get("description") or "")
+
+        # Determine if this is a first mention (Erstnennung)
+        # ERSTNENNUNG = person's first appearance falls WITHIN this slot
+        # FOLGEBENENNUNG = person was already visible in earlier slots
+        first_seen = float(person.get("first_seen_ts", float("inf")))
+        is_first_mention = slot_start_s <= first_seen <= slot_end_s
+
+        mention_type = "ERSTNENNUNG" if is_first_mention else "FOLGEBENENNUNG"
+
+        # Build person entry
+        entry = f"- **{name}** [{mention_type}]"
+        if description and description != name:
+            entry += f": {description}"
+
+        parts.append(entry)
+
+    return "\n".join(parts)
+
+
 # ── Syllable helpers (optional pyphen) ────────────────────────────────────────
 
 def _count_syllables(text: str) -> int:
@@ -243,6 +298,7 @@ def describe_slots(
     *,
     api_key: str,
     transcript_df: Optional[pd.DataFrame] = None,
+    persons_df: Optional[pd.DataFrame] = None,
     model: str = "gpt-5-mini-2025-08-07",
     temperature: float = 0.2,
     max_tokens: int = 1024,
@@ -378,6 +434,11 @@ def describe_slots(
         )
         if context_block:
             user_text += "\n\n" + context_block
+
+        # Inject person context with Erstnennung/Folgebenennung flags
+        persons_context = _build_persons_context(persons_df, s, e)
+        if persons_context:
+            user_text += "\n\n" + persons_context
 
         try:
             messages = _build_messages(system_prompt, user_text, imgs, detail=detail)

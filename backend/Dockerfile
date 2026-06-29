@@ -19,12 +19,15 @@ FROM pytorch/pytorch:2.10.0-cuda12.8-cudnn9-runtime
 # ── System dependencies ────────────────────────────────────────────────────────
 # ffmpeg   – required by moviepy / scenedetect
 # libsm6 / libxext6 / libglib2.0-0 – required by opencv-python-headless
+# tesseract-ocr + deu – required for OCR-based name overlay detection (Bauchbinden)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsm6 \
     libxext6 \
     libglib2.0-0 \
     curl \
+    tesseract-ocr \
+    tesseract-ocr-deu \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Install uv ─────────────────────────────────────────────────────────────────

@@ -1317,6 +1317,71 @@ def run_images(job_id: str, body: dict = Body(default={})):
     return {"status": "started"}
 
 
+# ── Person Analysis ─────────────────────────────────────────────────────────────
+
+@app.post("/api/jobs/{job_id}/persons")
+def run_persons(job_id: str, body: dict = Body(default={})):
+    from pipeline import person_analysis as persons_mod
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    if job.get("scene_images") is None or len(job.get("scene_images", [])) == 0:
+        return JSONResponse({"error": "Scene images not available. Run image extraction first."}, status_code=400)
+
+    def run():
+        sm.job_id_var.set(job_id)
+        try:
+            _mark_step_running(job_id, "persons", "Detecting persons in images…")
+
+            def cb_persons(msg: str, current: int | None = None, total: int | None = None):
+                if total:
+                    percent = round((max(0, min(current or 0, total)) / total) * 100)
+                else:
+                    percent = 50
+                _push_progress(job_id, "persons", msg, percent, 100)
+
+            persons_df = persons_mod.analyze_persons(
+                job["scene_images"],
+                progress_cb=cb_persons,
+            )
+
+            sm.update_job(job_id, persons_df=persons_df)
+
+            # Persist to PostgreSQL if enabled
+            if _DATASTORE.enabled and persons_df is not None and not persons_df.empty:
+                persons_list = persons_df.to_dict(orient="records")
+                _DATASTORE.store_persons(job_id, persons_list)
+
+            sm.set_status(job_id, "idle")
+            _push_progress(job_id, "persons", "Person analysis complete.", 100, 100)
+            _push(job_id, "persons_done", {
+                "persons_count": len(persons_df),
+            })
+        except Exception as exc:
+            sm.set_status(job_id, "error", str(exc))
+            _push(job_id, "error", {"step": "persons", "message": str(exc)})
+
+    _mark_step_running(job_id, "persons", "Person analysis queued…")
+    _start_worker(job_id, "persons", run)
+    return {"status": "started"}
+
+
+@app.get("/api/jobs/{job_id}/persons")
+def get_persons(job_id: str):
+    """Return the persons DataFrame for a job."""
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+
+    persons_df = job.get("persons_df")
+    if persons_df is None or persons_df.empty:
+        return {"persons": []}
+
+    # Replace NaN with None and convert to dict
+    persons_clean = persons_df.replace({float('nan'): None})
+    return {"persons": persons_clean.to_dict(orient="records")}
+
+
 # ── GPT Description ────────────────────────────────────────────────────────────
 
 @app.post("/api/jobs/{job_id}/gpt")
@@ -1403,6 +1468,7 @@ def run_gpt(job_id: str, body: dict = Body(default={})):
                 slots_df, slot_map_df,
                 system_prompt, user_prompt,
                 transcript_df=job.get("segments_df"),
+                persons_df=job.get("persons_df"),
                 progress_cb=cb,
                 **gpt_params,
             )
@@ -1808,6 +1874,7 @@ def get_job(job_id: str, request: Request):
         "transcript_preview": transcript_preview,
         "slots_count": len(job["slots_df"]) if job.get("slots_df") is not None else 0,
         "images_count": len(job["scene_images"]) if job.get("scene_images") else 0,
+        "persons_count": len(job["persons_df"]) if job.get("persons_df") is not None else 0,
         
         # Timeline data
         "pauses": make_serializable(job.get("pauses_df")),
@@ -1858,6 +1925,9 @@ def build_hateoas_links(job: dict, base_url: str):
         
     if job.get("slots_df") is not None and job.get("video_path"):
         links.append({"rel": "run-images", "href": f"{base}/api/jobs/{jid}/images", "method": "POST"})
+
+    if job.get("scene_images") is not None and len(job.get("scene_images", [])) > 0:
+        links.append({"rel": "run-persons", "href": f"{base}/api/jobs/{jid}/persons", "method": "POST"})
         links.append({"rel": "run-gpt", "href": f"{base}/api/jobs/{jid}/gpt", "method": "POST"})
         
     return links
