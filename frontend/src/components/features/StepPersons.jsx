@@ -347,13 +347,15 @@ function PersonCard({ person, onEdit, onMergeFaces, jobId }) {
                     >
                         <span className="material-icons-round text-sm text-text-muted hover:text-text-primary">edit</span>
                     </button>
-                    <button
-                        onClick={() => onMergeFaces(person)}
-                        className="p-1.5 hover:bg-bg-primary rounded-lg transition-colors"
-                        title="Gesichter zuweisen"
-                    >
-                        <span className="material-icons-round text-sm text-text-muted hover:text-text-primary">face</span>
-                    </button>
+                    {onMergeFaces && (
+                        <button
+                            onClick={() => onMergeFaces(person)}
+                            className="p-1.5 hover:bg-bg-primary rounded-lg transition-colors"
+                            title="Gesichter zuweisen"
+                        >
+                            <span className="material-icons-round text-sm text-text-muted hover:text-text-primary">face</span>
+                        </button>
+                    )}
                 </div>
             </div>
             
