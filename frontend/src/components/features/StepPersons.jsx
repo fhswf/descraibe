@@ -8,6 +8,151 @@ function formatTimestamp(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+function MergePersonsDialog({ persons, onMerge, onClose }) {
+    const [sourceId, setSourceId] = useState(null);
+    const [targetId, setTargetId] = useState(null);
+    const [saving, setSaving] = useState(false);
+
+    const handleMerge = async () => {
+        if (!sourceId || !targetId || sourceId === targetId) return;
+        setSaving(true);
+        try {
+            await onMerge(parseInt(sourceId), parseInt(targetId));
+            onClose();
+        } catch (err) {
+            console.error('Failed to merge persons:', err);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const selectedSource = persons.find(p => p.person_id === parseInt(sourceId));
+    const selectedTarget = persons.find(p => p.person_id === parseInt(targetId));
+
+    return (
+        <div 
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+            onClick={onClose}
+        >
+            <div 
+                className="bg-bg-primary border border-border-subtle rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-hidden flex flex-col"
+                onClick={e => e.stopPropagation()}
+            >
+                <div className="flex items-center justify-between p-4 border-b border-border-subtle shrink-0">
+                    <h3 className="text-lg font-semibold">Personen zusammenführen</h3>
+                    <button 
+                        onClick={onClose}
+                        className="p-1 hover:bg-bg-card rounded-lg transition-colors"
+                    >
+                        <span className="material-icons-round text-text-muted">close</span>
+                    </button>
+                </div>
+                
+                <div className="p-4 space-y-4 overflow-y-auto flex-1">
+                    <p className="text-sm text-text-secondary">
+                        Wähle zwei Personen aus, die zusammengeführt werden sollen. 
+                        Die zweite Person wird zur ersten hinzugefügt und dann gelöscht.
+                    </p>
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-text-secondary mb-1.5">
+                                Person die entfernt wird
+                            </label>
+                            <select
+                                value={sourceId || ''}
+                                onChange={e => setSourceId(e.target.value)}
+                                className="w-full px-3 py-2 bg-bg-card border border-border-subtle rounded-lg text-sm
+                                           focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            >
+                                <option value="">-- Auswählen --</option>
+                                {persons
+                                    .sort((a, b) => (b.appearances_count || 1) - (a.appearances_count || 1))
+                                    .map(p => (
+                                        <option key={p.person_id} value={p.person_id}>
+                                            {p.name || `Person ${p.person_id}`} ({p.appearances_count}x)
+                                        </option>
+                                    ))}
+                            </select>
+                            {selectedSource && (
+                                <div className="mt-2 text-xs text-text-muted">
+                                    {selectedSource.appearances_count} Auftritte
+                                </div>
+                            )}
+                        </div>
+                        
+                        <div>
+                            <label className="block text-sm font-medium text-text-secondary mb-1.5">
+                                Person die bleibt
+                            </label>
+                            <select
+                                value={targetId || ''}
+                                onChange={e => setTargetId(e.target.value)}
+                                className="w-full px-3 py-2 bg-bg-card border border-border-subtle rounded-lg text-sm
+                                           focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            >
+                                <option value="">-- Auswählen --</option>
+                                {persons
+                                    .filter(p => p.person_id !== parseInt(sourceId))
+                                    .sort((a, b) => (b.appearances_count || 1) - (a.appearances_count || 1))
+                                    .map(p => (
+                                        <option key={p.person_id} value={p.person_id}>
+                                            {p.name || `Person ${p.person_id}`} ({p.appearances_count}x)
+                                        </option>
+                                    ))}
+                            </select>
+                            {selectedTarget && (
+                                <div className="mt-2 text-xs text-text-muted">
+                                    {selectedTarget.appearances_count} Auftritte
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    
+                    {sourceId && targetId && sourceId !== targetId && (
+                        <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                            <p className="text-sm text-amber-300">
+                                <strong>Achtung:</strong> Person {sourceId} wird mit Person {targetId} 
+                                zusammengeführt. Alle Auftritte von Person {sourceId} werden zu Person {targetId} 
+                                hinzugefügt. Diese Aktion kann nicht rückgängig gemacht werden.
+                            </p>
+                        </div>
+                    )}
+                </div>
+                
+                <div className="flex justify-end gap-2 p-4 border-t border-border-subtle shrink-0">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-primary
+                                   hover:bg-bg-card rounded-lg transition-colors"
+                        disabled={saving}
+                    >
+                        Abbrechen
+                    </button>
+                    <button
+                        onClick={handleMerge}
+                        disabled={!sourceId || !targetId || sourceId === targetId || saving}
+                        className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 
+                                   disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                    >
+                        {saving ? (
+                            <>
+                                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                Zusammenführen...
+                            </>
+                        ) : (
+                            <>
+                                <span className="material-icons-round text-sm">merge</span>
+                                Zusammenführen
+                            </>
+                        )}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function ColorBadge({ color, label }) {
     if (!color) return null;
     const colorMap = {
@@ -201,6 +346,8 @@ export function StepPersons() {
     const [persons, setPersons] = useState([]);
     const [loading, setLoading] = useState(false);
     const [editingPerson, setEditingPerson] = useState(null);
+    const [mergingPersons, setMergingPersons] = useState(false);
+    const [filter, setFilter] = useState('main'); // 'all', 'main', 'statists'
     const jobDataRef = useRef(jobData);
     const isRunningRef = useRef(false);
 
@@ -233,14 +380,53 @@ export function StepPersons() {
     const progressMsg = progressData?.persons?.msg || null;
     const progressPercent = progressData?.persons?.percent || null;
 
+    // Filter persons based on selection
+    const filteredPersons = persons.filter(p => {
+        const appearances = p.appearances_count || 1;
+        if (filter === 'main') return appearances >= 5;
+        if (filter === 'statists') return appearances < 5;
+        return true; // 'all'
+    });
+
+    // Count by filter
+    const mainCastCount = persons.filter(p => (p.appearances_count || 1) >= 5).length;
+    const statistsCount = persons.filter(p => (p.appearances_count || 1) < 5).length;
+
     const handleSavePerson = async (personId, updates) => {
-        // Update local state
         setPersons(prev => prev.map(p => 
             p.person_id === personId 
                 ? { ...p, ...updates }
                 : p
         ));
-        // TODO: Persist to backend via API call if needed
+    };
+
+    const handleMergePersons = async (sourceId, targetId) => {
+        // Find source and target persons
+        const source = persons.find(p => p.person_id === sourceId);
+        const target = persons.find(p => p.person_id === targetId);
+        
+        if (!source || !target) return;
+
+        // Create merged person
+        const mergedPerson = {
+            ...target,
+            person_id: targetId,
+            appearances_count: (target.appearances_count || 1) + (source.appearances_count || 1),
+            // Use earliest first_seen_ts
+            first_seen_ts: Math.min(target.first_seen_ts || Infinity, source.first_seen_ts || Infinity),
+            // Use latest last_seen_ts
+            last_seen_ts: Math.max(target.last_seen_ts || 0, source.last_seen_ts || 0),
+            // Keep target name unless source has one and target doesn't
+            name: target.name || source.name || null,
+            description: target.description || source.description || '',
+            attributes: { ...(source.attributes || {}), ...(target.attributes || {}) },
+        };
+
+        // Update persons list
+        setPersons(prev => [
+            ...prev.filter(p => p.person_id !== sourceId),
+            ...prev.filter(p => p.person_id === targetId).map(p => mergedPerson)
+        ]);
     };
 
     return (
@@ -250,6 +436,14 @@ export function StepPersons() {
                     person={editingPerson}
                     onSave={handleSavePerson}
                     onClose={() => setEditingPerson(null)}
+                />
+            )}
+            
+            {mergingPersons && (
+                <MergePersonsDialog
+                    persons={persons}
+                    onMerge={handleMergePersons}
+                    onClose={() => setMergingPersons(false)}
                 />
             )}
             
@@ -296,15 +490,57 @@ export function StepPersons() {
                             </span>
                         </div>
                         
+                        {/* Filter tabs */}
+                        <div className="flex gap-1 p-1 bg-bg-card rounded-lg w-fit">
+                            <button
+                                onClick={() => setFilter('main')}
+                                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                                    filter === 'main' 
+                                        ? 'bg-violet-600 text-white' 
+                                        : 'text-text-secondary hover:text-text-primary'
+                                }`}
+                            >
+                                Hauptbesetzung ({mainCastCount})
+                            </button>
+                            <button
+                                onClick={() => setFilter('all')}
+                                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                                    filter === 'all' 
+                                        ? 'bg-violet-600 text-white' 
+                                        : 'text-text-secondary hover:text-text-primary'
+                                }`}
+                            >
+                                Alle ({personsCount})
+                            </button>
+                            <button
+                                onClick={() => setFilter('statists')}
+                                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                                    filter === 'statists' 
+                                        ? 'bg-violet-600 text-white' 
+                                        : 'text-text-secondary hover:text-text-primary'
+                                }`}
+                            >
+                                Statisten ({statistsCount})
+                            </button>
+                        </div>
+                        
                         {/* Person cards */}
-                        <div className="flex flex-col gap-2">
-                            {persons.map(person => (
-                                <PersonCard 
-                                    key={person.person_id} 
-                                    person={person} 
-                                    onEdit={setEditingPerson}
-                                />
-                            ))}
+                        <div className="flex flex-col gap-2 max-h-[60vh] overflow-y-auto pr-1">
+                            {filteredPersons.length === 0 ? (
+                                <div className="text-sm text-text-muted p-4 text-center">
+                                    Keine Personen in dieser Kategorie.
+                                </div>
+                            ) : (
+                                filteredPersons
+                                    .sort((a, b) => (b.appearances_count || 1) - (a.appearances_count || 1))
+                                    .map(person => (
+                                        <PersonCard 
+                                            key={person.person_id} 
+                                            person={person} 
+                                            onEdit={setEditingPerson}
+                                        />
+                                    ))
+                            )}
                         </div>
                     </div>
                 )}
@@ -325,16 +561,28 @@ export function StepPersons() {
                     </div>
                 )}
 
-                {/* Action button */}
+                {/* Action buttons */}
                 {!isRunning && (
-                    <button
-                        className="flex items-center gap-2 self-start px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
-                        onClick={handleRunPersons}
-                        disabled={!jobData?.images_count}
-                    >
-                        <span className="material-icons-round text-lg">search</span>
-                        Personen analysieren
-                    </button>
+                    <div className="flex gap-2">
+                        <button
+                            className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
+                            onClick={handleRunPersons}
+                            disabled={!jobData?.images_count}
+                        >
+                            <span className="material-icons-round text-lg">search</span>
+                            Personen analysieren
+                        </button>
+                        
+                        {personsCount > 0 && (
+                            <button
+                                className="flex items-center gap-2 px-4 py-2 bg-bg-card hover:bg-bg-primary border border-border-subtle text-text-secondary hover:text-text-primary text-sm font-medium rounded-lg transition-colors"
+                                onClick={() => setMergingPersons(true)}
+                            >
+                                <span className="material-icons-round text-lg">merge</span>
+                                Zusammenführen
+                            </button>
+                        )}
+                    </div>
                 )}
 
                 {!jobData?.images_count && !isRunning && (
