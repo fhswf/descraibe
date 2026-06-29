@@ -531,8 +531,9 @@ export function JobProvider({ children }) {
                 if (data.transcript_meta) newDone.add(2);
                 if (data.slots_count > 0) newDone.add(3);
                 if (data.images_count > 0) newDone.add(4);
-                if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(5);
-                if (data.final_mp4_path) newDone.add(6);
+                if (data.persons_count > 0) newDone.add(5);
+                if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(6);
+                if (data.final_mp4_path) newDone.add(7);
                 setDoneSteps(newDone);
 
                 let targetStep = 0;
@@ -884,7 +885,7 @@ export function JobProvider({ children }) {
                 setProgressData(prev => ({ ...prev, persons: null }));
             } else if (event === 'gpt_done') {
                 setDoneSteps(prev => new Set(prev).add(6));
-                setCurrentStep(6);
+                setCurrentStep(7);
                 fetchJobData(jobId); // Need full update for outputs
                 setProgressData(prev => ({ ...prev, gpt: null }));
                 if ((data.error_count || 0) > 0) {
