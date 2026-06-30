@@ -332,3 +332,30 @@ class TestPersonModifications:
         assert suggestion["similarity"] > 0.9
 
         sm.cleanup_job(job_id)
+
+    def test_get_face_image_fallback(self):
+        """GET /api/jobs/{job_id}/faces/{face_id} falls back to checking disk directly if face is not in metadata."""
+        from pathlib import Path
+        from fastapi.testclient import TestClient
+        from backend.app import app
+        from backend import session_manager as sm
+
+        job_id = sm.create_job()
+        job_dir = Path(sm.job_dir(job_id))
+        
+        # Create standard location folder and dummy face image file
+        faces_dir = job_dir / "faces"
+        faces_dir.mkdir(parents=True, exist_ok=True)
+        face_file = faces_dir / "face_223.jpg"
+        face_file.write_bytes(b"dummy image data")
+
+        # Make sure faces list is empty/missing
+        sm.update_job(job_id, faces=None)
+        sm._STORE.pop(job_id, None)
+
+        client = TestClient(app)
+        response = client.get(f"/api/jobs/{job_id}/faces/223")
+        assert response.status_code == 200
+        assert response.content == b"dummy image data"
+
+        sm.cleanup_job(job_id)

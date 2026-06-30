@@ -1655,6 +1655,14 @@ def get_face_image(job_id: str, face_id: int):
             if crop_path.exists():
                 return FileResponse(crop_path, media_type="image/jpeg")
 
+    # Fallback for old runs where faces list was not persisted in job.json:
+    # check if the face crop exists on disk at standard location faces/face_{face_id}.jpg
+    job_path = sm.job_dir(job_id)
+    if job_path:
+        crop_path = job_path / "faces" / f"face_{face_id}.jpg"
+        if crop_path.exists():
+            return FileResponse(crop_path, media_type="image/jpeg")
+
     return JSONResponse({"error": "Face not found"}, status_code=404)
 
 
