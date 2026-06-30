@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback, memo } from 'react';
 
 export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
     const [similarFaces, setSimilarFaces] = useState([]);
@@ -34,17 +34,21 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
         fetchSimilarFaces();
     }, [jobId, person.person_id, threshold]);
 
-    const toggleMergeSelection = (faceId) => {
-        const newSet = new Set(selectedForMerge);
-        if (newSet.has(faceId)) { newSet.delete(faceId); } else { newSet.add(faceId); }
-        setSelectedForMerge(newSet);
-    };
+    const toggleMergeSelection = useCallback((faceId) => {
+        setSelectedForMerge(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(faceId)) { newSet.delete(faceId); } else { newSet.add(faceId); }
+            return newSet;
+        });
+    }, []);
 
-    const toggleSplitSelection = (faceId) => {
-        const newSet = new Set(selectedForSplit);
-        if (newSet.has(faceId)) { newSet.delete(faceId); } else { newSet.add(faceId); }
-        setSelectedForSplit(newSet);
-    };
+    const toggleSplitSelection = useCallback((faceId) => {
+        setSelectedForSplit(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(faceId)) { newSet.delete(faceId); } else { newSet.add(faceId); }
+            return newSet;
+        });
+    }, []);
 
     const handleSave = async () => {
         if (selectedForMerge.size === 0 && selectedForSplit.size === 0) return;
@@ -108,7 +112,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
                 </div>
                 <div className="flex-1 overflow-y-auto p-4">
                     {loading ? (
-                        <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div></div>
+                        <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-600"></div></div>
                     ) : (
                         <div className="space-y-6">
                             <div>
@@ -123,7 +127,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
                                             isOwn={true} 
                                             selectable={true}
                                             selected={selectedForSplit.has(fid)}
-                                            onToggle={() => toggleSplitSelection(fid)}
+                                            onToggle={toggleSplitSelection}
                                         />
                                     ))}
                                     {faceIds.length === 0 && <p className="text-sm text-text-muted">Keine Gesichter gefunden</p>}
@@ -136,7 +140,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
                                     <div className="flex flex-wrap gap-3">
                                         {similarFaces.map(({ face, similarity }) => (
                                             <FaceThumbnail key={face.face_id} faceId={face.face_id} jobId={jobId} similarity={similarity} selectable={true}
-                                                selected={selectedForMerge.has(face.face_id)} onToggle={() => toggleMergeSelection(face.face_id)}
+                                                selected={selectedForMerge.has(face.face_id)} onToggle={toggleMergeSelection}
                                                 similarityColor={similarityColor(similarity)} />
                                         ))}
                                     </div>
@@ -149,7 +153,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
                                     <div className="flex flex-wrap gap-3">
                                         {unassignedFaces.map(face => (
                                             <FaceThumbnail key={face.face_id} faceId={face.face_id} jobId={jobId} selectable={true}
-                                                selected={selectedForMerge.has(face.face_id)} onToggle={() => toggleMergeSelection(face.face_id)} />
+                                                selected={selectedForMerge.has(face.face_id)} onToggle={toggleMergeSelection} />
                                         ))}
                                     </div>
                                 </div>
@@ -170,8 +174,8 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
                     <div className="flex gap-3">
                         <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-text-secondary hover:bg-bg-card rounded-lg transition-colors">Abbrechen</button>
                         <button onClick={handleSave} disabled={!hasChanges || saving}
-                            className="px-4 py-2 text-sm font-medium bg-primary text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
-                            {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div> : <><span className="material-icons-round text-sm">save</span>Speichern</>}
+                            className="px-4 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 disabled:bg-violet-600/50 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors duration-200">
+                            {saving ? <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent animate-spin"></div> : <><span className="material-icons-round text-sm">save</span>Speichern</>}
                         </button>
                     </div>
                 </div>
@@ -180,7 +184,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
     );
 }
 
-export function FaceThumbnail({ faceId, jobId, isOwn, similarity, selectable, selected, onToggle, similarityColor }) {
+export const FaceThumbnail = memo(function FaceThumbnail({ faceId, jobId, isOwn, similarity, selectable, selected, onToggle, similarityColor }) {
     const [imgError, setImgError] = useState(false);
     const imageUrl = `/api/jobs/${jobId}/faces/${faceId}`;
 
@@ -188,13 +192,19 @@ export function FaceThumbnail({ faceId, jobId, isOwn, similarity, selectable, se
     if (isOwn) {
         borderClass = selected ? "border-red-500 ring-2 ring-red-500/30" : "border-green-500/50";
     } else if (selected) {
-        borderClass = "border-primary ring-2 ring-primary/30";
+        borderClass = "border-violet-600 ring-2 ring-violet-600/30";
     } else if (selectable) {
-        borderClass = "hover:border-primary/50";
+        borderClass = "hover:border-violet-500/50";
     }
 
+    const handleClick = () => {
+        if (selectable && onToggle) {
+            onToggle(faceId);
+        }
+    };
+
     return (
-        <div className={`relative group ${selectable ? "cursor-pointer" : ""}`} onClick={selectable ? onToggle : undefined}>
+        <div className={`relative group ${selectable ? "cursor-pointer" : ""}`} onClick={handleClick}>
             <div className={`relative w-20 h-20 rounded-lg overflow-hidden border-2 transition-all ${borderClass}`}>
                 {!imgError ? (
                     <img src={imageUrl} alt={`Face ${faceId}`} className="w-full h-full object-cover" onError={() => setImgError(true)} />
@@ -204,8 +214,8 @@ export function FaceThumbnail({ faceId, jobId, isOwn, similarity, selectable, se
                 {selectable && (
                     <div className={`absolute top-1 right-1 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
                         selected 
-                            ? (isOwn ? "bg-red-500 border-red-500" : "bg-primary border-primary") 
-                            : "bg-bg-surface/80 border-border-subtle group-hover:border-primary/50"
+                            ? (isOwn ? "bg-red-500 border-red-500" : "bg-violet-600 border-violet-600") 
+                            : "bg-bg-surface/80 border-border-subtle group-hover:border-violet-500/50"
                     }`}>
                         {selected && <span className="material-icons-round text-white text-sm">{isOwn ? "remove" : "check"}</span>}
                     </div>
@@ -215,4 +225,4 @@ export function FaceThumbnail({ faceId, jobId, isOwn, similarity, selectable, se
             <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-bg-card px-1.5 py-0.5 rounded text-[10px] text-text-muted opacity-0 group-hover:opacity-100 transition-opacity">#{faceId}</div>
         </div>
     );
-}
+});
