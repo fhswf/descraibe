@@ -9,8 +9,8 @@ function formatTimestamp(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-function MergePersonsDialog({ persons, jobId, onMerge, onClose }) {
-    const [sourceId, setSourceId] = useState(null);
+function MergePersonsDialog({ persons, jobId, onMerge, onClose, initialSourceId }) {
+    const [sourceId, setSourceId] = useState(initialSourceId || null);
     const [targetId, setTargetId] = useState(null);
     const [saving, setSaving] = useState(false);
     const [suggestions, setSuggestions] = useState([]);
@@ -335,7 +335,7 @@ function EditPersonDialog({ person, onSave, onClose }) {
     );
 }
 
-function PersonCard({ person, onEdit, onMergeFaces, jobId }) {
+function PersonCard({ person, onEdit, onMergeFaces, onMergeInto, onDelete, jobId }) {
     const [imgError, setImgError] = useState(false);
     // Use face crop if available, otherwise fall back to full frame
     const faceCrop = person.representative_crop;
@@ -395,9 +395,27 @@ function PersonCard({ person, onEdit, onMergeFaces, jobId }) {
                         <button
                             onClick={() => onMergeFaces(person)}
                             className="p-1.5 hover:bg-bg-card rounded-lg transition-colors"
-                            title="Gesichter zuweisen"
+                            title="Gesichter verwalten"
                         >
                             <span className="material-icons-round text-sm text-text-muted hover:text-text-primary">face</span>
+                        </button>
+                    )}
+                    {onMergeInto && (
+                        <button
+                            onClick={() => onMergeInto(person.person_id)}
+                            className="p-1.5 hover:bg-bg-card rounded-lg transition-colors"
+                            title="In eine andere Person zusammenführen"
+                        >
+                            <span className="material-icons-round text-sm text-text-muted hover:text-text-primary">call_merge</span>
+                        </button>
+                    )}
+                    {onDelete && (
+                        <button
+                            onClick={() => onDelete(person.person_id)}
+                            className="p-1.5 hover:bg-bg-card rounded-lg transition-colors"
+                            title="Person löschen"
+                        >
+                            <span className="material-icons-round text-sm text-text-muted hover:text-red-500">delete</span>
                         </button>
                     )}
                 </div>
@@ -426,6 +444,7 @@ export function StepPersons() {
     const [loading, setLoading] = useState(false);
     const [editingPerson, setEditingPerson] = useState(null);
     const [mergingPersons, setMergingPersons] = useState(false);
+    const [mergeInitialSourceId, setMergeInitialSourceId] = useState(null);
     const [filter, setFilter] = useState('main'); // 'all', 'main', 'statists'
     const [mergingFacesPerson, setMergingFacesPerson] = useState(null);
     const jobDataRef = useRef(jobData);
@@ -543,6 +562,22 @@ export function StepPersons() {
         }
     };
 
+    const handleDeletePerson = async (personId) => {
+        if (!window.confirm("Möchtest du diese Person wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.")) return;
+        try {
+            const res = await fetch(`/api/jobs/${jobData?.job_id}/persons/${personId}`, {
+                method: 'DELETE'
+            });
+            if (!res.ok) {
+                throw new Error("Delete failed");
+            }
+            setPersons(prev => prev.filter(p => p.person_id !== personId));
+        } catch (err) {
+            console.error('Failed to delete person:', err);
+            setPersons(prev => prev.filter(p => p.person_id !== personId));
+        }
+    };
+
     return (
         <div className="flex flex-col gap-5">
             {editingPerson && (
@@ -557,8 +592,12 @@ export function StepPersons() {
                 <MergePersonsDialog
                     persons={persons}
                     jobId={jobData?.job_id}
+                    initialSourceId={mergeInitialSourceId}
                     onMerge={handleMergePersons}
-                    onClose={() => setMergingPersons(false)}
+                    onClose={() => {
+                        setMergingPersons(false);
+                        setMergeInitialSourceId(null);
+                    }}
                 />
             )}
 
@@ -663,6 +702,11 @@ export function StepPersons() {
                                             person={person} 
                                             onEdit={setEditingPerson}
                                             onMergeFaces={setMergingFacesPerson}
+                                            onMergeInto={(pid) => {
+                                                setMergeInitialSourceId(pid);
+                                                setMergingPersons(true);
+                                            }}
+                                            onDelete={handleDeletePerson}
                                             jobId={jobData?.job_id}
                                         />
                                     ))

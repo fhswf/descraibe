@@ -1624,6 +1624,36 @@ def update_person(job_id: str, person_id: int, body: dict = Body(...)):
     return {"status": "ok", "person_id": person_id, "name": name, "description": description}
 
 
+@app.delete("/api/jobs/{job_id}/persons/{person_id}")
+def delete_person(job_id: str, person_id: int):
+    """Delete a person from the job."""
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+
+    persons_df = job.get("persons_df")
+    if persons_df is None or persons_df.empty:
+        return JSONResponse({"error": "No persons found"}, status_code=400)
+
+    # Check if person exists
+    if person_id not in persons_df["person_id"].values:
+        return JSONResponse({"error": "Person not found"}, status_code=404)
+
+    # Remove person
+    df = persons_df.copy()
+    df = df[df["person_id"] != person_id]
+
+    # Save job
+    sm.update_job(job_id, persons_df=df)
+
+    # Persist persons to PostgreSQL if enabled
+    if _DATASTORE.enabled:
+        persons_list = df.replace({float('nan'): None}).to_dict(orient="records")
+        _DATASTORE.store_persons(job_id, persons_list)
+
+    return {"status": "ok", "deleted_person_id": person_id}
+
+
 @app.get("/api/jobs/{job_id}/faces")
 def get_faces(job_id: str):
     """Return all detected faces for a job."""
@@ -2460,6 +2490,14 @@ def merge_faces(job_id: str, body: dict = Body(...)):
     if not valid_face_ids:
         return JSONResponse({"error": "No valid faces found"}, status_code=400)
 
+    # Map face ID to its timestamp for updating person timeline range
+    face_timestamps = {}
+    for f in faces:
+        fid = f.get("face_id")
+        ts = f.get("timestamp_s")
+        if fid is not None and ts is not None:
+            face_timestamps[fid] = ts
+
     # Update persons_df
     df_list = persons_df.to_dict(orient="records")
     modified = False
@@ -2481,11 +2519,23 @@ def merge_faces(job_id: str, body: dict = Body(...)):
             if person["person_id"] == target_person_id:
                 new_face_ids = list(p_face_ids_set | valid_face_ids)
                 person["face_ids"] = json.dumps(new_face_ids)
+                person["appearances_count"] = len(new_face_ids)
+                
+                person_ts = [face_timestamps[fid] for fid in new_face_ids if fid in face_timestamps]
+                if person_ts:
+                    person["first_seen_ts"] = min(person_ts)
+                    person["last_seen_ts"] = max(person_ts)
                 modified = True
             # Remove faces FROM any other person who might have them
             elif p_face_ids_set & valid_face_ids:
                 new_face_ids = list(p_face_ids_set - valid_face_ids)
                 person["face_ids"] = json.dumps(new_face_ids)
+                person["appearances_count"] = len(new_face_ids)
+                
+                person_ts = [face_timestamps[fid] for fid in new_face_ids if fid in face_timestamps]
+                if person_ts:
+                    person["first_seen_ts"] = min(person_ts)
+                    person["last_seen_ts"] = max(person_ts)
                 modified = True
 
         elif action == "split_from_person":
@@ -2493,6 +2543,12 @@ def merge_faces(job_id: str, body: dict = Body(...)):
             if person["person_id"] == source_person_id:
                 new_face_ids = list(p_face_ids_set - valid_face_ids)
                 person["face_ids"] = json.dumps(new_face_ids)
+                person["appearances_count"] = len(new_face_ids)
+                
+                person_ts = [face_timestamps[fid] for fid in new_face_ids if fid in face_timestamps]
+                if person_ts:
+                    person["first_seen_ts"] = min(person_ts)
+                    person["last_seen_ts"] = max(person_ts)
                 modified = True
 
     if modified:

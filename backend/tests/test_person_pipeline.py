@@ -359,3 +359,32 @@ class TestPersonModifications:
         assert response.content == b"dummy image data"
 
         sm.cleanup_job(job_id)
+
+    def test_delete_person_success(self):
+        """DELETE /api/jobs/{job_id}/persons/{person_id} deletes the person."""
+        from fastapi.testclient import TestClient
+        from backend.app import app
+        from backend import session_manager as sm
+
+        job_id = sm.create_job()
+        persons_df = pd.DataFrame([
+            {"person_id": 1, "name": "Person A", "description": "Desc A", "first_seen_ts": 1.0, "last_seen_ts": 2.0, "appearances_count": 1},
+            {"person_id": 2, "name": "Person B", "description": "Desc B", "first_seen_ts": 3.0, "last_seen_ts": 4.0, "appearances_count": 2}
+        ])
+        sm.update_job(job_id, persons_df=persons_df)
+
+        client = TestClient(app)
+        response = client.delete(f"/api/jobs/{job_id}/persons/1")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
+        # Force clear test memory cache so it reads from disk
+        sm._STORE.pop(job_id, None)
+
+        # Verify state in session manager
+        updated_job = sm.get_job(job_id)
+        df = updated_job["persons_df"]
+        assert len(df) == 1
+        assert df.iloc[0]["person_id"] == 2
+
+        sm.cleanup_job(job_id)
