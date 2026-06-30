@@ -1415,6 +1415,215 @@ def get_persons(job_id: str):
     return {"persons": persons_list}
 
 
+@app.get("/api/jobs/{job_id}/persons/merge-suggestions")
+def get_merge_suggestions(job_id: str, threshold: float = 0.6):
+    """Find persons with similar face embeddings who might actually be the same person."""
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+
+    persons_df = job.get("persons_df")
+    if persons_df is None or persons_df.empty:
+        return {"suggestions": []}
+
+    faces = job.get("faces") or []
+    if not faces:
+        return {"suggestions": []}
+
+    # Map face ID to its embedding
+    face_embeddings = {}
+    for face in faces:
+        fid = face.get("face_id")
+        emb = face.get("embedding")
+        if fid is not None and emb:
+            face_embeddings[fid] = emb
+
+    # Calculate mean embedding for each person
+    person_mean_embeddings = {}
+    persons_clean = persons_df.replace({float('nan'): None})
+    persons_list = persons_clean.to_dict(orient="records")
+
+    for person in persons_list:
+        person_id = person.get("person_id")
+        face_ids_str = person.get("face_ids", "[]")
+        if isinstance(face_ids_str, str):
+            try:
+                face_ids = json.loads(face_ids_str) or []
+            except:
+                face_ids = []
+        else:
+            face_ids = face_ids_str or []
+
+        embs = [face_embeddings[fid] for fid in face_ids if fid in face_embeddings]
+        if embs:
+            mean_emb = [sum(x) / len(embs) for x in zip(*embs)]
+            person_mean_embeddings[person_id] = mean_emb
+
+    suggestions = []
+    # Compare all pairs of persons
+    for i in range(len(persons_list)):
+        for j in range(i + 1, len(persons_list)):
+            p_a = persons_list[i]
+            p_b = persons_list[j]
+            id_a = p_a.get("person_id")
+            id_b = p_b.get("person_id")
+
+            if id_a in person_mean_embeddings and id_b in person_mean_embeddings:
+                sim = _cosine_similarity(person_mean_embeddings[id_a], person_mean_embeddings[id_b])
+                if sim >= threshold:
+                    scene_images = job.get("scene_images") or []
+                    for p in [p_a, p_b]:
+                        if "representative_image" not in p or not p["representative_image"]:
+                            ts = p.get("first_seen_ts", 0)
+                            if ts and scene_images:
+                                def extract_ts(path):
+                                    m = re.search(r'(\d{2})-(\d{2})-(\d{2})-(\d{3})', path)
+                                    if m:
+                                        h, mn, s, ms = map(int, m.groups())
+                                        return h * 3600 + mn * 60 + s + ms / 1000
+                                    return 0
+                                closest = min(scene_images, key=lambda path: abs(extract_ts(path) - ts), default=None)
+                                p["representative_image"] = closest
+                        p_face_ids = p.get("face_ids")
+                        if isinstance(p_face_ids, str):
+                            try:
+                                p["face_ids"] = json.loads(p_face_ids) if p_face_ids else []
+                            except:
+                                p["face_ids"] = []
+                        elif p_face_ids is None:
+                            p["face_ids"] = []
+
+                    suggestions.append({
+                        "person_a": p_a,
+                        "person_b": p_b,
+                        "similarity": round(sim, 3)
+                    })
+
+    suggestions.sort(key=lambda x: x["similarity"], reverse=True)
+    return {"suggestions": suggestions}
+
+
+@app.post("/api/jobs/{job_id}/persons/merge")
+def merge_persons(job_id: str, body: dict = Body(...)):
+    """Merge source_person_id into target_person_id."""
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+
+    source_id = body.get("source_person_id")
+    target_id = body.get("target_person_id")
+
+    if source_id is None or target_id is None:
+        return JSONResponse({"error": "Both source_person_id and target_person_id must be provided"}, status_code=400)
+
+    persons_df = job.get("persons_df")
+    if persons_df is None or persons_df.empty:
+        return JSONResponse({"error": "No persons found"}, status_code=400)
+
+    # Check if both persons exist
+    if source_id not in persons_df["person_id"].values:
+        return JSONResponse({"error": f"Source person {source_id} not found"}, status_code=404)
+    if target_id not in persons_df["person_id"].values:
+        return JSONResponse({"error": f"Target person {target_id} not found"}, status_code=404)
+
+    # Find the records
+    source_idx = persons_df[persons_df["person_id"] == source_id].index[0]
+    target_idx = persons_df[persons_df["person_id"] == target_id].index[0]
+    
+    source_row = persons_df.loc[source_idx]
+    target_row = persons_df.loc[target_idx]
+
+    # Combine face_ids
+    def parse_face_ids(val):
+        if isinstance(val, str):
+            try:
+                return json.loads(val) or []
+            except:
+                return []
+        return val or []
+
+    source_face_ids = set(parse_face_ids(source_row.get("face_ids")))
+    target_face_ids = set(parse_face_ids(target_row.get("face_ids")))
+    merged_face_ids = list(source_face_ids | target_face_ids)
+
+    # Combine attributes
+    def parse_attributes(val):
+        if isinstance(val, str):
+            try:
+                return json.loads(val) or {}
+            except:
+                return {}
+        return val or {}
+
+    source_attr = parse_attributes(source_row.get("attributes"))
+    target_attr = parse_attributes(target_row.get("attributes"))
+    merged_attr = {**source_attr, **target_attr}
+
+    # Combine timestamps & counts
+    first_seen = min(float(source_row.get("first_seen_ts") or 0.0), float(target_row.get("first_seen_ts") or 0.0))
+    last_seen = max(float(source_row.get("last_seen_ts") or 0.0), float(target_row.get("last_seen_ts") or 0.0))
+    count = int(source_row.get("appearances_count") or 1) + int(target_row.get("appearances_count") or 1)
+
+    df = persons_df.copy()
+
+    # Update target row
+    df.loc[target_idx, "name"] = target_row.get("name") or source_row.get("name")
+    df.loc[target_idx, "description"] = target_row.get("description") or source_row.get("description")
+    df.loc[target_idx, "first_seen_ts"] = first_seen
+    df.loc[target_idx, "last_seen_ts"] = last_seen
+    df.loc[target_idx, "appearances_count"] = count
+    df.loc[target_idx, "face_ids"] = json.dumps(merged_face_ids)
+    df.loc[target_idx, "attributes"] = json.dumps(merged_attr)
+    df.loc[target_idx, "representative_image"] = target_row.get("representative_image") or source_row.get("representative_image")
+    df.loc[target_idx, "representative_crop"] = target_row.get("representative_crop") or source_row.get("representative_crop")
+
+    # Remove source row
+    df = df[df["person_id"] != source_id]
+
+    # Save job
+    sm.update_job(job_id, persons_df=df)
+
+    # Persist persons to PostgreSQL if enabled
+    if _DATASTORE.enabled:
+        persons_list = df.replace({float('nan'): None}).to_dict(orient="records")
+        _DATASTORE.store_persons(job_id, persons_list)
+
+    return {"status": "ok", "merged_person_id": target_id}
+
+
+@app.post("/api/jobs/{job_id}/persons/{person_id}")
+def update_person(job_id: str, person_id: int, body: dict = Body(...)):
+    """Update a person's name and description."""
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+
+    persons_df = job.get("persons_df")
+    if persons_df is None or persons_df.empty:
+        return JSONResponse({"error": "No persons found"}, status_code=400)
+
+    # Check if person exists
+    if person_id not in persons_df["person_id"].values:
+        return JSONResponse({"error": "Person not found"}, status_code=404)
+
+    name = body.get("name")
+    description = body.get("description")
+
+    df = persons_df.copy()
+    df.loc[df["person_id"] == person_id, "name"] = name
+    df.loc[df["person_id"] == person_id, "description"] = description
+
+    # Save job
+    sm.update_job(job_id, persons_df=df)
+
+    # Persist persons to PostgreSQL if enabled
+    if _DATASTORE.enabled:
+        persons_list = df.replace({float('nan'): None}).to_dict(orient="records")
+        _DATASTORE.store_persons(job_id, persons_list)
+
+    return {"status": "ok", "person_id": person_id, "name": name, "description": description}
+
+
 @app.get("/api/jobs/{job_id}/faces")
 def get_faces(job_id: str):
     """Return all detected faces for a job."""
@@ -2245,6 +2454,11 @@ def merge_faces(job_id: str, body: dict = Body(...)):
             # Add faces TO target person
             if person["person_id"] == target_person_id:
                 new_face_ids = list(p_face_ids_set | valid_face_ids)
+                person["face_ids"] = json.dumps(new_face_ids)
+                modified = True
+            # Remove faces FROM any other person who might have them
+            elif p_face_ids_set & valid_face_ids:
+                new_face_ids = list(p_face_ids_set - valid_face_ids)
                 person["face_ids"] = json.dumps(new_face_ids)
                 modified = True
 

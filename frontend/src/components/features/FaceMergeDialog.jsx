@@ -58,7 +58,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
-            <div className="bg-bg-primary border border-border-subtle rounded-xl shadow-2xl w-full max-w-4xl mx-4 max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="bg-bg-surface border border-border-subtle rounded-xl shadow-2xl w-full max-w-4xl mx-4 max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between p-4 border-b border-border-subtle shrink-0">
                     <div>
                         <h3 className="text-lg font-semibold">Gesichter zuweisen: {person.name || `Person ${person.person_id}`}</h3>
@@ -117,7 +117,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
                 <div className="flex items-center justify-between p-4 border-t border-border-subtle shrink-0 bg-bg-card">
                     <div className="text-sm text-text-muted">{selectedForMerge.size > 0 && <span>{selectedForMerge.size} Gesicht{selectedForMerge.size !== 1 ? "er" : ""} ausgewählt</span>}</div>
                     <div className="flex gap-3">
-                        <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-text-secondary hover:bg-bg-primary rounded-lg transition-colors">Abbrechen</button>
+                        <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-text-secondary hover:bg-bg-card rounded-lg transition-colors">Abbrechen</button>
                         <button onClick={handleMerge} disabled={selectedForMerge.size === 0 || saving}
                             className="px-4 py-2 text-sm font-medium bg-primary text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
                             {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div> : <><span className="material-icons-round text-sm">add</span>Zuweisen</>}
@@ -141,7 +141,7 @@ export function FaceThumbnail({ faceId, jobId, isOwn, similarity, selectable, se
                     <div className="w-full h-full flex items-center justify-center bg-bg-card text-text-muted"><span className="text-2xl">👤</span></div>
                 )}
                 {selectable && (
-                    <div className={`absolute top-1 right-1 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${selected ? "bg-primary border-primary" : "bg-bg-primary/80 border-border-subtle group-hover:border-primary/50"}`}>
+                    <div className={`absolute top-1 right-1 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${selected ? "bg-primary border-primary" : "bg-bg-surface/80 border-border-subtle group-hover:border-primary/50"}`}>
                         {selected && <span className="material-icons-round text-white text-sm">check</span>}
                     </div>
                 )}

@@ -380,7 +380,7 @@ class DataStore:
 
     def store_persons(self, job_id: str, persons_list: list[dict[str, Any]]) -> None:
         """Store or update person records for a job."""
-        if not job_id or not persons_list:
+        if not job_id:
             return
 
         if not self.enabled:
@@ -390,6 +390,19 @@ class DataStore:
         try:
             with self._psycopg.connect(self.database_url) as conn:
                 with conn.cursor() as cur:
+                    if persons_list:
+                        keep_ids = [int(p.get("person_id", 0)) for p in persons_list]
+                        placeholders = ",".join(["%s"] * len(keep_ids))
+                        cur.execute(
+                            f"DELETE FROM job_persons WHERE job_id = %s AND person_id NOT IN ({placeholders})",
+                            [job_id] + keep_ids,
+                        )
+                    else:
+                        cur.execute(
+                            "DELETE FROM job_persons WHERE job_id = %s",
+                            (job_id,),
+                        )
+
                     for person in persons_list:
                         attributes_json = json.dumps(person.get("attributes") or {}, ensure_ascii=False)
                         appearances_json = json.dumps(person.get("appearances") or [], ensure_ascii=False)

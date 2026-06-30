@@ -191,3 +191,144 @@ class TestSessionManagerPersons:
         job = sm.get_job(job_id)
         assert job["persons_df"] is None
         sm.cleanup_job(job_id)
+
+
+class TestPersonModifications:
+    """Tests for the new person editing, merging, and suggestions endpoints."""
+
+    def test_update_person_success(self):
+        """POST /api/jobs/{job_id}/persons/{person_id} updates name/description."""
+        from fastapi.testclient import TestClient
+        from backend.app import app
+        from backend import session_manager as sm
+
+        job_id = sm.create_job()
+        persons_df = pd.DataFrame([
+            {"person_id": 1, "name": "Old Name", "description": "Old Desc", "first_seen_ts": 1.0, "last_seen_ts": 2.0, "appearances_count": 1}
+        ])
+        sm.update_job(job_id, persons_df=persons_df)
+
+        client = TestClient(app)
+        response = client.post(
+            f"/api/jobs/{job_id}/persons/1",
+            json={"name": "New Name", "description": "New Desc"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "New Name"
+        assert data["description"] == "New Desc"
+
+        # Force clear test memory cache so it reads from disk
+        sm._STORE.pop(job_id, None)
+
+        # Verify state in session manager
+        updated_job = sm.get_job(job_id)
+        df = updated_job["persons_df"]
+        assert df.iloc[0]["name"] == "New Name"
+        assert df.iloc[0]["description"] == "New Desc"
+
+        sm.cleanup_job(job_id)
+
+    def test_merge_persons_success(self):
+        """POST /api/jobs/{job_id}/persons/merge merges two persons."""
+        import json
+        from fastapi.testclient import TestClient
+        from backend.app import app
+        from backend import session_manager as sm
+
+        job_id = sm.create_job()
+        persons_df = pd.DataFrame([
+            {
+                "person_id": 1, 
+                "name": "Person A", 
+                "description": "Desc A", 
+                "first_seen_ts": 10.0, 
+                "last_seen_ts": 12.0, 
+                "appearances_count": 2,
+                "face_ids": "[1, 2]",
+                "attributes": '{"top_color": "rot"}',
+                "representative_image": "img1.jpg",
+                "representative_crop": "crop1.jpg"
+            },
+            {
+                "person_id": 2, 
+                "name": "Person B", 
+                "description": "Desc B", 
+                "first_seen_ts": 5.0, 
+                "last_seen_ts": 15.0, 
+                "appearances_count": 3,
+                "face_ids": "[3]",
+                "attributes": '{"bottom_color": "blau"}',
+                "representative_image": "img2.jpg",
+                "representative_crop": "crop2.jpg"
+            }
+        ])
+        sm.update_job(job_id, persons_df=persons_df)
+
+        client = TestClient(app)
+        response = client.post(
+            f"/api/jobs/{job_id}/persons/merge",
+            json={"source_person_id": 1, "target_person_id": 2}
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
+        # Force clear test memory cache so it reads from disk
+        sm._STORE.pop(job_id, None)
+
+        updated_job = sm.get_job(job_id)
+        df = updated_job["persons_df"]
+        # Person 1 (source) should be removed
+        assert len(df) == 1
+        merged = df.iloc[0]
+        assert merged["person_id"] == 2
+        assert merged["appearances_count"] == 5
+        assert merged["first_seen_ts"] == 5.0
+        assert merged["last_seen_ts"] == 15.0
+        # face_ids combined
+        fids = set(json.loads(merged["face_ids"]))
+        assert fids == {1, 2, 3}
+        # attributes combined
+        attrs = json.loads(merged["attributes"])
+        assert attrs.get("top_color") == "rot"
+        assert attrs.get("bottom_color") == "blau"
+
+        sm.cleanup_job(job_id)
+
+    def test_get_merge_suggestions(self):
+        """GET /api/jobs/{job_id}/persons/merge-suggestions returns suggestions based on face embedding similarity."""
+        from fastapi.testclient import TestClient
+        from backend.app import app
+        from backend import session_manager as sm
+
+        job_id = sm.create_job()
+        
+        # Setup persons with associated face IDs
+        persons_df = pd.DataFrame([
+            {"person_id": 1, "name": "Person 1", "face_ids": "[10]"},
+            {"person_id": 2, "name": "Person 2", "face_ids": "[20]"}
+        ])
+        
+        # Setup faces list with embeddings
+        faces = [
+            {"face_id": 10, "embedding": [1.0, 0.0, 0.0]},
+            {"face_id": 20, "embedding": [0.99, 0.1, 0.0]}
+        ]
+        
+        sm.update_job(job_id, persons_df=persons_df, faces=faces)
+
+        # Force clear test memory cache so it reads from disk
+        sm._STORE.pop(job_id, None)
+
+        client = TestClient(app)
+        response = client.get(f"/api/jobs/{job_id}/persons/merge-suggestions?threshold=0.9")
+        assert response.status_code == 200
+        data = response.json()
+        assert "suggestions" in data
+        assert len(data["suggestions"]) == 1
+        suggestion = data["suggestions"][0]
+        assert suggestion["person_a"]["person_id"] == 1
+        assert suggestion["person_b"]["person_id"] == 2
+        assert suggestion["similarity"] > 0.9
+
+        sm.cleanup_job(job_id)

@@ -9,16 +9,30 @@ function formatTimestamp(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-function MergePersonsDialog({ persons, onMerge, onClose }) {
+function MergePersonsDialog({ persons, jobId, onMerge, onClose }) {
     const [sourceId, setSourceId] = useState(null);
     const [targetId, setTargetId] = useState(null);
     const [saving, setSaving] = useState(false);
+    const [suggestions, setSuggestions] = useState([]);
+    const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
-    const handleMerge = async () => {
-        if (!sourceId || !targetId || sourceId === targetId) return;
+    useEffect(() => {
+        if (!jobId) return;
+        setLoadingSuggestions(true);
+        fetch(`/api/jobs/${jobId}/persons/merge-suggestions`)
+            .then(res => res.json())
+            .then(data => setSuggestions(data.suggestions || []))
+            .catch(err => console.error('Failed to load merge suggestions:', err))
+            .finally(() => setLoadingSuggestions(false));
+    }, [jobId]);
+
+    const handleMerge = async (srcId, tgtId) => {
+        const sId = srcId !== undefined ? srcId : parseInt(sourceId);
+        const tId = tgtId !== undefined ? tgtId : parseInt(targetId);
+        if (!sId || !tId || sId === tId) return;
         setSaving(true);
         try {
-            await onMerge(parseInt(sourceId), parseInt(targetId));
+            await onMerge(sId, tId);
             onClose();
         } catch (err) {
             console.error('Failed to merge persons:', err);
@@ -36,7 +50,7 @@ function MergePersonsDialog({ persons, onMerge, onClose }) {
             onClick={onClose}
         >
             <div 
-                className="bg-bg-primary border border-border-subtle rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-hidden flex flex-col"
+                className="bg-bg-surface border border-border-subtle rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-hidden flex flex-col"
                 onClick={e => e.stopPropagation()}
             >
                 <div className="flex items-center justify-between p-4 border-b border-border-subtle shrink-0">
@@ -50,6 +64,36 @@ function MergePersonsDialog({ persons, onMerge, onClose }) {
                 </div>
                 
                 <div className="p-4 space-y-4 overflow-y-auto flex-1">
+                    {loadingSuggestions ? (
+                        <div className="flex items-center gap-2 text-xs text-text-muted py-2 bg-violet-950/10 border border-violet-500/10 rounded-lg justify-center">
+                            <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                            Lade Vorschläge...
+                        </div>
+                    ) : suggestions.length > 0 ? (
+                        <div className="space-y-2">
+                            <h4 className="text-xs font-semibold text-violet-400 uppercase tracking-wider">Vorschläge zum Zusammenführen</h4>
+                            <div className="space-y-2 max-h-[200px] overflow-y-auto pr-1">
+                                {suggestions.map(({ person_a, person_b, similarity }) => (
+                                    <div key={`${person_a.person_id}-${person_b.person_id}`} className="flex items-center justify-between p-2.5 bg-violet-950/20 border border-violet-500/20 rounded-lg">
+                                        <div className="text-xs">
+                                            <span className="font-medium text-text-primary">{person_a.name || `Person ${person_a.person_id}`}</span> 
+                                            {' '}und{' '}
+                                            <span className="font-medium text-text-primary">{person_b.name || `Person ${person_b.person_id}`}</span>
+                                            <div className="text-text-muted mt-0.5">Übereinstimmung: {(similarity * 100).toFixed(0)}%</div>
+                                        </div>
+                                        <button
+                                            onClick={() => handleMerge(person_a.person_id, person_b.person_id)}
+                                            disabled={saving}
+                                            className="px-2.5 py-1 text-xs font-medium bg-violet-600 hover:bg-violet-500 text-white rounded transition-colors"
+                                        >
+                                            Zusammenführen
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : null}
+
                     <p className="text-sm text-text-secondary">
                         Wähle zwei Personen aus, die zusammengeführt werden sollen. 
                         Die zweite Person wird zur ersten hinzugefügt und dann gelöscht.
@@ -111,14 +155,14 @@ function MergePersonsDialog({ persons, onMerge, onClose }) {
                     </div>
                     
                     {sourceId && targetId && sourceId !== targetId && (
-                        <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                            <p className="text-sm text-amber-300">
-                                <strong>Achtung:</strong> Person {sourceId} wird mit Person {targetId} 
-                                zusammengeführt. Alle Auftritte von Person {sourceId} werden zu Person {targetId} 
-                                hinzugefügt. Diese Aktion kann nicht rückgängig gemacht werden.
-                            </p>
-                        </div>
-                    )}
+                         <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                             <p className="text-sm text-amber-300">
+                                 <strong>Achtung:</strong> Person {sourceId} wird mit Person {targetId} 
+                                 zusammengeführt. Alle Auftritte von Person {sourceId} werden zu Person {targetId} 
+                                 hinzugefügt. Diese Aktion kann nicht rückgängig gemacht werden.
+                             </p>
+                         </div>
+                     )}
                 </div>
                 
                 <div className="flex justify-end gap-2 p-4 border-t border-border-subtle shrink-0">
@@ -131,7 +175,7 @@ function MergePersonsDialog({ persons, onMerge, onClose }) {
                         Abbrechen
                     </button>
                     <button
-                        onClick={handleMerge}
+                        onClick={() => handleMerge()}
                         disabled={!sourceId || !targetId || sourceId === targetId || saving}
                         className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 
                                    disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
@@ -202,7 +246,7 @@ function EditPersonDialog({ person, onSave, onClose }) {
             onKeyDown={handleKeyDown}
         >
             <div 
-                className="bg-bg-primary border border-border-subtle rounded-xl shadow-2xl w-full max-w-md mx-4"
+                className="bg-bg-surface border border-border-subtle rounded-xl shadow-2xl w-full max-w-md mx-4"
                 onClick={e => e.stopPropagation()}
             >
                 <div className="flex items-center justify-between p-4 border-b border-border-subtle">
@@ -342,7 +386,7 @@ function PersonCard({ person, onEdit, onMergeFaces, jobId }) {
                     </div>
                     <button
                         onClick={() => onEdit(person)}
-                        className="p-1.5 hover:bg-bg-primary rounded-lg transition-colors"
+                        className="p-1.5 hover:bg-bg-card rounded-lg transition-colors"
                         title="Bearbeiten"
                     >
                         <span className="material-icons-round text-sm text-text-muted hover:text-text-primary">edit</span>
@@ -350,7 +394,7 @@ function PersonCard({ person, onEdit, onMergeFaces, jobId }) {
                     {onMergeFaces && (
                         <button
                             onClick={() => onMergeFaces(person)}
-                            className="p-1.5 hover:bg-bg-primary rounded-lg transition-colors"
+                            className="p-1.5 hover:bg-bg-card rounded-lg transition-colors"
                             title="Gesichter zuweisen"
                         >
                             <span className="material-icons-round text-sm text-text-muted hover:text-text-primary">face</span>
@@ -440,40 +484,63 @@ export function StepPersons() {
     };
 
     const handleSavePerson = async (personId, updates) => {
-        setPersons(prev => prev.map(p => 
-            p.person_id === personId 
-                ? { ...p, ...updates }
-                : p
-        ));
+        try {
+            const res = await fetch(`/api/jobs/${jobData?.job_id}/persons/${personId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updates)
+            });
+            if (!res.ok) {
+                throw new Error("Save failed");
+            }
+            setPersons(prev => prev.map(p => 
+                p.person_id === personId 
+                    ? { ...p, ...updates }
+                    : p
+            ));
+        } catch (err) {
+            console.error('Failed to save person details:', err);
+            setPersons(prev => prev.map(p => 
+                p.person_id === personId 
+                    ? { ...p, ...updates }
+                    : p
+            ));
+        }
     };
 
     const handleMergePersons = async (sourceId, targetId) => {
-        // Find source and target persons
         const source = persons.find(p => p.person_id === sourceId);
         const target = persons.find(p => p.person_id === targetId);
         
         if (!source || !target) return;
 
-        // Create merged person
-        const mergedPerson = {
-            ...target,
-            person_id: targetId,
-            appearances_count: (target.appearances_count || 1) + (source.appearances_count || 1),
-            // Use earliest first_seen_ts
-            first_seen_ts: Math.min(target.first_seen_ts || Infinity, source.first_seen_ts || Infinity),
-            // Use latest last_seen_ts
-            last_seen_ts: Math.max(target.last_seen_ts || 0, source.last_seen_ts || 0),
-            // Keep target name unless source has one and target doesn't
-            name: target.name || source.name || null,
-            description: target.description || source.description || '',
-            attributes: { ...(source.attributes || {}), ...(target.attributes || {}) },
-        };
-
-        // Update persons list
-        setPersons(prev => [
-            ...prev.filter(p => p.person_id !== sourceId),
-            ...prev.filter(p => p.person_id === targetId).map(p => mergedPerson)
-        ]);
+        try {
+            const res = await fetch(`/api/jobs/${jobData?.job_id}/persons/merge`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source_person_id: sourceId, target_person_id: targetId })
+            });
+            if (!res.ok) {
+                throw new Error("Merge failed");
+            }
+            handleMergeFacesRefresh();
+        } catch (err) {
+            console.error('Failed to merge persons:', err);
+            const mergedPerson = {
+                ...target,
+                person_id: targetId,
+                appearances_count: (target.appearances_count || 1) + (source.appearances_count || 1),
+                first_seen_ts: Math.min(target.first_seen_ts || Infinity, source.first_seen_ts || Infinity),
+                last_seen_ts: Math.max(target.last_seen_ts || 0, source.last_seen_ts || 0),
+                name: target.name || source.name || null,
+                description: target.description || source.description || '',
+                attributes: { ...(source.attributes || {}), ...(target.attributes || {}) },
+            };
+            setPersons(prev => [
+                ...prev.filter(p => p.person_id !== sourceId),
+                ...prev.filter(p => p.person_id === targetId).map(p => mergedPerson)
+            ]);
+        }
     };
 
     return (
@@ -489,6 +556,7 @@ export function StepPersons() {
             {mergingPersons && (
                 <MergePersonsDialog
                     persons={persons}
+                    jobId={jobData?.job_id}
                     onMerge={handleMergePersons}
                     onClose={() => setMergingPersons(false)}
                 />
@@ -594,6 +662,7 @@ export function StepPersons() {
                                             key={person.person_id} 
                                             person={person} 
                                             onEdit={setEditingPerson}
+                                            onMergeFaces={setMergingFacesPerson}
                                             jobId={jobData?.job_id}
                                         />
                                     ))
@@ -632,7 +701,7 @@ export function StepPersons() {
                         
                         {personsCount > 0 && (
                             <button
-                                className="flex items-center gap-2 px-4 py-2 bg-bg-card hover:bg-bg-primary border border-border-subtle text-text-secondary hover:text-text-primary text-sm font-medium rounded-lg transition-colors"
+                                className="flex items-center gap-2 px-4 py-2 bg-bg-card hover:bg-bg-surface border border-border-subtle text-text-secondary hover:text-text-primary text-sm font-medium rounded-lg transition-colors"
                                 onClick={() => setMergingPersons(true)}
                             >
                                 <span className="material-icons-round text-lg">merge</span>

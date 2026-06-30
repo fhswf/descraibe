@@ -116,6 +116,7 @@ _JSON_FIELDS: List[str] = [
     "gpt_records_broadcast",
     "gpt_records_directors",
     "final_mp4_path",
+    "faces",
 ]
 
 # ── Persistence helpers ────────────────────────────────────────────────────────
