@@ -152,7 +152,7 @@ test.describe('Job Navigation', () => {
         await openApp(page);
 
         // Sidebar or job list should be present
-        const sidebar = page.locator('aside, nav, [class*="sidebar"], [class*="job"]');
+        const _sidebar = page.locator('aside, nav, [class*="sidebar"], [class*="job"]');
         // Just verify the page loaded
         await expect(page.locator('body')).toBeVisible();
     });
@@ -165,7 +165,7 @@ test.describe('Config Modal', () => {
         await openApp(page);
 
         // Look for settings/config buttons
-        const settingsButton = page.locator('button:has-text("Einstellungen"), button:has-text("Config"), button:has-text("Settings")');
+        const _settingsButton = page.locator('button:has-text("Einstellungen"), button:has-text("Config"), button:has-text("Settings")');
         
         // Check if there's any way to open config
         const body = await page.textContent('body');

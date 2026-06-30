@@ -2303,6 +2303,8 @@ if __name__ == "__main__":
 
 # ── Similar Faces Endpoint ─────────────────────────────────────────────────────
 
+_SIMILARITY_CACHE: dict[tuple[str, int, int], float] = {}
+
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
     import math
@@ -2312,6 +2314,16 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+def _get_cached_face_similarity(job_id: str, id1: int, id2: int, emb1: list[float], emb2: list[float]) -> float:
+    """Compute cosine similarity between two face embeddings, caching results."""
+    key = (job_id, min(id1, id2), max(id1, id2))
+    if key in _SIMILARITY_CACHE:
+        return _SIMILARITY_CACHE[key]
+    sim = _cosine_similarity(emb1, emb2)
+    _SIMILARITY_CACHE[key] = sim
+    return sim
 
 
 @app.get("/api/jobs/{job_id}/persons/{person_id}/similar-faces")
@@ -2373,7 +2385,13 @@ def get_similar_faces(job_id: str, person_id: int, threshold: float = 0.5):
         max_sim = 0.0
         best_match = None
         for person_face in person_embeddings:
-            sim = _cosine_similarity(face.get("embedding", []), person_face.get("embedding", []))
+            sim = _get_cached_face_similarity(
+                job_id,
+                face.get("face_id"),
+                person_face.get("face_id"),
+                face.get("embedding", []),
+                person_face.get("embedding", [])
+            )
             if sim > max_sim:
                 max_sim = sim
                 best_match = person_face.get("face_id")

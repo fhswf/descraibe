@@ -4,6 +4,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
     const [similarFaces, setSimilarFaces] = useState([]);
     const [unassignedFaces, setUnassignedFaces] = useState([]);
     const [selectedForMerge, setSelectedForMerge] = useState(new Set());
+    const [selectedForSplit, setSelectedForSplit] = useState(new Set());
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [threshold, setThreshold] = useState(0.6);
@@ -33,36 +34,68 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
         fetchSimilarFaces();
     }, [jobId, person.person_id, threshold]);
 
-    const toggleSelection = (faceId) => {
+    const toggleMergeSelection = (faceId) => {
         const newSet = new Set(selectedForMerge);
         if (newSet.has(faceId)) { newSet.delete(faceId); } else { newSet.add(faceId); }
         setSelectedForMerge(newSet);
     };
 
-    const handleMerge = async () => {
-        if (selectedForMerge.size === 0) return;
+    const toggleSplitSelection = (faceId) => {
+        const newSet = new Set(selectedForSplit);
+        if (newSet.has(faceId)) { newSet.delete(faceId); } else { newSet.add(faceId); }
+        setSelectedForSplit(newSet);
+    };
+
+    const handleSave = async () => {
+        if (selectedForMerge.size === 0 && selectedForSplit.size === 0) return;
         setSaving(true);
         try {
-            await fetch(`/api/jobs/${jobId}/faces/merge`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action: "merge_to_person", face_ids: Array.from(selectedForMerge), target_person_id: person.person_id })
-            });
+            // 1. Perform merge if selected
+            if (selectedForMerge.size > 0) {
+                const res = await fetch(`/api/jobs/${jobId}/faces/merge`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "merge_to_person",
+                        face_ids: Array.from(selectedForMerge),
+                        target_person_id: person.person_id
+                    })
+                });
+                if (!res.ok) throw new Error("Merge failed");
+            }
+            // 2. Perform split if selected
+            if (selectedForSplit.size > 0) {
+                const res = await fetch(`/api/jobs/${jobId}/faces/merge`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "split_from_person",
+                        face_ids: Array.from(selectedForSplit),
+                        source_person_id: person.person_id
+                    })
+                });
+                if (!res.ok) throw new Error("Split failed");
+            }
             onRefresh();
             onClose();
-        } catch (err) { console.error("Failed to merge faces:", err); }
-        finally { setSaving(false); }
+        } catch (err) {
+            console.error("Failed to update face assignments:", err);
+        } finally {
+            setSaving(false);
+        }
     };
 
     const similarityColor = (sim) => sim >= 0.8 ? "text-green-500" : sim >= 0.7 ? "text-yellow-500" : "text-orange-500";
+
+    const hasChanges = selectedForMerge.size > 0 || selectedForSplit.size > 0;
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
             <div className="bg-bg-surface border border-border-subtle rounded-xl shadow-2xl w-full max-w-4xl mx-4 max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between p-4 border-b border-border-subtle shrink-0">
                     <div>
-                        <h3 className="text-lg font-semibold">Gesichter zuweisen: {person.name || `Person ${person.person_id}`}</h3>
-                        <p className="text-sm text-text-muted">Wähle ähnliche Gesichter aus, um sie dieser Person zuzuweisen</p>
+                        <h3 className="text-lg font-semibold">Gesichter verwalten: {person.name || `Person ${person.person_id}`}</h3>
+                        <p className="text-sm text-text-muted">Zuweisen von ähnlichen Gesichtern oder Entfernen von eigenen Gesichtern</p>
                     </div>
                     <button onClick={onClose} className="p-1 hover:bg-bg-card rounded-lg transition-colors"><span className="material-icons-round text-text-muted">close</span></button>
                 </div>
@@ -80,18 +113,30 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
                         <div className="space-y-6">
                             <div>
                                 <h4 className="text-sm font-medium text-text-secondary mb-3">Eigene Gesichter ({faceIds.length})</h4>
+                                <p className="text-xs text-text-muted mb-2">Auswählen zum Entfernen (rot markiert)</p>
                                 <div className="flex flex-wrap gap-3">
-                                    {faceIds.map(fid => <FaceThumbnail key={fid} faceId={fid} jobId={jobId} isOwn={true} />)}
+                                    {faceIds.map(fid => (
+                                        <FaceThumbnail 
+                                            key={fid} 
+                                            faceId={fid} 
+                                            jobId={jobId} 
+                                            isOwn={true} 
+                                            selectable={true}
+                                            selected={selectedForSplit.has(fid)}
+                                            onToggle={() => toggleSplitSelection(fid)}
+                                        />
+                                    ))}
                                     {faceIds.length === 0 && <p className="text-sm text-text-muted">Keine Gesichter gefunden</p>}
                                 </div>
                             </div>
                             {similarFaces.length > 0 && (
                                 <div>
                                     <h4 className="text-sm font-medium text-text-secondary mb-3">Ähnliche Gesichter ({similarFaces.length})</h4>
+                                    <p className="text-xs text-text-muted mb-2">Auswählen zum Hinzufügen (violett markiert)</p>
                                     <div className="flex flex-wrap gap-3">
                                         {similarFaces.map(({ face, similarity }) => (
                                             <FaceThumbnail key={face.face_id} faceId={face.face_id} jobId={jobId} similarity={similarity} selectable={true}
-                                                selected={selectedForMerge.has(face.face_id)} onToggle={() => toggleSelection(face.face_id)}
+                                                selected={selectedForMerge.has(face.face_id)} onToggle={() => toggleMergeSelection(face.face_id)}
                                                 similarityColor={similarityColor(similarity)} />
                                         ))}
                                     </div>
@@ -100,10 +145,11 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
                             {unassignedFaces.length > 0 && (
                                 <div>
                                     <h4 className="text-sm font-medium text-text-secondary mb-3">Unzugewiesene Gesichter ({unassignedFaces.length})</h4>
+                                    <p className="text-xs text-text-muted mb-2">Auswählen zum Hinzufügen (violett markiert)</p>
                                     <div className="flex flex-wrap gap-3">
                                         {unassignedFaces.map(face => (
                                             <FaceThumbnail key={face.face_id} faceId={face.face_id} jobId={jobId} selectable={true}
-                                                selected={selectedForMerge.has(face.face_id)} onToggle={() => toggleSelection(face.face_id)} />
+                                                selected={selectedForMerge.has(face.face_id)} onToggle={() => toggleMergeSelection(face.face_id)} />
                                         ))}
                                     </div>
                                 </div>
@@ -115,12 +161,17 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
                     )}
                 </div>
                 <div className="flex items-center justify-between p-4 border-t border-border-subtle shrink-0 bg-bg-card">
-                    <div className="text-sm text-text-muted">{selectedForMerge.size > 0 && <span>{selectedForMerge.size} Gesicht{selectedForMerge.size !== 1 ? "er" : ""} ausgewählt</span>}</div>
+                    <div className="text-sm text-text-muted flex gap-2">
+                        {selectedForMerge.size > 0 && <span className="text-violet-400">{selectedForMerge.size} hinzufügen</span>}
+                        {selectedForMerge.size > 0 && selectedForSplit.size > 0 && <span>•</span>}
+                        {selectedForSplit.size > 0 && <span className="text-red-400">{selectedForSplit.size} entfernen</span>}
+                        {!hasChanges && <span>Keine Änderungen ausgewählt</span>}
+                    </div>
                     <div className="flex gap-3">
                         <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-text-secondary hover:bg-bg-card rounded-lg transition-colors">Abbrechen</button>
-                        <button onClick={handleMerge} disabled={selectedForMerge.size === 0 || saving}
+                        <button onClick={handleSave} disabled={!hasChanges || saving}
                             className="px-4 py-2 text-sm font-medium bg-primary text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
-                            {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div> : <><span className="material-icons-round text-sm">add</span>Zuweisen</>}
+                            {saving ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div> : <><span className="material-icons-round text-sm">save</span>Speichern</>}
                         </button>
                     </div>
                 </div>
@@ -132,17 +183,31 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
 export function FaceThumbnail({ faceId, jobId, isOwn, similarity, selectable, selected, onToggle, similarityColor }) {
     const [imgError, setImgError] = useState(false);
     const imageUrl = `/api/jobs/${jobId}/faces/${faceId}`;
+
+    let borderClass = "border-border-subtle";
+    if (isOwn) {
+        borderClass = selected ? "border-red-500 ring-2 ring-red-500/30" : "border-green-500/50";
+    } else if (selected) {
+        borderClass = "border-primary ring-2 ring-primary/30";
+    } else if (selectable) {
+        borderClass = "hover:border-primary/50";
+    }
+
     return (
         <div className={`relative group ${selectable ? "cursor-pointer" : ""}`} onClick={selectable ? onToggle : undefined}>
-            <div className={`relative w-20 h-20 rounded-lg overflow-hidden border-2 transition-all ${isOwn ? "border-green-500/50" : "border-border-subtle"} ${selected ? "border-primary ring-2 ring-primary/30" : ""} ${selectable ? "hover:border-primary/50" : ""}`}>
+            <div className={`relative w-20 h-20 rounded-lg overflow-hidden border-2 transition-all ${borderClass}`}>
                 {!imgError ? (
                     <img src={imageUrl} alt={`Face ${faceId}`} className="w-full h-full object-cover" onError={() => setImgError(true)} />
                 ) : (
                     <div className="w-full h-full flex items-center justify-center bg-bg-card text-text-muted"><span className="text-2xl">👤</span></div>
                 )}
                 {selectable && (
-                    <div className={`absolute top-1 right-1 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${selected ? "bg-primary border-primary" : "bg-bg-surface/80 border-border-subtle group-hover:border-primary/50"}`}>
-                        {selected && <span className="material-icons-round text-white text-sm">check</span>}
+                    <div className={`absolute top-1 right-1 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
+                        selected 
+                            ? (isOwn ? "bg-red-500 border-red-500" : "bg-primary border-primary") 
+                            : "bg-bg-surface/80 border-border-subtle group-hover:border-primary/50"
+                    }`}>
+                        {selected && <span className="material-icons-round text-white text-sm">{isOwn ? "remove" : "check"}</span>}
                     </div>
                 )}
             </div>

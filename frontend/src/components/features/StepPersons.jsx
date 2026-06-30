@@ -538,7 +538,7 @@ export function StepPersons() {
             };
             setPersons(prev => [
                 ...prev.filter(p => p.person_id !== sourceId),
-                ...prev.filter(p => p.person_id === targetId).map(p => mergedPerson)
+                ...prev.filter(p => p.person_id === targetId).map(() => mergedPerson)
             ]);
         }
     };
