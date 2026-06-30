@@ -35,3 +35,8 @@ data:
         temperature: 1.0
         max_output_tokens: 2048
         detail: high
+      enhanced:
+        model: gpt-5.5-2026-06-01
+        temperature: 1.0
+        max_output_tokens: 4096
+        detail: high

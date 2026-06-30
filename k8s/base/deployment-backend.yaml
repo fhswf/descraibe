@@ -48,6 +48,16 @@ spec:
               value: "4096"
             - name: UVICORN_WORKERS
               value: "1"
+            # ── Person Analysis ────────────────────────────────────────────────────
+            # Path to YuNet ONNX face detection model (auto-downloaded on first run if missing)
+            - name: YU_NET_MODEL_PATH
+              value: /app/models/face_detection_yunet_2023mar.onnx
+            # Optional: path to Tesseract binary (defaults to system PATH)
+            - name: TESSERACT_CMD
+              value: ""
+            # Optional: Tesseract language (default: deu+eng)
+            - name: TESSERACT_LANG
+              value: "deu+eng"
             # Optional PostgreSQL DSN from CNPG generated app secret.
             # When unset, the backend falls back to file-based user config storage.
             - name: AD_DATABASE_URL
@@ -66,6 +76,8 @@ spec:
           volumeMounts:
             - name: jobs
               mountPath: /app/jobs
+            - name: models
+              mountPath: /app/models
             - name: gpt-config
               mountPath: /app/config
               readOnly: true
@@ -103,6 +115,8 @@ spec:
         - name: jobs
           persistentVolumeClaim:
             claimName: audiodeskription-jobs
+        - name: models
+          emptyDir: {}
         - name: gpt-config
           configMap:
             name: gpt-config

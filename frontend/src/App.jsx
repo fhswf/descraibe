@@ -10,6 +10,7 @@ import { StepVAD } from './components/features/StepVAD';
 import { StepTranscribe } from './components/features/StepTranscribe';
 import { StepSlots } from './components/features/StepSlots';
 import { StepImages } from './components/features/StepImages';
+import { StepPersons } from './components/features/StepPersons';
 import { ConfigModal } from './components/features/ConfigModal';
 import { StepGenerate } from './components/features/StepGenerate';
 import { StepTTS } from './components/features/StepTTS';
@@ -413,6 +414,7 @@ function App() {
             <StepTranscribe />
             <StepSlots />
             <StepImages />
+            <StepPersons />
             <StepGenerate />
             <StepTTS />
             <StepResults />
@@ -589,7 +591,7 @@ function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJ
 }
 
 function StepNavigation({ currentStep, setCurrentStep, doneSteps }) {
-  const { jobData, progressData, handleRunVAD, handleRunTranscribe, handleRunSlots, handleRunImages, handleRunGPT, handleRunTTS } = useJob();
+  const { jobData, progressData, handleRunVAD, handleRunTranscribe, handleRunSlots, handleRunImages, handleRunPersons, handleRunGPT, handleRunTTS } = useJob();
   
   const steps = [
     { num: 1, label: 'Video hochladen' },
@@ -597,9 +599,10 @@ function StepNavigation({ currentStep, setCurrentStep, doneSteps }) {
     { num: 3, key: 'transcribe', label: 'Transkription', action: handleRunTranscribe },
     { num: 4, key: 'slots', label: 'AD-Slots', action: handleRunSlots },
     { num: 5, key: 'images', label: 'Bilder extrahieren', action: handleRunImages },
-    { num: 6, key: 'gpt', label: 'Generieren', action: handleRunGPT },
-    { num: 7, key: 'tts', label: 'Vertonung (TTS)', action: handleRunTTS },
-    { num: 8, label: 'Ergebnisse & Download' },
+    { num: 6, key: 'persons', label: 'Personenanalyse', action: handleRunPersons },
+    { num: 7, key: 'gpt', label: 'Generieren', action: handleRunGPT },
+    { num: 8, key: 'tts', label: 'Vertonung (TTS)', action: handleRunTTS },
+    { num: 9, label: 'Ergebnisse & Download' },
   ];
   const runningStep = jobData?.status === 'running'
     ? jobData?.latest_progress?.step || Object.entries(progressData || {}).find(([, data]) => data !== null)?.[0]

@@ -12,19 +12,22 @@
 # GPU Operator still provides the host driver, device plugin and runtime hooks.
 
 # ── Base image ─────────────────────────────────────────────────────────────────
-# GPU-first runtime: PyTorch, CUDA 12.8 and cuDNN 9 are preinstalled in
+# GPU-first runtime: PyTorch, CUDA 13.0 and cuDNN 9 are preinstalled in
 # /opt/conda, which avoids re-downloading the large torch/nvidia wheels in CI.
-FROM pytorch/pytorch:2.10.0-cuda12.8-cudnn9-runtime
+FROM pytorch/pytorch:2.12.1-cuda13.0-cudnn9-runtime
 
 # ── System dependencies ────────────────────────────────────────────────────────
 # ffmpeg   – required by moviepy / scenedetect
 # libsm6 / libxext6 / libglib2.0-0 – required by opencv-python-headless
+# tesseract-ocr + deu – required for OCR-based name overlay detection (Bauchbinden)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsm6 \
     libxext6 \
     libglib2.0-0 \
     curl \
+    tesseract-ocr \
+    tesseract-ocr-deu \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Install uv ─────────────────────────────────────────────────────────────────

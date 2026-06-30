@@ -92,6 +92,7 @@ _DF_FIELDS: List[str] = [
     "segments_df",
     "slots_df",
     "slot_map_df",
+    "persons_df",
 ]
 
 # Scalar fields – stored in job.json.
@@ -222,6 +223,7 @@ def create_job() -> str:
         "quality_report": None,
         "scene_images": None,
         "slot_map_df": None,
+        "persons_df": None,
         "gpt_records_broadcast": None,
         "gpt_records_directors": None,
         "final_mp4_path": None,
