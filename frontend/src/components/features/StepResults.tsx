@@ -1,20 +1,26 @@
 import React, { useState } from 'react';
-import { useJob } from '../../hooks/useJob.jsx';
+import { useJob } from '../../hooks/useJob';
 
 const AUDIO_EXTS = ['.mp3', '.wav', '.ogg', '.m4a', '.aac'];
 const VIDEO_EXTS = ['.mp4', '.webm', '.mkv', '.mov'];
 
-function isAudio(filename) {
+function isAudio(filename: string | undefined | null): boolean {
     if (!filename) return false;
     return AUDIO_EXTS.some(ext => filename.toLowerCase().endsWith(ext));
 }
 
-function isVideo(filename) {
+function isVideo(filename: string | undefined | null): boolean {
     if (!filename) return false;
     return VIDEO_EXTS.some(ext => filename.toLowerCase().endsWith(ext));
 }
 
-function FileRow({ jobId, fileKey, filename }) {
+interface FileRowProps {
+    jobId: string;
+    fileKey: string;
+    filename: string;
+}
+
+function FileRow({ jobId, fileKey, filename }: FileRowProps): React.ReactElement {
     const [expanded, setExpanded] = useState(false);
     const url = `/api/jobs/${jobId}/downloads/${fileKey}`;
     const audio = isAudio(filename);
@@ -83,9 +89,8 @@ function FileRow({ jobId, fileKey, filename }) {
     );
 }
 
-export function StepResults() {
-    const { jobId, currentStep } = useJob();
-    const { jobData } = useJob();
+export function StepResults(): React.ReactElement | null {
+    const { jobId, currentStep, jobData } = useJob();
 
     if (currentStep !== 7) return null;
 
@@ -105,7 +110,7 @@ export function StepResults() {
                 <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">Ausgabedateien</p>
                 <div className="flex flex-col gap-2">
                     {Object.entries(paths).map(([key, filename]) => (
-                        <FileRow key={key} jobId={jobId} fileKey={key} filename={filename} />
+                        <FileRow key={key} jobId={jobId || ''} fileKey={key} filename={filename} />
                     ))}
                     {Object.keys(paths).length === 0 && (
                         <p className="text-sm text-text-secondary">Noch keine Ausgabedateien vorhanden.</p>

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
 
+type TabId = 'gpt' | 'vad' | 'transcribe' | 'slots' | 'images' | 'tts';
+
 export function ConfigModal() {
   const { 
     isConfigModalOpen, setIsConfigModalOpen, 
@@ -12,18 +14,28 @@ export function ConfigModal() {
     imagesParams, setImagesParams
   } = useJob();
 
-  const [activeTab, setActiveTab] = useState('gpt');
+  const [activeTab, setActiveTab] = useState<TabId>('gpt');
 
   if (!isConfigModalOpen) return null;
 
   const inputCls = "resize-y bg-bg-card border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15";
   const selectCls = "bg-bg-card border border-border-subtle rounded-md text-text-primary text-[0.875rem] px-2.5 py-2 outline-none transition-colors focus:border-violet-500 focus:ring-3 focus:ring-violet-500/15";
 
-  const isFixedTemp = gptParams.model && (
+  const isFixedTemp = Boolean(gptParams.model && (
     gptParams.model.startsWith('o1') || 
     gptParams.model.startsWith('o3') || 
     gptParams.model.startsWith('gpt-5')
-  );
+  ));
+
+  const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const selectedModel = e.target.value;
+    const modelInfo = availableModels.find(m => m === selectedModel);
+    if (modelInfo) {
+      setGptParams({ ...gptParams, model: modelInfo });
+    } else {
+      setGptParams({ ...gptParams, model: selectedModel });
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm p-4" style={{ backgroundColor: 'var(--app-overlay)' }}>
@@ -48,14 +60,14 @@ export function ConfigModal() {
 
         {/* Tabs */}
         <div className="flex border-b border-border-subtle overflow-x-auto shrink-0 custom-scrollbar">
-          {[
-            { id: 'vad', label: '🔇 Sprechpausen (VAD)' },
-            { id: 'transcribe', label: '📝 Transkription' },
-            { id: 'slots', label: '🕐 AD-Slots' },
-            { id: 'images', label: '🖼️ Bilder' },
-            { id: 'gpt', label: '💬 Prompts & GPT' },
-            { id: 'tts', label: '🎙️ Vertonung (TTS)' },
-          ].map(tab => (
+          {([
+            { id: 'vad' as TabId, label: '🔇 Sprechpausen (VAD)' },
+            { id: 'transcribe' as TabId, label: '📝 Transkription' },
+            { id: 'slots' as TabId, label: '🕐 AD-Slots' },
+            { id: 'images' as TabId, label: '🖼️ Bilder' },
+            { id: 'gpt' as TabId, label: '💬 Prompts & GPT' },
+            { id: 'tts' as TabId, label: '🎙️ Vertonung (TTS)' },
+          ] as {id: TabId; label: string}[]).map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
@@ -301,26 +313,12 @@ export function ConfigModal() {
               {/* Model dropdown */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-[0.8rem] font-medium text-text-secondary min-h-[1.25rem]">Modell</label>
-                <select id="gpt-model" value={gptParams.model || availableModels[0]?.model || ""}
-                  onChange={e => {
-                    const selectedModel = e.target.value;
-                    const modelInfo = availableModels.find(m => m.model === selectedModel);
-                    if (modelInfo) {
-                      setGptParams({
-                        ...gptParams, 
-                        model: modelInfo.model,
-                        temperature: modelInfo.temperature !== undefined ? modelInfo.temperature : gptParams.temperature,
-                        max_tokens: modelInfo.max_tokens !== undefined ? modelInfo.max_tokens : gptParams.max_tokens,
-                        detail: modelInfo.detail !== undefined ? modelInfo.detail : gptParams.detail
-                      });
-                    } else {
-                      setGptParams({ ...gptParams, model: selectedModel });
-                    }
-                  }}
+                <select id="gpt-model" value={gptParams.model || availableModels[0] || ""}
+                  onChange={handleModelChange}
                   className={selectCls}>
                   {availableModels.length > 0
-                    ? availableModels.map(({ env, model }) => (
-                        <option key={`${env}-${model}`} value={model}>{model}</option>
+                    ? availableModels.map(model => (
+                        <option key={model} value={model}>{model}</option>
                       ))
                     : (
                       <option value="">Keine Modelle geladen</option>
@@ -354,10 +352,10 @@ export function ConfigModal() {
               <div className="flex flex-col gap-1.5">
                 <label className="text-[0.8rem] font-medium text-text-secondary min-h-[1.25rem]">Cut-Typ</label>
                 <select value={gptParams.cut}
-                  onChange={e => setGptParams({ ...gptParams, cut: e.target.value })}
+                  onChange={e => setGptParams({ ...gptParams, cut: e.target.value as 'broadcast' | 'cinema' })}
                   className={selectCls}>
                   <option value="broadcast">Broadcast (Silbenlimit)</option>
-                  <option value="directors">Director's Cut (ausführlich)</option>
+                  <option value="cinema">Director's Cut (ausführlich)</option>
                 </select>
               </div>
               
@@ -373,6 +371,7 @@ export function ConfigModal() {
         </div>
       </div>
       )}
+
           {activeTab === 'tts' && (
             <div className="bg-bg-card border border-border-subtle rounded-xl p-5 backdrop-blur-md">
                 <p className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3.5">Einstellungen</p>

@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useJob } from './hooks/useJob.jsx';
-import { useCachedVideoUrl } from './hooks/useCachedVideoUrl.jsx';
+import { useJob } from './hooks/useJob';
+import { useCachedVideoUrl } from './hooks/useCachedVideoUrl';
 import { VideoTimeline } from './components/features/VideoTimeline';
-import { uploadVideoInChunks } from './utils/uploadVideo.js';
+import { uploadVideoInChunks } from './utils/uploadVideo';
 import './index.css';
 
-
+import type { JobData, SavedJobMeta } from './types';
 import { StepVAD } from './components/features/StepVAD';
 import { StepTranscribe } from './components/features/StepTranscribe';
 import { StepSlots } from './components/features/StepSlots';
@@ -28,15 +28,16 @@ const SHOW_STAGING_SHA = BUILD_CHANNEL === 'staging' && Boolean(SHA_TAG);
 const LINK_STAGING_SHA = SHOW_STAGING_SHA && Boolean(COMMIT_URL);
 const SHOW_VERSION_LABEL = !SHOW_STAGING_SHA && Boolean(VERSION_LABEL);
 const THEME_STORAGE_KEY = 'descraibe-theme-mode';
-const THEME_OPTIONS = ['system', 'light', 'dark'];
+const THEME_OPTIONS = ['system', 'light', 'dark'] as const;
+type ThemeMode = typeof THEME_OPTIONS[number];
 
-function getInitialThemeMode() {
+function getInitialThemeMode(): ThemeMode {
   if (typeof window === 'undefined') return 'system';
   const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return THEME_OPTIONS.includes(stored) ? stored : 'system';
+  return THEME_OPTIONS.includes(stored as ThemeMode) ? (stored as ThemeMode) : 'system';
 }
 
-function formatBytes(bytes) {
+function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes)) return 'unbekannt';
   if (bytes === 0) return '0 B';
 
@@ -48,9 +49,16 @@ function formatBytes(bytes) {
   return `${value.toFixed(precision)} ${units[unitIndex]}`;
 }
 
-function StorageQuotaFooter() {
-  const [storageEstimate, setStorageEstimate] = useState({
-    status: navigator.storage?.estimate ? 'loading' : 'unsupported',
+interface StorageEstimate {
+  status: 'loading' | 'unsupported' | 'ready' | 'error';
+  usage: number | null;
+  quota: number | null;
+  opfsUsage: number | null;
+}
+
+function StorageQuotaFooter(): React.ReactElement {
+  const [storageEstimate, setStorageEstimate] = useState<StorageEstimate>({
+    status: typeof navigator.storage?.estimate === 'function' ? 'loading' : 'unsupported' as const,
     usage: null,
     quota: null,
     opfsUsage: null
@@ -59,7 +67,7 @@ function StorageQuotaFooter() {
   useEffect(() => {
     let isMounted = true;
 
-    const updateStorageEstimate = async () => {
+    const updateStorageEstimate = async (): Promise<void> => {
       if (!navigator.storage?.estimate) {
         if (isMounted) {
           setStorageEstimate(prev => ({ ...prev, status: 'unsupported' }));
@@ -75,7 +83,7 @@ function StorageQuotaFooter() {
           status: 'ready',
           usage: estimate.usage ?? null,
           quota: estimate.quota ?? null,
-          opfsUsage: estimate.usageDetails?.fileSystem ?? null
+          opfsUsage: (estimate as { usageDetails?: { fileSystem?: number } }).usageDetails?.fileSystem ?? null
         });
       } catch {
         if (isMounted) {
@@ -94,7 +102,7 @@ function StorageQuotaFooter() {
   }, []);
 
   const originText = storageEstimate.status === 'ready'
-    ? `${formatBytes(storageEstimate.usage)} / ${formatBytes(storageEstimate.quota)}`
+    ? `${formatBytes(storageEstimate.usage ?? 0)} / ${formatBytes(storageEstimate.quota ?? 0)}`
     : storageEstimate.status === 'loading'
       ? 'wird geladen...'
       : 'nicht verfügbar';
@@ -116,7 +124,14 @@ function StorageQuotaFooter() {
   );
 }
 
-function App() {
+interface DisplayedVideo {
+  jobId: string;
+  jobData: JobData;
+  remoteVideoUrl: string;
+  cacheKey: string | null;
+}
+
+function App(): React.ReactElement {
   const {
     jobId,
     jobData,
@@ -141,10 +156,12 @@ function App() {
     logout
   } = useJob();
 
-  const uploadInputRef = useRef(null);
-  const userMenuRef = useRef(null);
-  const [themeMode, setThemeMode] = useState(getInitialThemeMode);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialThemeMode);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [displayedVideo, setDisplayedVideo] = useState<DisplayedVideo | null>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
@@ -153,12 +170,12 @@ function App() {
 
   useEffect(() => {
     if (!isUserMenuOpen) return;
-    const handlePointerDown = (event) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target)) {
+    const handlePointerDown = (event: MouseEvent): void => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
         setIsUserMenuOpen(false);
       }
     };
-    const handleEscape = (event) => {
+    const handleEscape = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') setIsUserMenuOpen(false);
     };
     window.addEventListener('mousedown', handlePointerDown);
@@ -169,10 +186,11 @@ function App() {
     };
   }, [isUserMenuOpen]);
 
-  const handleUpload = async (file) => {
+  const handleUpload = async (file: File): Promise<void> => {
     setProgressData(prev => ({ ...prev, upload: { msg: 'Starte Upload...', percent: 0 } }));
     let activeJobId = jobId;
     if (!activeJobId) activeJobId = await createJob();
+    if (!activeJobId) return;
     updateSavedJobMeta(activeJobId, {
       name: file.name,
       status: 'uploading',
@@ -209,20 +227,17 @@ function App() {
       updateSavedJobMeta(activeJobId, {
         status: 'error',
         progressPercent: null,
-        progressMessage: err.message
+        progressMessage: err instanceof Error ? err.message : 'Unknown error'
       });
-      alert('Upload error: ' + err.message);
+      alert('Upload error: ' + (err instanceof Error ? err.message : 'Unknown error'));
     }
     setProgressData(prev => ({ ...prev, upload: null }));
   };
-
-  const videoRef = useRef(null);
 
   const videoVersion = jobData?.video_cache_key ? encodeURIComponent(jobData.video_cache_key) : null;
   const remoteVideoUrl = jobData?.video_path
     ? `/api/jobs/${jobId}/downloads/video${videoVersion ? `?v=${videoVersion}` : ''}`
     : null;
-  const [displayedVideo, setDisplayedVideo] = useState(null);
 
   useEffect(() => {
     if (!jobId || !jobData?.video_path || !remoteVideoUrl) return;
@@ -299,7 +314,7 @@ function App() {
           <select
             id="theme-mode"
             value={themeMode}
-            onChange={(event) => setThemeMode(event.target.value)}
+            onChange={(event) => setThemeMode(event.target.value as ThemeMode)}
             className="px-2 py-1.5 rounded-lg text-xs font-medium border border-border-subtle bg-bg-base text-text-secondary hover:text-text-primary transition-colors focus:outline-none focus:ring-2 focus:ring-violet-500/35"
             title="Theme auswählen"
           >
@@ -406,7 +421,7 @@ function App() {
                 Ausführung anhalten
               </button>
             )}
-            
+
           </div>
 
           <div className="flex flex-col gap-4">
@@ -479,7 +494,7 @@ function App() {
                   style={{ display: 'none' }}
                   onChange={(e) => e.target.files?.[0] && handleUpload(e.target.files[0])}
                 />
-                <div className="text-[4rem] mb-4 group-hover:scale-110 transition-transform">🎞️</div>
+                <div className="text-[4rem] mb-4 group-hover:scale-110 transition-transform">🎞</div>
                 <p className="text-[1.3rem] font-semibold mb-2 text-text-primary">MP4 per Drag &amp; Drop hier ablegen</p>
                 <p className="text-sm text-text-muted">oder klicken zum Auswählen einer Videodatei</p>
               </div>
@@ -494,7 +509,17 @@ function App() {
   );
 }
 
-function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJob, removeSavedJobId }) {
+interface JobListProps {
+  jobId: string | null;
+  jobData: JobData | null;
+  savedJobIds: string[];
+  savedJobMeta: Record<string, SavedJobMeta>;
+  createJob: () => Promise<string | null>;
+  selectJob: (_: string) => void;
+  removeSavedJobId: (_: string) => void;
+}
+
+function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJob, removeSavedJobId }: JobListProps): React.ReactElement {
   const activeName = jobData?.original_video_filename || jobData?.video_path?.split(/[\\/]/).filter(Boolean).pop();
   const activeStatus = jobData?.status || (jobId ? 'lädt...' : null);
 
@@ -519,7 +544,7 @@ function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJ
         ) : (
           savedJobIds.map(savedJobId => {
             const isActive = savedJobId === jobId;
-            const meta = savedJobMeta[savedJobId] || {};
+            const meta: SavedJobMeta = savedJobMeta[savedJobId] || { name: '', status: null, progressPercent: null, progressMessage: null };
             const displayName = isActive
               ? activeName || meta.name || `Job ${savedJobId.slice(0, 8)}`
               : meta.name || `Job ${savedJobId.slice(0, 8)}`;
@@ -590,10 +615,16 @@ function JobList({ jobId, jobData, savedJobIds, savedJobMeta, createJob, selectJ
   );
 }
 
-function StepNavigation({ currentStep, setCurrentStep, doneSteps }) {
+interface StepNavigationProps {
+  currentStep: number;
+  setCurrentStep: (_: number) => void;
+  doneSteps: Set<number>;
+}
+
+function StepNavigation({ currentStep, setCurrentStep, doneSteps }: StepNavigationProps): React.ReactElement {
   const { jobData, progressData, handleRunVAD, handleRunTranscribe, handleRunSlots, handleRunImages, handleRunPersons, handleRunGPT, handleRunTTS } = useJob();
-  
-  const steps = [
+
+  const steps: Array<{ num: number; key?: string; label: string; action?: () => Promise<void> }> = [
     { num: 1, label: 'Video hochladen' },
     { num: 2, key: 'vad', label: 'Sprechpausen (VAD)', action: handleRunVAD },
     { num: 3, key: 'transcribe', label: 'Transkription', action: handleRunTranscribe },
@@ -615,7 +646,7 @@ function StepNavigation({ currentStep, setCurrentStep, doneSteps }) {
         {steps.map((s, i) => {
           const isCurrent = currentStep === i;
           const isDone = doneSteps.has(i);
-          const isRunning = s.key && runningStep === s.key;
+          const isRunning = Boolean(s.key && runningStep === s.key);
           return (
             <button
               key={i}
@@ -640,7 +671,7 @@ function StepNavigation({ currentStep, setCurrentStep, doneSteps }) {
               ) : isCurrent && s.action ? (
                 <button
                    className="w-6 h-6 flex shrink-0 items-center justify-center rounded-full bg-violet-600 hover:bg-violet-500 text-white ml-auto shadow-sm shadow-violet-500/20 disabled:opacity-50 transition-all hover:scale-110"
-                   onClick={(e) => { e.stopPropagation(); s.action(); }}
+                   onClick={(e) => { e.stopPropagation(); s.action?.(); }}
                    disabled={jobData?.status === 'running'}
                    title="Schritt ausführen"
                 >

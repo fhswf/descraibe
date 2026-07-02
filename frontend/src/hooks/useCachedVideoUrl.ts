@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react';
+import type { CacheStatus, CachedVideoResult } from '../types';
 
 const VIDEO_CACHE_DIR = 'video-cache';
 
-function supportsOPFS() {
+function supportsOPFS(): boolean {
     return Boolean(navigator.storage?.getDirectory);
 }
 
-function safeName(value) {
+function safeName(value: string | undefined): string {
     return String(value || 'video').replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-async function getCachedFile(fileName) {
+async function getCachedFile(fileName: string): Promise<File | null> {
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle(VIDEO_CACHE_DIR, { create: true });
     try {
@@ -18,12 +19,12 @@ async function getCachedFile(fileName) {
         const file = await handle.getFile();
         return file.size > 0 ? file : null;
     } catch (err) {
-        if (err.name === 'NotFoundError') return null;
+        if ((err as DOMException).name === 'NotFoundError') return null;
         throw err;
     }
 }
 
-async function writeResponseToOPFS(response, fileName) {
+async function writeResponseToOPFS(response: Response, fileName: string): Promise<void> {
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle(VIDEO_CACHE_DIR, { create: true });
     const handle = await dir.getFileHandle(fileName, { create: true });
@@ -50,7 +51,7 @@ async function writeResponseToOPFS(response, fileName) {
     await writable.close();
 }
 
-async function loadCachedVideo(remoteUrl, cacheKey) {
+async function loadCachedVideo(remoteUrl: string, cacheKey: string): Promise<File | null> {
     const fileName = `${safeName(cacheKey)}.mp4`;
     const cached = await getCachedFile(fileName);
     if (cached) return cached;
@@ -64,13 +65,13 @@ async function loadCachedVideo(remoteUrl, cacheKey) {
     return getCachedFile(fileName);
 }
 
-export function useCachedVideoUrl(remoteUrl, cacheKey) {
-    const [cachedUrl, setCachedUrl] = useState(null);
-    const [cacheStatus, setCacheStatus] = useState('idle');
+export function useCachedVideoUrl(remoteUrl: string | null, cacheKey: string | null): CachedVideoResult {
+    const [cachedUrl, setCachedUrl] = useState<string | null>(null);
+    const [cacheStatus, setCacheStatus] = useState<CacheStatus>('idle');
 
     useEffect(() => {
         let cancelled = false;
-        let objectUrl = null;
+        let objectUrl: string | null = null;
 
         queueMicrotask(() => {
             if (cancelled) return;

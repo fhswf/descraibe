@@ -4,17 +4,21 @@ import { uploadVideoInChunks } from '../../utils/uploadVideo.js';
 
 export function StepUpload() {
     const { jobId, createJob, fetchJobData, currentStep, setProgressData, updateSavedJobMeta } = useJob();
-    const fileInputRef = useRef(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     if (currentStep !== 0) return null;
 
-    const handleUpload = async (file) => {
+    const handleUpload = async (file: File): Promise<void> => {
         setProgressData(prev => ({ ...prev, upload: { msg: "Starte Upload...", percent: 0 } }));
 
         // Create job if none exists
         let activeJobId = jobId;
         if (!activeJobId) {
             activeJobId = await createJob();
+        }
+        if (!activeJobId) {
+            alert("Failed to create job");
+            return;
         }
         updateSavedJobMeta(activeJobId, {
             name: file.name,
@@ -53,9 +57,9 @@ export function StepUpload() {
             updateSavedJobMeta(activeJobId, {
                 status: 'error',
                 progressPercent: null,
-                progressMessage: err.message
+                progressMessage: err instanceof Error ? err.message : 'Unknown error'
             });
-            alert("Upload error: " + err.message);
+            alert("Upload error: " + (err instanceof Error ? err.message : 'Unknown error'));
         }
 
         setProgressData(prev => ({ ...prev, upload: null }));
@@ -88,7 +92,7 @@ export function StepUpload() {
                         style={{ display: 'none' }}
                         onChange={(e) => e.target.files?.[0] && handleUpload(e.target.files[0])}
                     />
-                    <div className="text-[3rem] mb-3">🎞️</div>
+                    <div className="text-[3rem] mb-3">🎞</div>
                     <p className="text-[1.1rem] font-semibold mb-1">MP4 per Drag & Drop hier ablegen</p>
                     <p className="text-sm text-text-secondary">oder klicken zum Auswählen</p>
                 </div>

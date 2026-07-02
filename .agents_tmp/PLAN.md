@@ -1,320 +1,553 @@
 # 1. OBJECTIVE
 
-Extend the DescrAIbe AI-powered audio description pipeline with an automated **Person Analysis** module that:
-
-1. **Detects persons** in extracted scene images using computer vision (OpenCV DNN YuNet face detector)
-2. **Tracks persons** across frames over video duration with timecode mapping
-3. **Extracts visual attributes** (clothing colors, age estimate, gender, hair, etc.)
-4. **Recognizes names** from text overlays (Bauchbinden/name plates) via OCR
-5. **Stores person metadata** persistently in job state and optionally PostgreSQL
-6. **Injects person data** into LLM prompts to enforce AD naming conventions (first vs. subsequent mentions)
-
-This enables the system to automatically follow the strict German AD rules for person descriptions: "Erstnennung" (first introduction) vs. "Folgebenennung" (subsequent references).
+Migrate the frontend codebase from React with plain JavaScript (`.js/.jsx`) to TypeScript (`.ts/.tsx`), enabling:
+- Static type safety across all components and utilities
+- Better IDE support and developer experience
+- Catch type-related errors at compile time rather than runtime
+- Improved code documentation and maintainability
 
 ---
 
 # 2. CONTEXT SUMMARY
 
-**Project:** DescrAIbe -- Open-source webapp for AI-generated audio descriptions (AD) for videos.
+**Current State:**
+- Frontend uses Vite + React 19 + plain JavaScript (JSX)
+- 14 JSX components in `frontend/src/components/features/`
+- 2 custom hooks (`useJob.jsx`, `useCachedVideoUrl.jsx`)
+- 1 utility file (`utils/uploadVideo.js`)
+- Uses ESLint for linting (no TypeScript yet)
+- Already has `@types/react` and `@types/react-dom` in devDependencies
+- Uses Tailwind CSS v4
 
-**Existing pipeline components:**
-- `backend/app.py` -- FastAPI application with job management and SSE progress streaming
-- `backend/session_manager.py` -- Per-job state persistence (JSON sidecar + Parquet DataFrames)
-- `backend/db/store.py` -- PostgreSQL + file-fallback data store for user configs/presets
-- `backend/pipeline/image_extraction.py` -- Scene detection and frame extraction (PySceneDetect)
-- `backend/pipeline/gpt_description.py` -- GPT-vision-based AD text generation with syllable-aware rewriting
-- `backend/pipeline/ad_slots.py` -- AD slot management
-- `docs/relational-data-plan.md` -- Plans for relational data schema (job_events, job_artifacts, etc.)
+**Technology Stack:**
+- Vite as build tool (supports TypeScript natively)
+- React 19.2
+- Tailwind CSS v4 with `@tailwindcss/vite` plugin
+- ESLint for linting
 
-**Technology stack:**
-- Python 3.11+, FastAPI, pandas, PyArrow, OpenCV, PySceneDetect
-- PyTorch (GPU-accelerated, already in dependencies)
-- OpenAI GPT-4 Vision API for description generation
-- PostgreSQL (optional, via psycopg)
-
-**Related prompt files** (referenced in issue, not yet in repo):
-- `ad_rules.txt` -- AD style rules (German conventions)
-- `system_instruction.txt` -- System prompt for GPT
+**Files to Migrate:**
+```
+frontend/src/
+├── App.jsx                          (main component)
+├── main.jsx                          (entry point)
+├── hooks/
+│   ├── useJob.jsx                   (large context provider)
+│   └── useCachedVideoUrl.jsx
+├── utils/
+│   └── uploadVideo.js
+└── components/features/
+    ├── ConfigModal.jsx
+    ├── FaceMergeDialog.jsx
+    ├── GlobalProgress.jsx
+    ├── SRTWidget.jsx
+    ├── StepGenerate.jsx
+    ├── StepImages.jsx
+    ├── StepPersons.jsx
+    ├── StepResults.jsx
+    ├── StepSlots.jsx
+    ├── StepTTS.jsx
+    ├── StepTranscribe.jsx
+    ├── StepUpload.jsx
+    ├── StepVAD.jsx
+    └── VideoTimeline.jsx
+```
 
 ---
 
 # 3. APPROACH OVERVIEW
 
-Add a **new pipeline step** called `person_analysis` that runs after scene image extraction. The step:
+**Strategy:** Incremental migration using a **type-first approach**:
+1. Set up TypeScript configuration without enforcing strict mode initially
+2. Add types for shared interfaces (API responses, job data structures)
+3. Convert files incrementally from `.jsx` → `.tsx`, starting with leaf components
+4. Enable stricter TypeScript checking progressively
+5. Use `.d.ts` declaration files for untyped dependencies
 
-1. Processes all scene images using OpenCV DNN YuNet face detector (MIT-licensed)
-2. Runs OCR on each image to detect name overlays (Bauchbinden)
-3. Tracks detected persons across images using timecode matching and visual similarity
-4. Stores per-person metadata (appearance history, recognized names, visual attributes)
-5. Exposes person data to the GPT description step via enhanced prompts and context injection
-
-**Architecture pattern:** Follow the existing pipeline module pattern:
-- `pipeline/person_analysis.py` -- Core analysis logic
-- `pipeline/__init__.py` -- (currently minimal, may add exports)
-- `app.py` -- Add `/api/jobs/{job_id}/persons` endpoint, wire `/run/persons` route
-- `session_manager.py` -- Add `persons_df` to `_DF_FIELDS` for persistence
-- `db/store.py` -- Add `job_persons` table to relational schema (Phase 2)
-- Frontend: Add a new `StepPersons.jsx` component (or extend `StepImages.jsx`)
-
-**Key design decisions:**
-- **Model choice:** OpenCV DNN Face Detector (YuNet, MIT-licensed) -- deploys via OpenCV's built-in DNN module; RetinaFace via `retinaface_pytorch` as fallback. Both are MIT-licensed, avoiding AGPL/GPL contamination.
-- **Tracking:** Simple timecode-window matching + visual embedding clustering; no heavy ReID model needed for MVP
-- **OCR:** Tesseract via `pytesseract` (ubiquitous, no API key needed); lightweight name overlay detection (horizontal text bars near top/bottom of frame)
-- **Prompt injection:** Add a `persons_context` section to GPT user prompts with person names and appearance descriptions, with flags for first/subsequent mention
-- **Persistence:** Store as `persons_df` Parquet (Phase 1); add `job_persons` PostgreSQL table (Phase 2, per relational-data-plan.md)
+**Why this approach:**
+- Minimal disruption to existing functionality
+- Can run TypeScript alongside JavaScript during migration
+- Allows catching obvious type issues first before tackling complex types
+- Aligns with Vite's native TypeScript support (esbuild for transpilation)
 
 ---
 
 # 4. IMPLEMENTATION STEPS
 
-## Phase 1: Core Person Analysis Pipeline (MVP)
+## Phase 1: Foundation Setup
 
-### Step 1 -- Add dependencies
-- Add `pytesseract` to `pyproject.toml` dependencies (OpenCV DNN is already included via `opencv-python-headless`)
-- Download YuNet `.onnx` model file (`face_detection_yunet_2023mar.onnx`) at build time or first-run; store in `/app/models/` or `AD_JOBS_DIR/models/`
-- Optionally add `retinaface_pytorch` (MIT) as a fallback face detector
-- Document `tesseract-ocr` system package requirement in `backend/Dockerfile`
-- Update Kubernetes `deployment.yaml` ConfigMap/Dockerfile with Tesseract language packs (`deu` for German)
-- Add `YU_NET_MODEL_PATH` env var (default: `/app/models/face_detection_yunet_2023mar.onnx`)
+### Step 1 -- Add TypeScript dependencies
+Add required packages to `frontend/package.json`:
 
-**Reference:** `pyproject.toml`, `backend/Dockerfile`, `k8s/base/deployment.yaml`
-
----
-
-### Step 2 -- Create `backend/pipeline/person_analysis.py`
-Implement the core analysis module with:
-
-**2a. Face Detection (OpenCV DNN YuNet)**
-- `detect_faces_in_image(image_path)` -- Load YuNet ONNX model via OpenCV DNN (`cv2.dnn.readNet`), run inference, return face bounding boxes + confidence scores
-- Implement graceful fallback if YuNet model file is missing (log warning, return empty list)
-- Optionally use `retinaface_pytorch` (MIT) as a secondary detector if YuNet returns no results
-
-**2b. Person Region Extraction**
-- Given face bounding boxes, extract the full-body region (approximate: extend bbox vertically by 1.5-2x above and below face, crop to image bounds)
-- Use this person region for attribute extraction (clothing colors, etc.)
-
-**2c. Name Overlay Detection (OCR)**
-- `detect_name_overlay(image_path)` -- Use pytesseract to detect horizontal text bars (Bauchbinden) near frame edges
-- Return extracted text if found (e.g., name below person in news/broadcast)
-- Filter OCR output to exclude timestamps, watermarks (heuristic: text length, position)
-
-**2d. Person Tracking**
-- `track_persons_across_frames(detections_by_image)` -- Match detected persons across scene images using:
-  - Timecode window (persons can only appear in overlapping time ranges)
-  - Face bbox IoU matching between consecutive frames
-  - Simple visual clustering (mean color of clothing region as fingerprint)
-- Return a list of unique `Person` objects with assigned IDs
-
-**2e. Attribute Extraction**
-- `extract_person_attributes(image, face_bbox, person_region)` -- From cropped person region extract:
-  - Dominant clothing colors (top color, bottom color) via k-means on pixels
-  - Age estimate (optional, via face detection confidence as proxy)
-  - Hair color estimate (optional, heuristic on upper-head region)
-- Store as `attributes` dict per person
-
-**2f. Main Entry Point**
-- `analyze_persons(scene_images, progress_cb)` -- Orchestrate detection -> OCR -> tracking -> attribute extraction
-- Return a `persons_df` pandas DataFrame with columns:
-  `[person_id, first_seen_ts, last_seen_ts, name, appearances, attributes, description]`
-- Where `attributes` is a JSON-encoded dict: `{colors: {top, bottom}, age_estimate, ...}`
-- Where `appearances` is a list of `{timestamp_s, image_path, face_bbox, person_region}` dicts
-
-**Reference:** New file `backend/pipeline/person_analysis.py`
-
----
-
-### Step 3 -- Wire Person Analysis into `app.py`
-Add new API routes:
-
-**3a. Add `POST /api/jobs/{job_id}/persons` endpoint**
-- Lazily import `analyze_persons` from `pipeline.person_analysis`
-- Mark step running: `_mark_step_running(job_id, "persons", "Detecting persons...")`
-- Call `analyze_persons(scene_images, progress_cb)` using existing job's `scene_images`
-- Store result as `persons_df` in job state
-- Call `_persist_job()` to save to disk
-- Push final progress and return `{"status": "done", "persons_count": N}`
-
-**3b. Add `GET /api/jobs/{job_id}/persons` endpoint**
-- Return `make_serializable(job.get("persons_df"))` as list of person dicts
-
-**3c. Add HATEOAS link to `build_hateoas_links`**
-- Add `{"rel": "run-persons", "href": f"{base}/api/jobs/{jid}/persons", "method": "POST"}` when `slots_df` and `scene_images` are available
-
-**3d. Update `get_job` response**
-- Add `"persons_count": len(persons_df)` to the job payload
-
-**Reference:** `backend/app.py` (existing route patterns for `/vad`, `/transcribe`, `/images`, `/gpt`)
-
----
-
-### Step 4 -- Update `session_manager.py`
-- Add `"persons_df"` to `_DF_FIELDS` list so it auto-persists to Parquet
-- Update `create_job()` to initialize `"persons_df": None`
-
-**Reference:** `backend/session_manager.py`
-
----
-
-### Step 5 -- Create Frontend `StepPersons.jsx`
-Create a new React component mirroring the pattern of existing step components:
-
-**5a. Layout**
-- Title: "Personenanalyse" (German)
-- Show count of detected persons (if results available)
-- "Detect Persons" button that POSTs to `/api/jobs/{job_id}/persons`
-- SSE progress streaming for the detection step
-- Results list showing each detected person:
-  - Assigned person ID (e.g., "Person A")
-  - Recognized name (if any)
-  - First appearance timecode
-  - Clothing color description (e.g., "blaues Oberteil, dunkle Hose")
-  - Number of appearances across video
-
-**5b. State Management**
-- Use existing `useJob` hook to read `persons_df` from `GET /api/jobs/{job_id}`
-- Show/hide based on whether `persons_df` exists
-
-**5c. Integrate into App**
-- Add `StepPersons` to the pipeline wizard in `App.jsx`, positioned after `StepImages`
-- Add navigation link in `build_hateoas_links` response to reflect person analysis step availability
-
-**Reference:** `frontend/src/components/features/StepImages.jsx`, `StepSlots.jsx` (for pattern reference)
-
----
-
-## Phase 2: Enhanced Prompt Integration & Persistence
-
-### Step 6 -- Update GPT Description Prompts with Person Context
-Modify `gpt_description.py` to inject person data into prompts:
-
-**6a. Create `_build_persons_context()` helper**
-- Input: `persons_df`, `slot_start_s`, `slot_end_s`
-- For each slot, identify which persons appear (based on `first_seen_ts`/`last_seen_ts`)
-- Build a context block per slot with:
-  - Person name + visual description
-  - Flag: `is_first_mention: true/false` (based on whether this is the person's first appearance before `slot_end_s`)
-- Format: Markdown section "### Personen im Slot" with per-person details
-
-**6b. Update `describe_slots()` function signature**
-- Accept optional `persons_df` parameter
-- Inject person context into user prompt before GPT call
-
-**6c. Update `app.py` GPT route**
-- Pass `job.get("persons_df")` to `describe_slots()`
-
-**Reference:** `backend/pipeline/gpt_description.py` (`_build_context_block` pattern)
-
----
-
-### Step 7 -- Add PostgreSQL Table for Person Metadata
-Add to `backend/db/` schema:
-
-**7a. Create migration file `backend/db/migrations/0013_job_persons.sql`**
-```sql
-CREATE TABLE IF NOT EXISTS job_persons (
-    id          BIGSERIAL PRIMARY KEY,
-    job_id      UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-    person_id   INTEGER NOT NULL,
-    name        TEXT,
-    attributes  JSONB,
-    first_seen  DOUBLE PRECISION,
-    last_seen   DOUBLE PRECISION,
-    description TEXT,
-    appearances JSONB,  -- Array of {timestamp_s, image_path, bbox}
-    created_at  TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX idx_job_persons_job_id ON job_persons(job_id);
+```json
+"devDependencies": {
+  "typescript": "^5.4.0",
+  "@typescript-eslint/eslint-plugin": "^7.0.0",
+  "@typescript-eslint/parser": "^7.0.0",
+  // existing types already present: @types/react, @types/react-dom
+}
 ```
 
-**7b. Update `db/store.py`**
-- Add `store_persons(job_id, persons_list)`, `get_persons(job_id)` methods
-- Use existing `psycopg` pattern from other store methods
-- Provide file-based fallback (save as JSON sidecar) if DB unavailable
+Run `npm install` to install dependencies.
 
-**7c. Update `app.py` GPT route to dual-write**
-- After GPT generation completes, persist person data to DB if enabled
-
-**Reference:** `backend/db/store.py`, `docs/relational-data-plan.md`
+**Reference:** `frontend/package.json`
 
 ---
 
-### Step 8 -- Create Prompt Files for AD Rules
-Create `ad_rules.txt` and `system_instruction.txt` as referenced in the issue:
+### Step 2 -- Create `tsconfig.json`
+Create a TypeScript configuration file:
 
-**8a. `ad_rules.txt`**
-Document German AD conventions for person descriptions:
-- **Erstnennung (first mention):** Full name (if known) + brief visual description
-- **Folgebenennung (subsequent mentions):** Only name, or pronoun/descriptor
-- Sentence structure rules (passive voice, present tense)
-- Forbidden phrases ("man sieht", "es ist zu sehen")
-- Syllable density limits per second
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": false,
+    "allowJs": true,
+    "checkJs": false,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}
+```
 
-**8b. `system_instruction.txt`**
-Role-prompt for GPT: "Du bist eine professionelle Audiodeskriptor:in..."
+**Note:** Start with `strict: false` to allow incremental migration. Enable stricter options later in Phase 3.
 
-**8c. Add to Kubernetes ConfigMap**
-- Add files to `k8s/base/configmap-prompts.yaml`
-- Set `GPT_PROMPTS_DIR=/app/config/prompts` (already configured)
-
-**Reference:** `k8s/base/configmap-prompts.yaml` (existing pattern), README section "GPT Prompt Files"
+**Reference:** New file `frontend/tsconfig.json`
 
 ---
 
-## Phase 3: Polish & Testing
+### Step 3 -- Create `tsconfig.node.json`
+Create Node-specific TypeScript config for Vite:
 
-### Step 9 -- Add Unit Tests
-Create `backend/tests/test_person_analysis.py`:
-- Test `_extract_ts_from_filename` (reuse from `image_extraction.py`)
-- Test face detection (YuNet) on a sample image with known faces
-- Test OCR name overlay detection with synthetic test image
-- Test person tracking logic (mock detections across 3 frames)
-- Test `persons_df` DataFrame schema validation
-- Test graceful fallback when YuNet model file is missing
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": true
+  },
+  "include": ["vite.config.ts"]
+}
+```
 
-### Step 10 -- Add Integration Test
-Create `backend/tests/test_person_pipeline.py`:
-- End-to-end test of `/run/persons` endpoint
-- Verify `persons_df` is persisted to disk (Parquet file)
-- Verify HATEOAS link appears in job response
+**Reference:** New file `frontend/tsconfig.node.json`
 
-### Step 11 -- Documentation
-- Add "Person Analysis" section to `README.md` (after GPT Config section)
-- Document `ad_rules.txt` and `system_instruction.txt` format
-- Add `PERSON_DETECTION_MODEL` env var for model selection
-- Add `TESSERACT_CMD` env var for Tesseract binary path
+---
+
+### Step 4 -- Update ESLint config for TypeScript
+Update `frontend/eslint.config.js` to support TypeScript:
+
+```javascript
+import tsParser from '@typescript-eslint/parser'
+import tsPlugin from '@typescript-eslint/eslint-plugin'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{js,jsx,ts,tsx}'],
+    extends: [
+      js.configs.recommended,
+      reactHooks.configs.flat.recommended,
+      reactRefresh.configs.vite,
+    ],
+    plugins: {
+      '@typescript-eslint': tsPlugin,
+    },
+    languageOptions: {
+      ecmaVersion: 2020,
+      globals: globals.browser,
+      parser: tsParser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        ecmaFeatures: { jsx: true },
+        sourceType: 'module',
+      },
+    },
+    rules: {
+      ...tsPlugin.configs.recommended.rules,
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      '@typescript-eslint/no-unused-vars': ['warn', { 
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_' 
+      }],
+    },
+  },
+])
+```
+
+**Reference:** `frontend/eslint.config.js`
+
+---
+
+### Step 5 -- Update vite.config.js to .ts
+Rename `vite.config.js` to `vite.config.ts` and add TypeScript-friendly imports:
+
+```typescript
+import { defineConfig, loadEnv } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+import fs from 'fs'
+import path from 'path'
+import process from 'node:process'
+```
+
+**Reference:** `frontend/vite.config.js` → `frontend/vite.config.ts`
+
+---
+
+## Phase 2: Type Definitions
+
+### Step 6 -- Create shared type definitions
+Create `frontend/src/types/index.ts` with interfaces for:
+
+```typescript
+// Job-related types
+export interface JobData {
+  job_id: string
+  status: 'idle' | 'running' | 'error' | 'complete'
+  original_video_filename?: string
+  video_path?: string
+  video_cache_key?: string
+  latest_progress?: ProgressInfo
+  created_at?: string
+  // ... other fields from backend
+}
+
+export interface ProgressInfo {
+  step?: string
+  current?: number
+  total?: number
+  message?: string
+}
+
+export interface ProgressData {
+  [step: string]: { msg: string; percent: number } | null
+}
+
+// Saved job metadata
+export interface SavedJobMeta {
+  name: string
+  status: 'idle' | 'uploading' | 'running' | 'error'
+  progressPercent: number | null
+  progressMessage: string | null
+  updatedAt?: string
+}
+
+// Auth state
+export interface AuthState {
+  loading: boolean
+  enabled: boolean
+  authenticated: boolean
+  user: User | null
+}
+
+export interface User {
+  id: string
+  email: string
+  name?: string
+}
+
+// Config params types
+export interface GPTParams {
+  system_prompt: string
+  user_prompt: string
+  ad_rules: string
+  few_shots: string
+  model: string
+  temperature: number
+  max_tokens: number
+  detail: 'low' | 'high'
+  cut: 'broadcast' | 'cinema'
+  syllables_per_second: number
+}
+
+export interface VADParams {
+  threshold: number
+  min_speech_duration_ms: number
+  min_silence_duration_ms: number
+  min_pause_duration_s: number
+}
+
+export interface TranscribeParams {
+  model_size: string
+  language: string
+  use_fw_vad: boolean
+}
+
+// Upload types
+export interface UploadProgress {
+  percent: number
+  chunkIndex: number
+  totalChunks: number
+  uploadedBytes: number
+  totalBytes: number
+}
+
+export interface UploadOptions {
+  jobId: string
+  file: File
+  onProgress?: (progress: UploadProgress) => void
+}
+
+// SSE event types
+export interface SSEEvent {
+  event: string
+  data: Record<string, unknown>
+  job_id?: string
+  step?: string
+  message?: string
+  progress?: ProgressInfo
+}
+
+// Video cache
+export type CacheStatus = 'idle' | 'loading' | 'network' | 'opfs'
+
+export interface CachedVideoResult {
+  videoUrl: string | null
+  cacheStatus: CacheStatus
+}
+
+// Theme
+export type ThemeMode = 'system' | 'light' | 'dark'
+```
+
+**Reference:** New file `frontend/src/types/index.ts`
+
+---
+
+### Step 7 -- Create Vite environment types
+Update `frontend/src/vite-env.d.ts` (or create if missing):
+
+```typescript
+/// <reference types="vite/client" />
+
+interface ImportMetaEnv {
+  readonly VITE_APP_VERSION: string
+  readonly VITE_APP_BUILD_CHANNEL: string
+  readonly VITE_APP_COMMIT_SHA: string
+  readonly VITE_APP_REPOSITORY_URL: string
+  readonly VITE_APP_VERSION_LABEL: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
+```
+
+**Reference:** New file `frontend/src/vite-env.d.ts`
+
+---
+
+## Phase 3: Incremental File Conversion
+
+### Step 8 -- Convert utility files first
+Convert in dependency order (no component dependencies):
+
+1. `utils/uploadVideo.js` → `utils/uploadVideo.ts`
+
+Key changes:
+- Add `UploadOptions` interface type
+- Add explicit return types
+- Add error types
+
+**Reference:** `frontend/src/utils/uploadVideo.ts`
+
+---
+
+### Step 9 -- Convert hooks
+Convert custom hooks with type annotations:
+
+1. `hooks/useCachedVideoUrl.jsx` → `hooks/useCachedVideoUrl.ts`
+   - Add `CacheStatus` and `CachedVideoResult` types
+   - Add explicit return type
+
+2. `hooks/useJob.jsx` → `hooks/useJob.tsx`
+   - Export context type: `JobContextValue`
+   - Export param types: `GPTParams`, `VADParams`, `TranscribeParams`, etc.
+   - Add explicit return types
+   - Add prop types for `JobProvider`
+
+**Reference:** `frontend/src/hooks/useJob.tsx`, `frontend/src/hooks/useCachedVideoUrl.ts`
+
+---
+
+### Step 10 -- Convert components (leaf components first)
+Convert from simplest to most complex:
+
+1. **Simple/Presentational components:**
+   - `GlobalProgress.jsx` → `GlobalProgress.tsx`
+   - `VideoTimeline.jsx` → `VideoTimeline.tsx`
+   - `SRTWidget.jsx` → `SRTWidget.tsx`
+
+2. **Medium complexity:**
+   - `ConfigModal.jsx` → `ConfigModal.tsx`
+   - `FaceMergeDialog.jsx` → `FaceMergeDialog.tsx`
+   - `StepUpload.jsx` → `StepUpload.tsx`
+
+3. **Step components:**
+   - `StepVAD.jsx` → `StepVAD.tsx`
+   - `StepTranscribe.jsx` → `StepTranscribe.tsx`
+   - `StepSlots.jsx` → `StepSlots.tsx`
+   - `StepImages.jsx` → `StepImages.tsx`
+   - `StepPersons.jsx` → `StepPersons.tsx`
+   - `StepGenerate.jsx` → `StepGenerate.tsx`
+   - `StepTTS.jsx` → `StepTTS.tsx`
+   - `StepResults.jsx` → `StepResults.tsx`
+
+4. **Main components:**
+   - `App.jsx` → `App.tsx`
+   - `main.jsx` → `main.tsx`
+
+For each component:
+- Add prop interfaces (or `FC<Props>` for function components)
+- Add explicit return types
+- Import types from `types/index.ts`
+- Convert `.js/.jsx` extensions to `.ts/.tsx` in imports
+
+**Reference:** Each `frontend/src/components/features/*.tsx`
+
+---
+
+## Phase 4: Strict Mode & Polish
+
+### Step 11 -- Enable strict TypeScript checks
+Update `tsconfig.json` to enable stricter options:
+
+```json
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}
+```
+
+Fix any resulting type errors in the codebase.
+
+---
+
+### Step 12 -- Add TypeScript npm scripts
+Update `frontend/package.json` scripts:
+
+```json
+{
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit",
+    "preview": "vite preview"
+  }
+}
+```
+
+---
+
+### Step 13 -- Clean up legacy JS files
+After all files are converted, remove original `.js/.jsx` files:
+- `src/App.jsx` (replaced by `App.tsx`)
+- `src/main.jsx` (replaced by `main.tsx`)
+- `src/hooks/*.jsx` → `src/hooks/*.tsx`
+- `src/utils/*.js` → `src/utils/*.ts`
+- `src/components/features/*.jsx` → `src/components/features/*.tsx`
+
+---
+
+## Phase 5: Testing & Validation
+
+### Step 14 -- Run type checking
+```bash
+cd frontend && npm run type-check
+```
+
+Fix any remaining type errors until clean.
+
+---
+
+### Step 15 -- Run linting
+```bash
+cd frontend && npm run lint
+```
+
+Fix any ESLint/TypeScript linting issues.
+
+---
+
+### Step 16 -- Build verification
+```bash
+cd frontend && npm run build
+```
+
+Verify production build succeeds without errors.
+
+---
+
+### Step 17 -- Manual testing
+Test key workflows:
+1. Video upload functionality
+2. Pipeline step execution
+3. Config modal interactions
+4. Theme switching
+5. Job persistence and reload
 
 ---
 
 # 5. TESTING AND VALIDATION
 
-## Unit Tests
-Run with `uv run pytest backend/tests/test_person_analysis.py -v`:
-- [ ] Face detection returns valid bounding boxes
-- [ ] Graceful fallback when YuNet model unavailable
-- [ ] OCR detects name overlay text
-- [ ] Person tracking assigns consistent IDs across frames
-- [ ] Attribute extraction returns color descriptors
-- [ ] `persons_df` DataFrame has correct schema
+## Type Checking
+Run `npm run type-check`:
+- [ ] `tsc --noEmit` passes with no errors
+- [ ] All `.tsx` files compile without errors
 
-## Integration Tests
-Run with `uv run pytest backend/tests/test_person_pipeline.py -v`:
-- [ ] POST `/api/jobs/{job_id}/persons` returns 200 and person count
-- [ ] GET `/api/jobs/{job_id}/persons` returns serialized person list
-- [ ] `persons_df` persisted to `.parquet` file on disk
-- [ ] Job reload from disk restores `persons_df`
-- [ ] HATEOAS link "run-persons" appears when `scene_images` available
+## Linting
+Run `npm run lint`:
+- [ ] No TypeScript-related ESLint errors
+- [ ] All `@typescript-eslint` rules pass
 
-## End-to-End Manual Testing
-1. Upload a test video with known persons (e.g., news broadcast with Bauchbinden)
-2. Run pipeline: VAD -> Transcribe -> Slots -> Images -> **Persons** -> GPT
-3. Verify persons are detected with correct names from Bauchbinden
-4. Verify GPT descriptions use correct naming conventions (first name + description, then name only)
+## Build
+Run `npm run build`:
+- [ ] Production build completes successfully
+- [ ] No TypeScript compilation errors
+- [ ] All assets bundled correctly
+
+## Runtime Testing
+Test in browser:
+- [ ] All components render correctly
+- [ ] Video upload works end-to-end
+- [ ] All step components function properly
+- [ ] Hooks (useJob, useCachedVideoUrl) work correctly
+- [ ] No runtime type errors in console
 
 ## Success Criteria
-- Face detection identifies >= 80% of visible faces in test video frames
-- Name recognition from Bauchbinden extracts correct name strings
-- Person tracking maintains consistent IDs across scene changes
-- GPT prompts include person context and enforce Erstnennung/Folgebenennung rules
-- Pipeline step completes within 2x real-time for a 10-minute video
-- All existing tests continue to pass (`uv run pytest`)
+- All `.js/.jsx` files converted to `.ts/.tsx`
+- `tsconfig.json` with `strict: true` passes
+- `npm run type-check` exits with code 0
+- `npm run build` produces working production build
+- No type-related runtime errors during manual testing

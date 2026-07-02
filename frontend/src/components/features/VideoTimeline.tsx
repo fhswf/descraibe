@@ -1,22 +1,62 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import PropTypes from 'prop-types';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
 import { useJob } from '../../hooks/useJob.jsx';
+import { GPTRecord, Slot, JobData } from '../../types/index.js';
 
-export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
-    const containerRef = useRef(null);
-    const wavesurferRef = useRef(null);
-    const regionsRef = useRef(null);
-    const marginObserversRef = useRef([]);
-    const activeJobDataRef = useRef(null);
-    const handleUpdateSlotTimingRef = useRef(null);
+interface VideoTimelineProps {
+    videoRef: React.RefObject<HTMLVideoElement | null>;
+    videoUrl: string;
+    timelineJobData?: JobData | null;
+}
+
+interface Pause {
+    start_s: number;
+    end_s: number;
+}
+
+interface Segment {
+    text?: string;
+    start_s?: number;
+    end_s?: number;
+    index?: number;
+}
+
+interface SlotMap {
+    slot: number;
+    img_path?: string;
+    start_s?: number;
+    end_s?: number;
+}
+
+interface TimelineJobData extends JobData {
+    pauses?: Pause[];
+    segments?: Segment[];
+    slot_map?: SlotMap[];
+}
+
+interface AdAudioEntry {
+    el: HTMLAudioElement;
+    start_s: number;
+    end_s: number;
+}
+
+export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }: VideoTimelineProps) {
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const wavesurferRef = useRef<WaveSurfer | null>(null);
+    const regionsRef = useRef<ReturnType<typeof RegionsPlugin.create> | null>(null);
+    const marginObserversRef = useRef<MutationObserver[]>([]);
+    const activeJobDataRef = useRef<TimelineJobData | null>(null);
+    const handleUpdateSlotTimingRef = useRef<((_slotId: number, _start: number, _end: number) => Promise<void>) | null>(null);
     const { jobData, focusedSlot, handleUpdateSlotTiming } = useJob();
-    const activeJobData = timelineJobData || jobData;
+    const activeJobData = timelineJobData || (jobData as TimelineJobData | null);
 
-    activeJobDataRef.current = activeJobData;
-    handleUpdateSlotTimingRef.current = handleUpdateSlotTiming;
+    // Update refs in useEffect to avoid ref updates during render
+    useEffect(() => {
+        activeJobDataRef.current = activeJobData;
+        handleUpdateSlotTimingRef.current = handleUpdateSlotTiming;
+    }, [activeJobData, handleUpdateSlotTiming]);
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
@@ -24,16 +64,14 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
     const [zoom, setZoom] = useState(50);
     const [isBuffering, setIsBuffering] = useState(false);
 
-    // AD audio state
     const [adAudioEnabled, setAdAudioEnabled] = useState(false);
-    const adAudiosRef = useRef({}); // slot_id -> HTMLAudioElement
+    const adAudiosRef = useRef<Record<number, AdAudioEntry>>({});
 
     const clearMarginObservers = useCallback(() => {
         marginObserversRef.current.forEach(o => o.disconnect());
         marginObserversRef.current = [];
     }, []);
 
-    // Track buffering state from the video element
     useEffect(() => {
         const video = videoRef.current;
         if (!video) return;
@@ -53,7 +91,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
         };
     }, [videoRef]);
 
-    const formatTime = (seconds) => {
+    const formatTime = (seconds: number): string => {
         if (!seconds || isNaN(seconds)) seconds = 0;
         const h = Math.floor(seconds / 3600);
         const m = Math.floor((seconds % 3600) / 60);
@@ -69,8 +107,6 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
         return `${hh}:${mm}:${ss}`;
     };
 
-    // ── AD Audio sync ───────────────────────────────────────────────────────────
-    // Preload all TTS audio elements when gpt_records are available
     const gptRecordsSignature = JSON.stringify(activeJobData?.gpt_records || []);
     const regionSignature = JSON.stringify({
         job_id: activeJobData?.job_id || null,
@@ -90,12 +126,13 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
         const records = currentJobData?.gpt_records;
         if (!records || records.length === 0) return;
 
-        const newAudios = {};
+        const newAudios: Record<number, AdAudioEntry> = {};
         records.forEach(rec => {
-            if (!rec.slot) return;
-            const el = new Audio(`/api/jobs/${currentJobData.job_id}/tts/${rec.slot}`);
+            const slotId = rec.slot;
+            if (slotId == null) return;
+            const el = new Audio(`/api/jobs/${currentJobData!.job_id}/tts/${slotId}`);
             el.preload = 'none';
-            newAudios[rec.slot] = { el, start_s: rec.start_s, end_s: rec.end_s };
+            newAudios[slotId] = { el, start_s: rec.start_s ?? 0, end_s: rec.end_s ?? 0 };
         });
         adAudiosRef.current = newAudios;
 
@@ -107,7 +144,6 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
         };
     }, [gptRecordsSignature]);
 
-    // Handle AD audio playback in sync with video
     const stopAllAd = useCallback(() => {
         Object.values(adAudiosRef.current).forEach(({ el }) => {
             el.pause();
@@ -115,13 +151,11 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
         });
     }, []);
 
-    // Poll video time and trigger AD audio clips at their start_s
     useEffect(() => {
         const video = videoRef.current;
         if (!video) return;
 
-        // Track which slots already started in this play session
-        const fired = new Set();
+        const fired = new Set<number>();
 
         const onTimeUpdate = () => {
             if (!adAudioEnabled) return;
@@ -135,7 +169,6 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                         el.play().catch(() => {});
                     }
                 } else if (t < start_s || t >= end_s) {
-                    // reset so it can re-fire if user scrubs back
                     if (fired.has(sid) && t < start_s) {
                         fired.delete(sid);
                         el.pause();
@@ -162,7 +195,6 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
         };
     }, [videoRef, adAudioEnabled, stopAllAd]);
 
-    // Stop AD audio when disabled
     useEffect(() => {
         if (!adAudioEnabled) stopAllAd();
     }, [adAudioEnabled, stopAllAd]);
@@ -193,7 +225,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                     }
                 }),
             ],
-            media: videoRef.current,
+            media: videoRef.current ?? undefined,
             fetchParams: {
                 cache: 'force-cache',
             },
@@ -202,10 +234,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
         const wsRegions = ws.registerPlugin(RegionsPlugin.create());
         regionsRef.current = wsRegions;
 
-        // WaveSurfer's avoidOverlapping() sets marginTop via direct .style assignment
-        // (inside a setTimeout(10ms)), bypassing !important. We use MutationObserver
-        // to watch and reset it immediately whenever it's set.
-        const pinMarginTop = (el) => {
+        const pinMarginTop = (el: HTMLElement | null) => {
             if (!el) return;
             const obs = new MutationObserver(() => {
                 if (el.style.marginTop && el.style.marginTop !== '0px') {
@@ -216,9 +245,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
             marginObserversRef.current.push(obs);
         };
 
-        // Pin immediately after each region is saved into the DOM
         wsRegions.on('region-created', (region) => {
-            // region.content is the DOM element passed via the `content` option
             if (region.content instanceof HTMLElement) {
                 pinMarginTop(region.content);
             }
@@ -241,30 +268,31 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
 
         const onPlay = () => setIsPlaying(true);
         const onPause = () => setIsPlaying(false);
-
-        ws.on('ready', () => { onReady(); });
-        ws.on('play', onPlay);
-        ws.on('pause', onPause);
-        ws.on('timeupdate', (ct) => { setCurrentTime(ct); });
-        ws.on('interaction', (newTime) => {
+        const onTimeUpdate = (ct: number) => { setCurrentTime(ct); };
+        const onInteraction = (newTime: number) => {
             if (videoRef.current) {
                 videoRef.current.currentTime = newTime;
             }
-        });
+        };
+
+        ws.on('ready', onReady);
+        ws.on('play', onPlay);
+        ws.on('pause', onPause);
+        ws.on('timeupdate', onTimeUpdate);
+        ws.on('interaction', onInteraction);
 
         return () => {
             ws.un('ready', onReady);
             ws.un('play', onPlay);
             ws.un('pause', onPause);
-            ws.un('timeupdate');
-            ws.un('interaction');
+            ws.un('timeupdate', onTimeUpdate);
+            ws.un('interaction', onInteraction);
             clearMarginObservers();
             regionsRef.current = null;
             ws.destroy();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [clearMarginObservers, videoRef, videoUrl]);
-
 
     useEffect(() => {
         const wsRegions = regionsRef.current;
@@ -274,9 +302,8 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
         clearMarginObservers();
         wsRegions.clearRegions();
 
-        // ── Pause / Voice regions ──────────────────────────────────────────
         if (currentJobData.pauses) {
-            currentJobData.pauses.forEach((p) => {
+            currentJobData.pauses.forEach((p: Pause) => {
                 wsRegions.addRegion({
                     start: p.start_s,
                     end: p.end_s,
@@ -288,7 +315,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
             });
 
             let lastEnd = 0;
-            currentJobData.pauses.forEach((p) => {
+            currentJobData.pauses.forEach((p: Pause) => {
                 if (p.start_s > lastEnd) {
                     wsRegions.addRegion({
                         start: lastEnd,
@@ -313,9 +340,8 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
             }
         }
 
-        // ── Transcript regions (hoverable text popovers) ──────────────────
         if (currentJobData.segments) {
-            currentJobData.segments.forEach((segment, idx) => {
+            currentJobData.segments.forEach((segment: Segment, idx: number) => {
                 const text = String(segment.text || '').trim();
                 const start = Number(segment.start_s);
                 const end = Number(segment.end_s);
@@ -382,7 +408,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                     }
                 });
 
-                contentDiv.addEventListener('click', (e) => {
+                contentDiv.addEventListener('click', (e: MouseEvent) => {
                     e.stopPropagation();
                     if (videoRef.current) {
                         videoRef.current.currentTime = start;
@@ -404,9 +430,13 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
             });
         }
 
-        // ── AD Slot regions (draggable/resizable) ─────────────────────────
         if (currentJobData.slots) {
-            currentJobData.slots.forEach((s, idx) => {
+            currentJobData.slots.forEach((s: Slot, idx: number) => {
+                const slotNum = s.slot ?? (idx + 1);
+                const start = s.start_s ?? s.start;
+                const end = s.end_s ?? s.end;
+                if (start == null || end == null) return;
+
                 const contentDiv = document.createElement('div');
                 contentDiv.style.display = 'flex';
                 contentDiv.style.flexDirection = 'column';
@@ -416,10 +446,9 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                 contentDiv.style.padding = '2px';
                 contentDiv.style.boxSizing = 'border-box';
                 contentDiv.style.overflow = 'hidden';
-                // marginTop is managed via MutationObserver (pinMarginTop) above
 
                 const textSpan = document.createElement('span');
-                textSpan.innerText = `AD Slot ${idx + 1}`;
+                textSpan.innerText = `AD Slot ${slotNum}`;
                 textSpan.style.backgroundColor = 'rgba(255,255,255,0.85)';
                 textSpan.style.padding = '2px 6px';
                 textSpan.style.borderRadius = '4px';
@@ -431,7 +460,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                 contentDiv.appendChild(textSpan);
 
                 if (currentJobData.slot_map) {
-                    const matchingThumbs = currentJobData.slot_map.filter(sm => sm.slot === s.slot || sm.slot === (idx + 1));
+                    const matchingThumbs = currentJobData.slot_map.filter((sm: SlotMap) => sm.slot === slotNum);
 
                     if (matchingThumbs.length > 0) {
                         const imgContainer = document.createElement('div');
@@ -444,7 +473,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                         imgContainer.style.alignItems = 'flex-end';
                         imgContainer.style.paddingBottom = '2px';
 
-                        matchingThumbs.forEach(sm => {
+                        matchingThumbs.forEach((sm: SlotMap) => {
                             const imgName = sm.img_path ? sm.img_path.split(/[/\\]/).pop() : null;
                             if (imgName) {
                                 const imgDom = document.createElement('img');
@@ -492,9 +521,9 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                 }
 
                 wsRegions.addRegion({
-                    id: s.slot.toString(),
-                    start: s.start_s,
-                    end: s.end_s,
+                    id: String(slotNum),
+                    start,
+                    end,
                     color: 'rgba(139, 92, 246, 0.25)',
                     drag: true,
                     resize: true,
@@ -503,16 +532,19 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
             });
         }
 
-        // ── AD audio description regions (non-interactive, below AD slots) ─
         if (currentJobData.gpt_records) {
-            currentJobData.gpt_records.filter(r => r.slot).forEach(rec => {
+            currentJobData.gpt_records.filter((r: GPTRecord) => r.slot != null).forEach((rec: GPTRecord) => {
+                const recSlot = rec.slot!;
+                const recStart = rec.start_s ?? 0;
+                const recEnd = rec.end_s ?? 0;
+
                 const contentEl = document.createElement('div');
                 contentEl.style.display = 'flex';
                 contentEl.style.alignItems = 'center';
                 contentEl.style.justifyContent = 'center';
                 contentEl.style.width = '100%';
                 contentEl.style.height = '100%';
-                contentEl.title = rec.text ? rec.text.slice(0, 80) : `AD ${rec.slot}`;
+                contentEl.title = rec.text ? rec.text.slice(0, 80) : `AD ${recSlot}`;
 
                 const icon = document.createElement('span');
                 icon.style.fontSize = '1rem';
@@ -530,12 +562,9 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                     icon.style.backgroundColor = 'transparent';
                 });
 
-                // Only the icon triggers playback toggle.
-                // stopPropagation prevents the click from bubbling to WaveSurfer's
-                // interaction handler, which would seek and immediately call stopAllAd().
-                icon.addEventListener('click', (e) => {
+                icon.addEventListener('click', (e: MouseEvent) => {
                     e.stopPropagation();
-                    const entry = adAudiosRef.current[rec.slot];
+                    const entry = adAudiosRef.current[recSlot];
                     if (!entry) return;
                     const { el } = entry;
                     if (el.paused) {
@@ -551,8 +580,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
 
                 contentEl.appendChild(icon);
 
-                // Reset icon when audio finishes or is stopped externally (e.g. stopAllAd)
-                const entry = adAudiosRef.current[rec.slot];
+                const entry = adAudiosRef.current[recSlot];
                 if (entry) {
                     const resetIcon = () => { icon.textContent = '▶'; };
                     entry.el.addEventListener('ended', resetIcon);
@@ -560,9 +588,9 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                 }
 
                 wsRegions.addRegion({
-                    id: `ad-audio-${rec.slot}`,
-                    start: rec.start_s,
-                    end: rec.end_s,
+                    id: `ad-audio-${recSlot}`,
+                    start: recStart,
+                    end: recEnd,
                     color: 'rgba(109, 40, 217, 0.35)',
                     drag: false,
                     resize: false,
@@ -585,19 +613,19 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
     useEffect(() => {
         if (focusedSlot != null && wavesurferRef.current) {
             const currentJobData = activeJobDataRef.current;
-            let startTime = null;
+            let startTime: number | undefined;
 
-            if (currentJobData?.gpt_records?.length > 0) {
-                const rec = currentJobData.gpt_records.find(r => r.slot === focusedSlot);
+            if (currentJobData?.gpt_records?.length && currentJobData.gpt_records.length > 0) {
+                const rec = currentJobData.gpt_records.find((r: GPTRecord) => r.slot === focusedSlot);
                 if (rec) startTime = rec.start_s;
             }
 
-            if (startTime == null && currentJobData?.slots?.length > 0) {
-                const slotData = currentJobData.slots.find(s => s.slot === focusedSlot);
+            if (startTime == null && currentJobData?.slots?.length && currentJobData.slots.length > 0) {
+                const slotData = currentJobData.slots.find((s: Slot) => s.slot === focusedSlot);
                 if (slotData) startTime = slotData.start_s;
             }
 
-            if (startTime != null && videoRef.current) {
+            if (startTime != null && startTime !== undefined && videoRef.current) {
                 videoRef.current.currentTime = startTime;
                 wavesurferRef.current.setTime(startTime);
             }
@@ -608,7 +636,7 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
         return null;
     }
 
-    const hasTtsRecords = activeJobData?.gpt_records?.some(r => r.slot);
+    const hasTtsRecords = activeJobData?.gpt_records?.some((r: GPTRecord) => r.slot);
 
     return (
         <div className="flex flex-col border-t border-border-subtle bg-bg-surface mt-2 rounded-t-xl overflow-hidden shadow-md">
@@ -628,7 +656,6 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
                         </button>
                     </div>
 
-                    {/* AD Audio toggle */}
                     {hasTtsRecords && (
                         <button
                             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all border ${adAudioEnabled
@@ -666,11 +693,3 @@ export function VideoTimeline({ videoRef, videoUrl, timelineJobData = null }) {
         </div>
     );
 }
-
-VideoTimeline.propTypes = {
-    videoRef: PropTypes.shape({
-        current: PropTypes.instanceOf(Element)
-    }),
-    videoUrl: PropTypes.string.isRequired,
-    timelineJobData: PropTypes.object
-};
