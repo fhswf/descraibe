@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.1.0](https://github.com/fhswf/descraibe/compare/v1.0.0...v1.1.0) (2026-07-02)
+
+
+### Features
+
+* add delete functionality for persons and update person timeline metrics during face merging ([7ad2fb3](https://github.com/fhswf/descraibe/commit/7ad2fb324b22d7c2e6862fe2478813c13a92486d))
+* add edit dialog for person cards ([8816e15](https://github.com/fhswf/descraibe/commit/8816e15d37f811f9cd9e44bb8b9f7c6ccc314138))
+* add FaceNet embedding-based person tracking ([e6f3a4b](https://github.com/fhswf/descraibe/commit/e6f3a4bdd5ed9a74d2d55d4bddc39cfecefa61ab))
+* add FaceNet person tracking and edit dialog ([10ca46d](https://github.com/fhswf/descraibe/commit/10ca46d94e6d3f8e8aa8ed2edcb17982f5ffcdd9))
+* add fallback to disk lookup for face images missing from job metadata ([232ff17](https://github.com/fhswf/descraibe/commit/232ff17d177aca82f171ca09d8301cc3bc0bc786))
+* add Person Analysis module for automated person detection and tracking ([5ff43d0](https://github.com/fhswf/descraibe/commit/5ff43d0ce3612931b8f48c9867314858ff2deacc))
+* add Person Analysis module for automated person detection and tracking ([7bee32c](https://github.com/fhswf/descraibe/commit/7bee32c4b4361fb3a41111142a8d7938e70db4de))
+* add person filtering and merge UI ([036c5c6](https://github.com/fhswf/descraibe/commit/036c5c622af47152e24b0091858b90d277e0ee87))
+* add person filtering and merge UI ([40eea20](https://github.com/fhswf/descraibe/commit/40eea205d65bdf53260e9ea669cef186c9983ef0))
+* add person merge suggestions to UI and update dialog component styling ([d440977](https://github.com/fhswf/descraibe/commit/d4409776d74e4e37de88c097cacae7de5e446f80))
+* add support for splitting faces and implement similarity caching for performance optimization ([8442fa6](https://github.com/fhswf/descraibe/commit/8442fa61d73ca2eb3c2ce98ead45de9a16f2aa6e))
+* display person analysis results with cards ([74d2e4b](https://github.com/fhswf/descraibe/commit/74d2e4bcccc80d19035b5c490117528671d2fe24))
+* **frontend:** migrate from JavaScript to TypeScript ([b287631](https://github.com/fhswf/descraibe/commit/b287631c4ba5a770a5352854c958a8aa2541aedb))
+* **frontend:** migrate from JavaScript to TypeScript ([b17a541](https://github.com/fhswf/descraibe/commit/b17a541b07036352e0418ef16d43f72b00405e52))
+
+
+### Bug Fixes
+
+* add progress reporting to person tracking step ([7b6229b](https://github.com/fhswf/descraibe/commit/7b6229b547f10d50395578ec9ba102f6427d2008))
+* auto-download YuNet model if not present ([4c008d9](https://github.com/fhswf/descraibe/commit/4c008d99fba63dc2d6287baed2544cc8cd4a43cf))
+* auto-download YuNet model if not present ([93fe925](https://github.com/fhswf/descraibe/commit/93fe925ec7684f0f1d0bdbfb45a8afab09866a36))
+* correct step numbering in useJob hook ([b6c0f8a](https://github.com/fhswf/descraibe/commit/b6c0f8ab2509490c5107af583170dda522795d41))
+* correct step numbering in useJob hook ([3e44242](https://github.com/fhswf/descraibe/commit/3e44242d7a377ed628797a8e0bd8c03815c33108))
+* Guard onMergeFaces prop in PersonCard ([48abd5d](https://github.com/fhswf/descraibe/commit/48abd5d3321c2405d1a3640e6d2db37d40fa35ed))
+* handle corrupted YuNet model - auto-delete and re-download ([cd5b416](https://github.com/fhswf/descraibe/commit/cd5b416dc5ae696f2e74611720915d5e9e0a23a7))
+* handle corrupted YuNet model - auto-delete and re-download ([59bfbf3](https://github.com/fhswf/descraibe/commit/59bfbf3b025fdb9cad37fcd9231a5fedf899e807))
+* resolve React error [#310](https://github.com/fhswf/descraibe/issues/310) in StepPersons ([4e3dbd9](https://github.com/fhswf/descraibe/commit/4e3dbd9132363ba0642d04e8ef06064d31642fc5))
+* resolve React error [#310](https://github.com/fhswf/descraibe/issues/310) in StepPersons ([c5eb0fb](https://github.com/fhswf/descraibe/commit/c5eb0fb55c58fd98d434fdb4dd92474493e7dedb))
+* show StepPersons for currentStep &gt;= 5 (not just === 5) ([17e3857](https://github.com/fhswf/descraibe/commit/17e385753e56f1059cf0a7b3b1d2d312472b49d7))
+* update PyTorch base image to CUDA 13.0 ([2f8a405](https://github.com/fhswf/descraibe/commit/2f8a40549c2330de8ef984838bd73910b4e96d4c))
+* update PyTorch base image to CUDA 13.0 ([ebeeb1d](https://github.com/fhswf/descraibe/commit/ebeeb1db1a3ca5147c53294a0b34411b3ed481bb))
+* update YuNet model URL to opencv_zoo (2026may version) ([5200f96](https://github.com/fhswf/descraibe/commit/5200f96f876fc8fcd859e55bf12f3fe32a2a4f88))
+* update YuNet model URL to opencv_zoo (2026may version) ([5e9fb56](https://github.com/fhswf/descraibe/commit/5e9fb56f80c3c76ebcaeab4c09164a9434026d58))
+* use correct GitHub LFS URL for YuNet model download ([fd42757](https://github.com/fhswf/descraibe/commit/fd42757f318f9e6481676fe04d6fcf9b5aae31d4))
+* use correct GitHub LFS URL for YuNet model download ([1075917](https://github.com/fhswf/descraibe/commit/10759179cdee33a8cc5c9e4af55e96e20a1d1204))
+* use fetch instead of non-existent apiFetch in StepPersons ([#25](https://github.com/fhswf/descraibe/issues/25)) ([416125f](https://github.com/fhswf/descraibe/commit/416125fd91a16426819828fc2024540dc6cebce7))
+* use job_id instead of id for persons API call ([ef90d17](https://github.com/fhswf/descraibe/commit/ef90d179dac36f22edd2b922d661498bad6d494c))
+* use OpenCV FaceDetectorYN for proper YuNet face detection ([9a63982](https://github.com/fhswf/descraibe/commit/9a639829e445eb6163380f90ad3c6c8b0e3675e7))
+* use OpenCV FaceDetectorYN for proper YuNet inference ([4400038](https://github.com/fhswf/descraibe/commit/440003842ff0cac5309088eddfc01386902a37a3))
+
+
+### Documentation
+
+* add AGENTS.md with developer and contribution guidelines ([42ae839](https://github.com/fhswf/descraibe/commit/42ae8394ec42537d2dc99da9d26240e08d27909e))
+
 ## [1.0.0](https://github.com/fhswf/descraibe/compare/v0.23.0...v1.0.0) (2026-06-27)
 
 
