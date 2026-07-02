@@ -1,27 +1,26 @@
-import React from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
+
+type StepName = keyof typeof stepLabels;
+
+const stepLabels = {
+    upload: 'Video hochladen',
+    vad: 'Sprechpausen erkennen',
+    transcribe: 'Transkription',
+    slots: 'AD-Slots generieren',
+    images: 'Bilder extrahieren',
+    gpt: 'Beschreibungen generieren'
+} as const;
 
 export function GlobalProgress() {
     const { progressData } = useJob();
 
-    // Find the first active progress
-    const activeEntries = Object.entries(progressData || {}).filter(([, data]) => data !== null);
+    const activeEntries = Object.entries(progressData ?? {}).filter(([, data]) => data !== null) as [StepName, { msg: string; percent: number }][];
 
     if (activeEntries.length === 0) return null;
 
-    const [stepName, progress] = activeEntries[0];
+    const [stepName, progress] = activeEntries[0] ?? ['gpt', { msg: '', percent: 0 }];
 
-    // Map stepName to a nice German label
-    const stepLabels = {
-        upload: 'Video hochladen',
-        vad: 'Sprechpausen erkennen',
-        transcribe: 'Transkription',
-        slots: 'AD-Slots generieren',
-        images: 'Bilder extrahieren',
-        gpt: 'Beschreibungen generieren'
-    };
-
-    const label = stepLabels[stepName] || 'Fortschritt';
+    const label = stepLabels[stepName] ?? 'Fortschritt';
 
     return (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-full max-w-md z-50 animate-in fade-in slide-in-from-bottom-4 duration-300">

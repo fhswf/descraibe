@@ -1,12 +1,27 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
+import type {
+  JobContextValue,
+  GPTParams,
+  VADParams,
+  TranscribeParams,
+  SlotsParams,
+  TTSParams,
+  ImagesParams,
+  SavedJobMeta,
+  AuthState,
+  JobData,
+  ProgressInfo,
+  GPTRecord,
+  ProgressData,
+} from '../types';
 
-const JobContext = createContext();
+const JobContext = createContext<JobContextValue | null>(null);
 const SAVED_JOBS_STORAGE_KEY = 'descrAIbe.savedJobIds';
 const SAVED_JOB_META_STORAGE_KEY = 'descrAIbe.savedJobMeta';
 const USER_SETTINGS_STORAGE_KEY = 'descrAIbe.userSettings';
 
-const DEFAULT_GPT_PARAMS = {
+const DEFAULT_GPT_PARAMS: GPTParams = {
     system_prompt: "",
     user_prompt: "",
     ad_rules: "",
@@ -14,8 +29,8 @@ const DEFAULT_GPT_PARAMS = {
     model: "",
     temperature: 0.2,
     max_tokens: 1024,
-    detail: "low",
-    cut: "broadcast",
+    detail: "low" as const,
+    cut: "broadcast" as const,
     syllables_per_second: 6.0
 };
 
@@ -52,18 +67,18 @@ const DEFAULT_IMAGES_PARAMS = {
     short_scene_s: 3.0
 };
 
-function readSavedJobIds() {
+function readSavedJobIds(): string[] {
     try {
         const raw = window.localStorage.getItem(SAVED_JOBS_STORAGE_KEY);
-        const parsed = raw ? JSON.parse(raw) : [];
-        return Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string' && id.trim()) : [];
+        const parsed: unknown = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string' && id.trim() !== '') : [];
     } catch (err) {
         console.warn("Could not read saved jobs from localStorage:", err);
         return [];
     }
 }
 
-function writeSavedJobIds(jobIds) {
+function writeSavedJobIds(jobIds: string[]): void {
     try {
         window.localStorage.setItem(SAVED_JOBS_STORAGE_KEY, JSON.stringify(jobIds));
     } catch (err) {
@@ -71,18 +86,18 @@ function writeSavedJobIds(jobIds) {
     }
 }
 
-function readSavedJobMeta() {
+function readSavedJobMeta(): Record<string, SavedJobMeta> {
     try {
         const raw = window.localStorage.getItem(SAVED_JOB_META_STORAGE_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, SavedJobMeta> : {};
     } catch (err) {
         console.warn("Could not read saved job metadata from localStorage:", err);
         return {};
     }
 }
 
-function writeSavedJobMeta(meta) {
+function writeSavedJobMeta(meta: Record<string, SavedJobMeta>): void {
     try {
         window.localStorage.setItem(SAVED_JOB_META_STORAGE_KEY, JSON.stringify(meta));
     } catch (err) {
@@ -90,18 +105,18 @@ function writeSavedJobMeta(meta) {
     }
 }
 
-function readUserSettings() {
+function readUserSettings(): { gptParams?: Partial<GPTParams>; vadParams?: Partial<VADParams>; transcribeParams?: Partial<TranscribeParams>; slotsParams?: Partial<SlotsParams>; ttsParams?: Partial<TTSParams>; imagesParams?: Partial<ImagesParams> } {
     try {
         const raw = window.localStorage.getItem(USER_SETTINGS_STORAGE_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as ReturnType<typeof readUserSettings> : {} as ReturnType<typeof readUserSettings>;
     } catch (err) {
         console.warn("Could not read user settings from localStorage:", err);
-        return {};
+        return {} as ReturnType<typeof readUserSettings>;
     }
 }
 
-function writeUserSettings(settings) {
+function writeUserSettings(settings: Record<string, unknown>): void {
     try {
         window.localStorage.setItem(USER_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
     } catch (err) {
@@ -109,17 +124,17 @@ function writeUserSettings(settings) {
     }
 }
 
-function basename(path) {
+function basename(path: string | null | undefined): string {
     if (!path) return '';
     return String(path).split(/[\\/]/).filter(Boolean).pop() || '';
 }
 
-function progressPercent(progress) {
+function progressPercent(progress: ProgressInfo | undefined | null): number | null {
     if (!progress?.total) return null;
-    return Math.max(0, Math.min(100, Math.round((progress.current / progress.total) * 100)));
+    return Math.max(0, Math.min(100, Math.round(((progress.current ?? 0) / progress.total) * 100)));
 }
 
-function jobMetaFromData(data) {
+function jobMetaFromData(data: JobData): SavedJobMeta {
     const percent = data.status === 'running' ? progressPercent(data.latest_progress) : null;
     return {
         name: data.original_video_filename || basename(data.video_path) || `Job ${String(data.job_id || '').slice(0, 8)}`,
@@ -130,7 +145,7 @@ function jobMetaFromData(data) {
     };
 }
 
-function mergeSummaryMeta(existing, summary) {
+function mergeSummaryMeta(existing: SavedJobMeta | null | undefined, summary: JobData): SavedJobMeta {
     const incoming = jobMetaFromData(summary);
     if (existing?.status === 'uploading' && !summary.video_path && summary.status !== 'error') {
         return {
@@ -141,42 +156,46 @@ function mergeSummaryMeta(existing, summary) {
     return incoming;
 }
 
-export function JobProvider({ children }) {
+interface JobProviderProps {
+    children: ReactNode;
+}
+
+export function JobProvider({ children }: JobProviderProps) {
     const initialSettings = useMemo(() => readUserSettings(), []);
-    const [jobId, setJobId] = useState(() => {
+    const [jobId, setJobId] = useState<string | null>(() => {
         const params = new URLSearchParams(window.location.search);
         return params.get('job') || null;
     });
-    const [savedJobIds, setSavedJobIds] = useState(readSavedJobIds);
-    const [savedJobMeta, setSavedJobMeta] = useState(readSavedJobMeta);
-    const [jobData, setJobData] = useState(null);
-    const [sseConnected, setSseConnected] = useState(false);
-    const [gptRecords, setGptRecords] = useState([]);
-    const [currentStep, setCurrentStep] = useState(0);
-    const [doneSteps, setDoneSteps] = useState(new Set());
-    const [progressData, setProgressData] = useState({}); // { step: { msg, percent } }
-    const [focusedSlot, setFocusedSlot] = useState(null);
-    const [srtTexts, setSrtTexts] = useState({});
-    const [isSavingSrt, setIsSavingSrt] = useState(false);
-    const lastSavedSrtPayloadRef = useRef('');
-    const [isRunAllActive, setIsRunAllActive] = useState(false);
+    const [savedJobIds, setSavedJobIds] = useState<string[]>(readSavedJobIds);
+    const [savedJobMeta, setSavedJobMeta] = useState<Record<string, SavedJobMeta>>(readSavedJobMeta);
+    const [jobData, setJobData] = useState<JobData | null>(null);
+    const [sseConnected, setSseConnected] = useState<boolean>(false);
+    const [gptRecords, setGptRecords] = useState<GPTRecord[]>([]);
+    const [currentStep, setCurrentStep] = useState<number>(0);
+    const [doneSteps, setDoneSteps] = useState<Set<number>>(new Set());
+    const [progressData, setProgressData] = useState<ProgressData>({});
+    const [focusedSlot, setFocusedSlot] = useState<number | null>(null);
+    const [srtTexts, setSrtTexts] = useState<Record<string, string>>({});
+    const [isSavingSrt, setIsSavingSrt] = useState<boolean>(false);
+    const lastSavedSrtPayloadRef = useRef<string>('');
+    const [isRunAllActive, setIsRunAllActive] = useState<boolean>(false);
     
     // Global Config Modal State
-    const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
-    const [availableModels, setAvailableModels] = useState([]);
-    const [gptParams, setGptParams] = useState(() => ({ ...DEFAULT_GPT_PARAMS, ...(initialSettings.gptParams || {}) }));
-    const [vadParams, setVadParams] = useState(() => ({ ...DEFAULT_VAD_PARAMS, ...(initialSettings.vadParams || {}) }));
-    const [transcribeParams, setTranscribeParams] = useState(() => ({ ...DEFAULT_TRANSCRIBE_PARAMS, ...(initialSettings.transcribeParams || {}) }));
-    const [slotsParams, setSlotsParams] = useState(() => ({ ...DEFAULT_SLOTS_PARAMS, ...(initialSettings.slotsParams || {}) }));
-    const [ttsParams, setTtsParams] = useState(() => ({ ...DEFAULT_TTS_PARAMS, ...(initialSettings.ttsParams || {}) }));
-    const [imagesParams, setImagesParams] = useState(() => ({ ...DEFAULT_IMAGES_PARAMS, ...(initialSettings.imagesParams || {}) }));
-    const [authState, setAuthState] = useState({
+    const [isConfigModalOpen, setIsConfigModalOpen] = useState<boolean>(false);
+    const [availableModels, setAvailableModels] = useState<string[]>([]);
+    const [gptParams, setGptParams] = useState<GPTParams>(() => ({ ...DEFAULT_GPT_PARAMS, ...(initialSettings.gptParams || {}) }));
+    const [vadParams, setVadParams] = useState<VADParams>(() => ({ ...DEFAULT_VAD_PARAMS, ...(initialSettings.vadParams || {}) }));
+    const [transcribeParams, setTranscribeParams] = useState<TranscribeParams>(() => ({ ...DEFAULT_TRANSCRIBE_PARAMS, ...(initialSettings.transcribeParams || {}) }));
+    const [slotsParams, setSlotsParams] = useState<SlotsParams>(() => ({ ...DEFAULT_SLOTS_PARAMS, ...(initialSettings.slotsParams || {}) }));
+    const [ttsParams, setTtsParams] = useState<TTSParams>(() => ({ ...DEFAULT_TTS_PARAMS, ...(initialSettings.ttsParams || {}) }));
+    const [imagesParams, setImagesParams] = useState<ImagesParams>(() => ({ ...DEFAULT_IMAGES_PARAMS, ...(initialSettings.imagesParams || {}) }));
+    const [authState, setAuthState] = useState<AuthState>({
         loading: true,
         enabled: false,
         authenticated: false,
         user: null
     });
-    const [remoteConfigLoaded, setRemoteConfigLoaded] = useState(false);
+    const [remoteConfigLoaded, setRemoteConfigLoaded] = useState<boolean>(false);
 
     const refreshAuthState = useCallback(async () => {
         try {
@@ -215,7 +234,7 @@ export function JobProvider({ children }) {
         }
     }, [refreshAuthState]);
 
-    const addSavedJobId = useCallback((id) => {
+    const addSavedJobId = useCallback((id: string) => {
         if (!id) return;
         setSavedJobIds(prev => {
             const next = prev.includes(id) ? prev : [id, ...prev];
@@ -224,14 +243,17 @@ export function JobProvider({ children }) {
         });
     }, []);
 
-    const updateSavedJobMeta = useCallback((id, updates) => {
+    const updateSavedJobMeta = useCallback((id: string, updates: Partial<SavedJobMeta>) => {
         if (!id) return;
         setSavedJobMeta(prev => {
-            const next = {
+            const existing = prev[id];
+            const next: Record<string, SavedJobMeta> = {
                 ...prev,
                 [id]: {
-                    ...(prev[id] || {}),
-                    ...updates,
+                    name: existing?.name || '',
+                    status: updates.status !== undefined ? updates.status : existing?.status ?? null,
+                    progressPercent: updates.progressPercent !== undefined ? updates.progressPercent : existing?.progressPercent ?? null,
+                    progressMessage: updates.progressMessage !== undefined ? updates.progressMessage : existing?.progressMessage ?? null,
                     updatedAt: new Date().toISOString()
                 }
             };
@@ -240,7 +262,7 @@ export function JobProvider({ children }) {
         });
     }, []);
 
-    const removeSavedJobId = useCallback((id) => {
+    const removeSavedJobId = useCallback((id: string) => {
         setSavedJobIds(prev => {
             const next = prev.filter(savedId => savedId !== id);
             writeSavedJobIds(next);
@@ -263,7 +285,7 @@ export function JobProvider({ children }) {
         setSrtTexts({});
     }, []);
 
-    const selectJob = useCallback((id) => {
+    const selectJob = useCallback((id: string) => {
         if (!id) return;
         addSavedJobId(id);
         resetJobView();
@@ -351,7 +373,7 @@ export function JobProvider({ children }) {
                 const payload = await res.json();
                 const remoteConfig = payload?.config && typeof payload.config === 'object' ? payload.config : {};
                 const remoteIds = Array.isArray(remoteConfig.saved_job_ids)
-                    ? remoteConfig.saved_job_ids.filter(id => typeof id === 'string' && id.trim())
+                    ? remoteConfig.saved_job_ids.filter((id: unknown): id is string => typeof id === 'string' && Boolean(id.trim()))
                     : [];
                 const remoteMeta = remoteConfig.saved_job_meta && typeof remoteConfig.saved_job_meta === 'object' && !Array.isArray(remoteConfig.saved_job_meta)
                     ? remoteConfig.saved_job_meta
@@ -420,8 +442,8 @@ export function JobProvider({ children }) {
                         }
                     })
                 });
-            } catch (err) {
-                if (err?.name !== 'AbortError') {
+            } catch (err: unknown) {
+                if ((err as Error)?.name !== 'AbortError') {
                     console.warn("Could not store remote user config:", err);
                 }
             }
@@ -446,9 +468,9 @@ export function JobProvider({ children }) {
 
     useEffect(() => {
         if (jobData?.gpt_records) {
-            const initialTexts = {};
+            const initialTexts: Record<string, string> = {};
             jobData.gpt_records.forEach(rec => {
-                initialTexts[rec.slot] = rec.text || '';
+                initialTexts[String(rec.slot_id)] = rec.text || '';
             });
             setSrtTexts(initialTexts);
             lastSavedSrtPayloadRef.current = JSON.stringify(initialTexts);
@@ -475,8 +497,8 @@ export function JobProvider({ children }) {
                 });
                 if (!res.ok) return;
                 lastSavedSrtPayloadRef.current = currentPayload;
-            } catch (err) {
-                if (err?.name !== 'AbortError') {
+            } catch (err: unknown) {
+                if ((err as Error)?.name !== 'AbortError') {
                     console.warn("Could not auto-save SRT texts:", err);
                 }
             } finally {
@@ -491,7 +513,7 @@ export function JobProvider({ children }) {
         };
     }, [jobId, jobData?.gpt_records, srtTexts]);
 
-    const handleSaveSrtTexts = useCallback(async () => {
+    const handleSaveSrtTexts = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         setIsSavingSrt(true);
         try {
@@ -507,31 +529,31 @@ export function JobProvider({ children }) {
             lastSavedSrtPayloadRef.current = JSON.stringify(srtTexts);
             alert("Änderungen erfolgreich gespeichert! Die Ausgabedateien wurden aktualisiert.");
         } catch (err) {
-            alert("Error: " + err.message);
+            alert("Error: " + (err as Error).message);
         } finally {
             setIsSavingSrt(false);
         }
     }, [jobId, srtTexts, setIsSavingSrt]);
 
-    const fetchJobData = useCallback(async (id) => {
+    const fetchJobData = useCallback(async (id: string): Promise<void> => {
         try {
             const res = await fetch(`/api/jobs/${id}`, {
                 cache: 'no-store',
                 headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
             });
             if (res.ok) {
-                const data = await res.json();
+                const data: JobData = await res.json();
                 addSavedJobId(id);
                 updateSavedJobMeta(id, jobMetaFromData(data));
                 setJobData(data);
 
-                const newDone = new Set();
+                const newDone = new Set<number>();
                 if (data.video_stats) newDone.add(0);
-                if (data.pauses_count > 0) newDone.add(1);
+                if ((data.pauses_count ?? 0) > 0) newDone.add(1);
                 if (data.transcript_meta) newDone.add(2);
-                if (data.slots_count > 0) newDone.add(3);
-                if (data.images_count > 0) newDone.add(4);
-                if (data.persons_count > 0) newDone.add(5);
+                if ((data.slots_count ?? 0) > 0) newDone.add(3);
+                if ((data.images_count ?? 0) > 0) newDone.add(4);
+                if ((data.persons_count ?? 0) > 0) newDone.add(5);
                 if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(6);
                 if (data.final_mp4_path) newDone.add(7);
                 setDoneSteps(newDone);
@@ -546,19 +568,23 @@ export function JobProvider({ children }) {
                 setCurrentStep(targetStep);
 
                 // Restore progress if job is running and we have latest progress
-                if (data.status === 'running' && data.latest_progress) {
-                    setProgressData(prev => ({
-                        ...prev,
-                        [data.latest_progress.step]: {
-                            msg: data.latest_progress.message,
-                            percent: data.latest_progress.total
-                                ? Math.round((data.latest_progress.current / data.latest_progress.total) * 100)
-                                : 100
-                        }
-                    }));
+                const latestProgress = data.latest_progress;
+                if (data.status === 'running' && latestProgress) {
+                    const progressStep = (latestProgress as { step?: string }).step;
+                    if (progressStep) {
+                        setProgressData(prev => ({
+                            ...prev,
+                            [progressStep]: {
+                                msg: (latestProgress as { message?: string }).message ?? '',
+                                percent: (latestProgress as { total?: number; current?: number }).total
+                                    ? Math.round(((latestProgress as { current?: number }).current ?? 0) / (latestProgress as { total?: number }).total! * 100)
+                                    : 100
+                            }
+                        }));
+                    }
                 }
             }
-        } catch (err) {
+        } catch (err: unknown) {
             console.error("Failed to load job:", err);
         }
     }, [addSavedJobId, updateSavedJobMeta, setJobData, setDoneSteps, setCurrentStep]);
@@ -569,7 +595,7 @@ export function JobProvider({ children }) {
         const params = new URLSearchParams({ job_ids: savedJobIds.join(',') });
         const source = new EventSource(`/api/jobs/summary_stream?${params.toString()}`);
 
-        const handleSummaries = (ev) => {
+        const handleSummaries = (ev: MessageEvent) => {
             try {
                 const summaries = JSON.parse(ev.data);
                 if (!Array.isArray(summaries)) return;
@@ -599,7 +625,7 @@ export function JobProvider({ children }) {
         };
     }, [savedJobIds]);
 
-    const handleUpdateSlotTiming = useCallback(async (slotId, start_s, end_s) => {
+    const handleUpdateSlotTiming = useCallback(async (slotId: number, start_s: number, end_s: number): Promise<void> => {
         if (!jobId) return;
         try {
             const res = await fetch(`/api/jobs/${jobId}/slots`, {
@@ -614,8 +640,8 @@ export function JobProvider({ children }) {
             // Optionally refresh job data to sync the UI with updated metadata
             fetchJobData(jobId);
         } catch (err) {
-            console.error("Error updating slot timing:", err.message);
-            alert("Error updating slot timing: " + err.message);
+            console.error("Error updating slot timing:", (err as Error).message);
+            alert("Error updating slot timing: " + (err as Error).message);
             // fetchJobData(jobId);
         }
     }, [jobId, fetchJobData]);
@@ -627,7 +653,7 @@ export function JobProvider({ children }) {
         }
     }, [jobId, fetchJobData]);
 
-    const createJob = useCallback(async () => {
+    const createJob = useCallback(async (): Promise<string | null> => {
         try {
             const res = await fetch('/api/jobs', { method: 'POST' });
             const data = await res.json();
@@ -644,16 +670,17 @@ export function JobProvider({ children }) {
             return data.job_id;
         } catch (err) {
             console.error("Failed to create job:", err);
+            return null;
         }
     }, [addSavedJobId, resetJobView, updateSavedJobMeta]);
 
-    const markStepDone = useCallback((step) => {
+    const markStepDone = useCallback((step: number): void => {
         setDoneSteps(prev => new Set(prev).add(step));
     }, []);
 
-    const markJobStarted = useCallback((step, message) => {
+    const markJobStarted = useCallback((step: string, message: string): void => {
         if (!jobId) return;
-        const stepIndexes = {
+        const stepIndexes: Record<string, number> = {
             vad: 1,
             transcribe: 2,
             slots: 3,
@@ -699,7 +726,7 @@ export function JobProvider({ children }) {
         }));
     }, [jobId, updateSavedJobMeta]);
 
-    const handleRunVAD = useCallback(async () => {
+    const handleRunVAD = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         try {
             const res = await fetch(`/api/jobs/${jobId}/vad`, {
@@ -709,10 +736,10 @@ export function JobProvider({ children }) {
             });
             if (!res.ok) throw new Error("Failed to start VAD");
             markJobStarted('vad', 'Sprechpausen erkennen...');
-        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+        } catch (err) { alert("Error: " + (err as Error).message); setIsRunAllActive(false); }
     }, [jobId, vadParams, markJobStarted]);
 
-    const handleRunTranscribe = useCallback(async () => {
+    const handleRunTranscribe = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         try {
             const res = await fetch(`/api/jobs/${jobId}/transcribe`, {
@@ -722,10 +749,10 @@ export function JobProvider({ children }) {
             });
             if (!res.ok) throw new Error("Failed to start transcription");
             markJobStarted('transcribe', 'Transkription starten...');
-        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+        } catch (err) { alert("Error: " + (err as Error).message); setIsRunAllActive(false); }
     }, [jobId, transcribeParams, markJobStarted]);
 
-    const handleRunSlots = useCallback(async () => {
+    const handleRunSlots = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         try {
             const res = await fetch(`/api/jobs/${jobId}/slots`, {
@@ -735,10 +762,10 @@ export function JobProvider({ children }) {
             });
             if (!res.ok) throw new Error("Failed to generate slots");
             markJobStarted('slots', 'AD-Slots generieren...');
-        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+        } catch (err) { alert("Error: " + (err as Error).message); setIsRunAllActive(false); }
     }, [jobId, slotsParams, markJobStarted]);
 
-    const handleRunImages = useCallback(async () => {
+    const handleRunImages = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         try {
             const res = await fetch(`/api/jobs/${jobId}/images`, {
@@ -748,10 +775,10 @@ export function JobProvider({ children }) {
             });
             if (!res.ok) throw new Error("Failed to extract images");
             markJobStarted('images', 'Bilder extrahieren...');
-        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+        } catch (err) { alert("Error: " + (err as Error).message); setIsRunAllActive(false); }
     }, [jobId, imagesParams, markJobStarted]);
 
-    const handleRunPersons = useCallback(async () => {
+    const handleRunPersons = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         try {
             const res = await fetch(`/api/jobs/${jobId}/persons`, {
@@ -761,28 +788,19 @@ export function JobProvider({ children }) {
             });
             if (!res.ok) throw new Error("Failed to analyze persons");
             markJobStarted('persons', 'Personen analysieren...');
-        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+        } catch (err) { alert("Error: " + (err as Error).message); setIsRunAllActive(false); }
     }, [jobId, markJobStarted]);
 
-    const handleRunGPT = useCallback(async () => {
+    const handleRunGPT = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         if (!gptParams) {
             setIsRunAllActive(false);
             return alert("Prompts fehlen. Bitte überprüfen Sie die Konfiguration.");
         }
-        const selectedModelInfo = availableModels.find(m => m.model === gptParams.model) || (!gptParams.model ? availableModels[0] : null);
-        const modelWasImplicit = !gptParams.model && selectedModelInfo;
-        const effectiveModel = gptParams.model || selectedModelInfo?.model || "";
-
-        if (modelWasImplicit) {
-            setGptParams(prev => ({
-                ...prev,
-                model: selectedModelInfo.model,
-                temperature: selectedModelInfo.temperature !== undefined ? selectedModelInfo.temperature : prev.temperature,
-                max_tokens: selectedModelInfo.max_tokens !== undefined ? selectedModelInfo.max_tokens : prev.max_tokens,
-                detail: selectedModelInfo.detail !== undefined ? selectedModelInfo.detail : prev.detail
-            }));
-        }
+        const selectedModelInfo = availableModels.find(m => m === gptParams.model) || (!gptParams.model ? availableModels[0] : null);
+        // Track if model was implicitly selected (not explicitly set by user)
+        const _modelWasImplicit = !gptParams.model && selectedModelInfo;
+        const effectiveModel = gptParams.model || selectedModelInfo || "";
 
         let system_final = gptParams.system_prompt;
         if (gptParams.ad_rules) {
@@ -793,9 +811,9 @@ export function JobProvider({ children }) {
         }
         const payload = {
             model: effectiveModel,
-            temperature: modelWasImplicit && selectedModelInfo.temperature !== undefined ? selectedModelInfo.temperature : gptParams.temperature,
-            max_tokens: modelWasImplicit && selectedModelInfo.max_tokens !== undefined ? selectedModelInfo.max_tokens : gptParams.max_tokens,
-            detail: modelWasImplicit && selectedModelInfo.detail !== undefined ? selectedModelInfo.detail : gptParams.detail,
+            temperature: gptParams.temperature,
+            max_tokens: gptParams.max_tokens,
+            detail: gptParams.detail,
             cut: gptParams.cut,
             syllables_per_second: gptParams.syllables_per_second || 6.0,
             system_prompt: system_final,
@@ -810,10 +828,10 @@ export function JobProvider({ children }) {
             });
             if (!res.ok) throw new Error((await res.json()).error || "Failed to start GPT generation");
             markJobStarted('gpt', 'Beschreibungen generieren...');
-        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+        } catch (err) { alert("Error: " + (err as Error).message); setIsRunAllActive(false); }
     }, [jobId, gptParams, availableModels, markJobStarted]);
 
-    const handleRunTTS = useCallback(async () => {
+    const handleRunTTS = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         const payload = {
             api_key: ttsParams.apiKey,
@@ -828,36 +846,40 @@ export function JobProvider({ children }) {
             });
             if (!res.ok) throw new Error((await res.json()).error || "Failed to start TTS");
             markJobStarted('tts', 'Vertonung starten...');
-        } catch (err) { alert("Error: " + err.message); setIsRunAllActive(false); }
+        } catch (err) { alert("Error: " + (err as Error).message); setIsRunAllActive(false); }
     }, [jobId, ttsParams, markJobStarted]);
 
-    const handleSSEEvent = useCallback((payload) => {
+    const handleSSEEvent = useCallback((payload: { event: string; data: Record<string, unknown> }): void => {
+        if (!jobId) return;
+        
         const { event, data } = payload;
 
         if (event === 'ping' || event === 'connected') return;
 
         if (event === 'progress') {
-            const percent = progressPercent(data);
+            const step = String(data.step);
+            const percent = progressPercent(data as ProgressInfo);
             updateSavedJobMeta(jobId, {
                 status: 'running',
                 progressPercent: percent,
-                progressMessage: data.message || null
+                progressMessage: (data.message as string) || null
             });
             setProgressData(prev => ({
                 ...prev,
-                [data.step]: {
-                    msg: data.message,
+                [step]: {
+                    msg: data.message as string,
                     percent: percent ?? 100
                 }
             }));
         } else if (event === 'error') {
+            const step = String(data.step);
             updateSavedJobMeta(jobId, {
                 status: 'error',
                 progressPercent: null,
-                progressMessage: data.message || null
+                progressMessage: (data.message as string) || null
             });
-            alert(`Error in ${data.step}: ${data.message}`);
-            setProgressData(prev => ({ ...prev, [data.step]: null }));
+            alert(`Error in ${step}: ${data.message}`);
+            setProgressData(prev => ({ ...prev, [step]: null }));
             fetchJobData(jobId);
         } else {
             // Refresh job data to get the latest state (links, stats, counts)
@@ -888,7 +910,7 @@ export function JobProvider({ children }) {
                 setCurrentStep(7);
                 fetchJobData(jobId); // Need full update for outputs
                 setProgressData(prev => ({ ...prev, gpt: null }));
-                if ((data.error_count || 0) > 0) {
+                if ((Number(data.error_count) || 0) > 0) {
                     setIsRunAllActive(false);
                     alert(`${data.error_count} GPT-Slot(s) konnten nicht generiert werden. Bitte im Slot Manager prüfen oder GPT erneut starten.`);
                 }
@@ -933,7 +955,7 @@ export function JobProvider({ children }) {
         source.onopen = () => setSseConnected(true);
         source.onerror = () => setSseConnected(false);
 
-        source.onmessage = (ev) => {
+        source.onmessage = (ev: MessageEvent) => {
             try {
                 const payload = JSON.parse(ev.data);
                 handleSSEEvent(payload);
@@ -948,7 +970,7 @@ export function JobProvider({ children }) {
         };
     }, [jobId, handleSSEEvent]);
 
-    const runAllSteps = useCallback(() => {
+    const runAllSteps = useCallback((): void => {
         if (!jobId) return alert("Bitte laden Sie zuerst ein Video hoch.");
         setIsRunAllActive(true);
         // Determine the next uncompleted step and start there
@@ -962,11 +984,11 @@ export function JobProvider({ children }) {
         else setIsRunAllActive(false); // all done
     }, [doneSteps, handleRunGPT, handleRunPersons, handleRunImages, handleRunSlots, handleRunTTS, handleRunTranscribe, handleRunVAD, jobId]);
 
-    const stopRunAll = useCallback(() => {
+    const stopRunAll = useCallback((): void => {
         setIsRunAllActive(false);
     }, []);
 
-    const handleUpdateGPTRecord = useCallback((recordId, updates) => {
+    const handleUpdateGPTRecord = useCallback((recordId: string, updates: Partial<GPTRecord>): void => {
         setGptRecords(prevRecords =>
             prevRecords.map(record =>
                 record.id === recordId ? { ...record, ...updates } : record
@@ -974,7 +996,7 @@ export function JobProvider({ children }) {
         );
     }, []);
 
-    const contextValue = useMemo(() => ({
+    const contextValue = useMemo((): JobContextValue => ({
         jobId,
         setJobId,
         savedJobIds,
@@ -1050,6 +1072,10 @@ export function JobProvider({ children }) {
     );
 }
 
-export function useJob() {
-    return useContext(JobContext);
+export function useJob(): JobContextValue {
+    const context = useContext(JobContext);
+    if (context === null) {
+        throw new Error('useJob must be used within a JobProvider');
+    }
+    return context;
 }

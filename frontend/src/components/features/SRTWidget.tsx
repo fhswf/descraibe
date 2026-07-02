@@ -1,16 +1,14 @@
-import React from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
+import { GPTRecord } from '../../types/index.js';
 
 export function SRTWidget() {
     const { jobData, setFocusedSlot, srtTexts, setSrtTexts } = useJob();
 
-    // Determines if we should show hours based on the total video length
-    // We can infer max duration from the last GPT record's end_s
-    const maxDuration = jobData?.gpt_records?.length > 0
-        ? Math.max(...jobData.gpt_records.map(rec => rec.end_s || 0))
+    const maxDuration = jobData?.gpt_records?.length && jobData.gpt_records.length > 0
+        ? Math.max(...jobData.gpt_records.map((rec: GPTRecord) => rec.end_s || 0))
         : 0;
 
-    const formatTime = (seconds) => {
+    const formatTime = (seconds: number): string => {
         if (!seconds || Number.isNaN(seconds)) seconds = 0;
         const h = Math.floor(seconds / 3600);
         const m = Math.floor((seconds % 3600) / 60);
@@ -27,28 +25,28 @@ export function SRTWidget() {
     };
 
     if (!jobData?.gpt_records || jobData.gpt_records.length === 0) {
-        return null; // Only show when there are records
+        return null;
     }
 
-    const handleChange = (slotId, newText) => {
+    const handleChange = (slotId: number, newText: string): void => {
         setSrtTexts(prev => ({ ...prev, [slotId]: newText }));
     };
 
-    const statusFor = (rec) => {
+    const statusFor = (rec: GPTRecord): { label: string; className: string } => {
         if (rec.skipped) return { label: 'SKIP', className: 'bg-yellow-500/10 text-yellow-500' };
         if (!rec.ok) return { label: 'ERROR', className: 'bg-red-500/10 text-red-400' };
         return { label: 'READY', className: 'bg-green-500/10 text-green-500' };
     };
 
-    const noteFor = (rec) => {
+    const noteFor = (rec: GPTRecord): string => {
         if (rec.error?.message) return rec.error.message;
         return rec.reason || '';
     };
 
-    const syllableInfo = (rec) => {
+    const syllableInfo = (rec: GPTRecord): string => {
         if (!rec.syllable_limit) return '';
-        const original = rec.syllables_original > 0 ? `${rec.syllables_original}` : '?';
-        const final = rec.syllables_final > 0 ? `${rec.syllables_final}` : '?';
+        const original = rec.syllables_original && rec.syllables_original > 0 ? `${rec.syllables_original}` : '?';
+        const final = rec.syllables_final && rec.syllables_final > 0 ? `${rec.syllables_final}` : '?';
         return `${original} → ${final} / ${rec.syllable_limit}`;
     };
 
@@ -59,20 +57,21 @@ export function SRTWidget() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {jobData.gpt_records.map((rec, idx) => {
+                {jobData.gpt_records.map((rec: GPTRecord, idx: number) => {
                     const status = statusFor(rec);
                     const note = noteFor(rec);
                     const hasOriginal = Boolean(rec.original_text && rec.original_text !== rec.text);
                     const syllables = syllableInfo(rec);
+                    const slotNum = rec.slot_id ?? rec.slot ?? idx + 1;
                     return (
                         <div key={idx} className="group border border-border-subtle rounded-xl bg-bg-card shadow-sm hover:border-violet-500/50 transition-colors overflow-hidden">
                             <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-border-subtle/50">
                                 <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-violet-500">Slot {rec.slot}</span>
+                                    <span className="text-[10px] font-bold text-violet-500">Slot {slotNum}</span>
                                     <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${status.className}`}>{status.label}</span>
                                 </div>
                                 <div className="text-[10px] font-mono text-text-secondary">
-                                    {formatTime(rec.start_s)} → {formatTime(rec.end_s)} <span className="text-violet-500">({rec.duration_s.toFixed(2)}s)</span>
+                                    {formatTime(rec.start_s ?? 0)} → {formatTime(rec.end_s ?? 0)} <span className="text-violet-500">({(rec.duration_s ?? 0).toFixed(2)}s)</span>
                                 </div>
                             </div>
                             {note && !rec.ok && (
@@ -89,10 +88,10 @@ export function SRTWidget() {
                             <textarea
                                 className="w-full p-4 text-sm bg-transparent border-0 outline-none focus:ring-0 resize-y font-sans leading-relaxed text-text-primary min-h-[60px]"
                                 rows={3}
-                                value={srtTexts[rec.slot] !== undefined ? srtTexts[rec.slot] : (rec.text || '')}
+                                value={srtTexts[slotNum] !== undefined ? srtTexts[slotNum] : (rec.text || '')}
                                 placeholder={!rec.ok ? 'Beschreibung manuell ergänzen oder GPT erneut starten.' : ''}
-                                onFocus={() => setFocusedSlot(rec.slot)}
-                                onChange={(e) => handleChange(rec.slot, e.target.value)}
+                                onFocus={() => setFocusedSlot(slotNum)}
+                                onChange={(e) => handleChange(slotNum, e.target.value)}
                             />
                             {hasOriginal && (
                                 <details open className="border-t border-border-subtle/50 bg-white/[0.03]">

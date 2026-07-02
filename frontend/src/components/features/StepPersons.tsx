@@ -1,19 +1,57 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useJob } from '../../hooks/useJob.jsx';
-import { FaceMergeDialog } from './FaceMergeDialog.jsx';
+import { FaceMergeDialog, PersonData } from './FaceMergeDialog.jsx';
 
-function formatTimestamp(seconds) {
+// Extended person type from API response (re-exported from FaceMergeDialog)
+// Re-export for convenience
+export type { PersonData };
+
+interface MergeSuggestion {
+    person_a: { person_id: number; name?: string };
+    person_b: { person_id: number; name?: string };
+    similarity: number;
+}
+
+interface MergePersonsDialogProps {
+    persons: PersonData[];
+    jobId: string | undefined;
+    onMerge: (_sourceId: number, _targetId: number) => Promise<void>;
+    onClose: () => void;
+    initialSourceId: number | null;
+}
+
+interface ColorBadgeProps {
+    color?: string;
+    label?: string;
+}
+
+interface EditPersonDialogProps {
+    person: PersonData;
+    onSave: (_personId: number, _data: { name: string; description: string }) => Promise<void>;
+    onClose: () => void;
+}
+
+interface PersonCardProps {
+    person: PersonData;
+    onEdit: (_person: PersonData) => void;
+    onMergeFaces?: (_person: PersonData) => void;
+    onMergeInto?: (_personId: number) => void;
+    onDelete?: (_personId: number) => void;
+    jobId: string | undefined;
+}
+
+function formatTimestamp(seconds: number | undefined): string {
     if (!seconds && seconds !== 0) return '-';
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-function MergePersonsDialog({ persons, jobId, onMerge, onClose, initialSourceId }) {
-    const [sourceId, setSourceId] = useState(initialSourceId || null);
-    const [targetId, setTargetId] = useState(null);
+function MergePersonsDialog({ persons, jobId, onMerge, onClose, initialSourceId }: MergePersonsDialogProps) {
+    const [sourceId, setSourceId] = useState<number | null>(initialSourceId || null);
+    const [targetId, setTargetId] = useState<number | null>(null);
     const [saving, setSaving] = useState(false);
-    const [suggestions, setSuggestions] = useState([]);
+    const [suggestions, setSuggestions] = useState<MergeSuggestion[]>([]);
     const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
     useEffect(() => {
@@ -26,9 +64,9 @@ function MergePersonsDialog({ persons, jobId, onMerge, onClose, initialSourceId 
             .finally(() => setLoadingSuggestions(false));
     }, [jobId]);
 
-    const handleMerge = async (srcId, tgtId) => {
-        const sId = srcId !== undefined ? srcId : parseInt(sourceId);
-        const tId = tgtId !== undefined ? tgtId : parseInt(targetId);
+    const handleMerge = async (srcId?: number, tgtId?: number): Promise<void> => {
+        const sId = srcId !== undefined ? srcId : sourceId;
+        const tId = tgtId !== undefined ? tgtId : targetId;
         if (!sId || !tId || sId === tId) return;
         setSaving(true);
         try {
@@ -41,8 +79,8 @@ function MergePersonsDialog({ persons, jobId, onMerge, onClose, initialSourceId 
         }
     };
 
-    const selectedSource = persons.find(p => p.person_id === parseInt(sourceId));
-    const selectedTarget = persons.find(p => p.person_id === parseInt(targetId));
+    const selectedSource = persons.find(p => p.person_id === sourceId);
+    const selectedTarget = persons.find(p => p.person_id === targetId);
 
     return (
         <div 
@@ -106,7 +144,7 @@ function MergePersonsDialog({ persons, jobId, onMerge, onClose, initialSourceId 
                             </label>
                             <select
                                 value={sourceId || ''}
-                                onChange={e => setSourceId(e.target.value)}
+                                onChange={e => setSourceId(e.target.value ? parseInt(e.target.value) : null)}
                                 className="w-full px-3 py-2 bg-bg-card border border-border-subtle rounded-lg text-sm
                                            focus:outline-none focus:ring-2 focus:ring-violet-500"
                             >
@@ -132,13 +170,13 @@ function MergePersonsDialog({ persons, jobId, onMerge, onClose, initialSourceId 
                             </label>
                             <select
                                 value={targetId || ''}
-                                onChange={e => setTargetId(e.target.value)}
+                                onChange={e => setTargetId(e.target.value ? parseInt(e.target.value) : null)}
                                 className="w-full px-3 py-2 bg-bg-card border border-border-subtle rounded-lg text-sm
                                            focus:outline-none focus:ring-2 focus:ring-violet-500"
                             >
                                 <option value="">-- Auswählen --</option>
                                 {persons
-                                    .filter(p => p.person_id !== parseInt(sourceId))
+                                    .filter(p => p.person_id !== sourceId)
                                     .sort((a, b) => (b.appearances_count || 1) - (a.appearances_count || 1))
                                     .map(p => (
                                         <option key={p.person_id} value={p.person_id}>
@@ -153,18 +191,18 @@ function MergePersonsDialog({ persons, jobId, onMerge, onClose, initialSourceId 
                             )}
                         </div>
                     </div>
-                    
+
                     {sourceId && targetId && sourceId !== targetId && (
                          <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
                              <p className="text-sm text-amber-300">
-                                 <strong>Achtung:</strong> Person {sourceId} wird mit Person {targetId} 
-                                 zusammengeführt. Alle Auftritte von Person {sourceId} werden zu Person {targetId} 
+                                 <strong>Achtung:</strong> Person {sourceId} wird mit Person {targetId}
+                                 zusammengeführt. Alle Auftritte von Person {sourceId} werden zu Person {targetId}
                                  hinzugefügt. Diese Aktion kann nicht rückgängig gemacht werden.
                              </p>
                          </div>
                      )}
                 </div>
-                
+
                 <div className="flex justify-end gap-2 p-4 border-t border-border-subtle shrink-0">
                     <button
                         onClick={onClose}
@@ -177,7 +215,7 @@ function MergePersonsDialog({ persons, jobId, onMerge, onClose, initialSourceId 
                     <button
                         onClick={() => handleMerge()}
                         disabled={!sourceId || !targetId || sourceId === targetId || saving}
-                        className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 
+                        className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500
                                    disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
                     >
                         {saving ? (
@@ -198,9 +236,9 @@ function MergePersonsDialog({ persons, jobId, onMerge, onClose, initialSourceId 
     );
 }
 
-function ColorBadge({ color, label }) {
+function ColorBadge({ color, label }: ColorBadgeProps) {
     if (!color) return null;
-    const colorMap = {
+    const colorMap: Record<string, string> = {
         'rot': 'bg-red-600', 'blau': 'bg-blue-600', 'grün': 'bg-green-600',
         'gelb': 'bg-yellow-500', 'schwarz': 'bg-gray-900', 'weiß': 'bg-white',
         'braun': 'bg-amber-800', 'grau': 'bg-gray-500', 'orange': 'bg-orange-500',
@@ -217,12 +255,12 @@ function ColorBadge({ color, label }) {
     );
 }
 
-function EditPersonDialog({ person, onSave, onClose }) {
+function EditPersonDialog({ person, onSave, onClose }: EditPersonDialogProps) {
     const [name, setName] = useState(person.name || '');
     const [description, setDescription] = useState(person.description || '');
     const [saving, setSaving] = useState(false);
 
-    const handleSave = async () => {
+    const handleSave = async (): Promise<void> => {
         setSaving(true);
         try {
             await onSave(person.person_id, { name, description });
@@ -234,31 +272,33 @@ function EditPersonDialog({ person, onSave, onClose }) {
         }
     };
 
-    const handleKeyDown = (e) => {
+    const handleKeyDown = (e: React.KeyboardEvent): void => {
         if (e.key === 'Escape') onClose();
         if (e.key === 'Enter' && e.ctrlKey) handleSave();
     };
 
+    const attributes = person.attributes ? (typeof person.attributes === 'string' ? JSON.parse(person.attributes) : person.attributes) : {} as Record<string, string>;
+
     return (
-        <div 
+        <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
             onClick={onClose}
             onKeyDown={handleKeyDown}
         >
-            <div 
+            <div
                 className="bg-bg-surface border border-border-subtle rounded-xl shadow-2xl w-full max-w-md mx-4"
                 onClick={e => e.stopPropagation()}
             >
                 <div className="flex items-center justify-between p-4 border-b border-border-subtle">
                     <h3 className="text-lg font-semibold">Person bearbeiten</h3>
-                    <button 
+                    <button
                         onClick={onClose}
                         className="p-1 hover:bg-bg-card rounded-lg transition-colors"
                     >
                         <span className="material-icons-round text-text-muted">close</span>
                     </button>
                 </div>
-                
+
                 <div className="p-4 space-y-4">
                     <div>
                         <label className="block text-sm font-medium text-text-secondary mb-1.5">
@@ -274,7 +314,7 @@ function EditPersonDialog({ person, onSave, onClose }) {
                                        placeholder:text-text-muted"
                         />
                     </div>
-                    
+
                     <div>
                         <label className="block text-sm font-medium text-text-secondary mb-1.5">
                             Beschreibung
@@ -289,19 +329,19 @@ function EditPersonDialog({ person, onSave, onClose }) {
                                        placeholder:text-text-muted resize-none"
                         />
                     </div>
-                    
+
                     <div className="flex flex-wrap gap-1.5">
-                        <ColorBadge color={person.attributes?.top_color} label="Oben" />
-                        <ColorBadge color={person.attributes?.bottom_color} label="Unten" />
-                        <ColorBadge color={person.attributes?.dominant_color} label="Hauptfarbe" />
+                        <ColorBadge color={attributes?.top_color} label="Oben" />
+                        <ColorBadge color={attributes?.bottom_color} label="Unten" />
+                        <ColorBadge color={attributes?.dominant_color} label="Hauptfarbe" />
                     </div>
-                    
+
                     <div className="text-xs text-text-muted">
                         {person.appearances_count} Auftritt{person.appearances_count !== 1 ? 'e' : ''} • {' '}
                         {formatTimestamp(person.first_seen_ts)} - {formatTimestamp(person.last_seen_ts)}
                     </div>
                 </div>
-                
+
                 <div className="flex justify-end gap-2 p-4 border-t border-border-subtle">
                     <button
                         onClick={onClose}
@@ -314,7 +354,7 @@ function EditPersonDialog({ person, onSave, onClose }) {
                     <button
                         onClick={handleSave}
                         disabled={saving}
-                        className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 
+                        className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500
                                    disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
                     >
                         {saving ? (
@@ -335,18 +375,18 @@ function EditPersonDialog({ person, onSave, onClose }) {
     );
 }
 
-function PersonCard({ person, onEdit, onMergeFaces, onMergeInto, onDelete, jobId }) {
+function PersonCard({ person, onEdit, onMergeFaces, onMergeInto, onDelete, jobId }: PersonCardProps) {
     const [imgError, setImgError] = useState(false);
     // Use face crop if available, otherwise fall back to full frame
     const faceCrop = person.representative_crop;
     const imageName = person.representative_image ? person.representative_image.split('/').pop() : null;
     // Face crop URL: /api/jobs/{jobId}/faces/{faceId}
-    const faceId = faceCrop ? parseInt(faceCrop.match(/face_(\d+)/)?.[1]) : null;
+    const faceId = faceCrop ? parseInt(faceCrop.match(/face_(\d+)/)?.[1] || '') : null;
     const faceImageUrl = faceId && jobId ? `/api/jobs/${jobId}/faces/${faceId}` : null;
     const frameImageUrl = imageName && jobId ? `/api/jobs/${jobId}/images/${imageName}` : null;
 
     const attributes = person.attributes ? (typeof person.attributes === 'string' ? JSON.parse(person.attributes) : person.attributes) : {};
-    
+
     return (
         <div className="flex flex-col gap-2 p-3 bg-bg-card border border-border-subtle rounded-lg">
             <div className="flex items-start justify-between gap-2">
@@ -420,15 +460,15 @@ function PersonCard({ person, onEdit, onMergeFaces, onMergeInto, onDelete, jobId
                     )}
                 </div>
             </div>
-            
-            {(attributes.top_color || attributes.bottom_color || attributes.dominant_color) && (
+
+            {(attributes as Record<string, string>).top_color || (attributes as Record<string, string>).bottom_color || (attributes as Record<string, string>).dominant_color ? (
                 <div className="flex flex-wrap gap-1.5">
-                    <ColorBadge color={attributes.top_color} label="Oben" />
-                    <ColorBadge color={attributes.bottom_color} label="Unten" />
-                    <ColorBadge color={attributes.dominant_color} label="Hauptfarbe" />
+                    <ColorBadge color={(attributes as Record<string, string>).top_color} label="Oben" />
+                    <ColorBadge color={(attributes as Record<string, string>).bottom_color} label="Unten" />
+                    <ColorBadge color={(attributes as Record<string, string>).dominant_color} label="Hauptfarbe" />
                 </div>
-            )}
-            
+            ) : null}
+
             {person.description && (
                 <div className="text-xs text-text-secondary pt-1 border-t border-border-subtle">
                     {person.description}
@@ -440,59 +480,48 @@ function PersonCard({ person, onEdit, onMergeFaces, onMergeInto, onDelete, jobId
 
 export function StepPersons() {
     const { currentStep, jobData, handleRunPersons, progressData } = useJob();
-    const [persons, setPersons] = useState([]);
+    const [persons, setPersons] = useState<PersonData[]>([]);
     const [loading, setLoading] = useState(false);
-    const [editingPerson, setEditingPerson] = useState(null);
+    const [editingPerson, setEditingPerson] = useState<PersonData | null>(null);
     const [mergingPersons, setMergingPersons] = useState(false);
-    const [mergeInitialSourceId, setMergeInitialSourceId] = useState(null);
-    const [filter, setFilter] = useState('main'); // 'all', 'main', 'statists'
-    const [mergingFacesPerson, setMergingFacesPerson] = useState(null);
+    const [mergeInitialSourceId, setMergeInitialSourceId] = useState<number | null>(null);
+    const [mergingFacesPerson, setMergingFacesPerson] = useState<PersonData | null>(null);
+    const [filter, setFilter] = useState<'main' | 'all' | 'statists'>('main');
     const jobDataRef = useRef(jobData);
-    const isRunningRef = useRef(false);
+    jobDataRef.current = jobData;
 
-    // Keep refs in sync
     useEffect(() => {
-        jobDataRef.current = jobData;
-    }, [jobData]);
-
-    // Update isRunningRef when progress changes
-    useEffect(() => {
-        isRunningRef.current = progressData?.persons !== null && progressData?.persons !== undefined;
-    }, [progressData?.persons]);
-
-    // Load persons data when job is loaded
-    useEffect(() => {
-        const jobId = jobDataRef.current?.job_id;
-        if (!jobId) return;
-
+        if (currentStep !== 5) return;
         setLoading(true);
-        fetch(`/api/jobs/${jobId}/persons`)
-            .then(res => res.json())
-            .then(data => setPersons(data.persons || []))
-            .catch(() => setPersons([]))
-            .finally(() => setLoading(false));
-    }, [jobData?.job_id]);
+        const jobId = jobDataRef.current?.job_id;
+        if (jobId) {
+            fetch(`/api/jobs/${jobId}/persons`)
+                .then(res => res.json())
+                .then(data => setPersons(data.persons || []))
+                .finally(() => setLoading(false));
+        } else {
+            setLoading(false);
+        }
+    }, [currentStep, jobData?.persons_count]);
 
-    if (currentStep < 5) return null;
+    if (currentStep !== 5) return null;
 
-    const personsCount = jobData?.persons_count || 0;
-    const isRunning = progressData?.persons !== null && progressData?.persons !== undefined;
-    const progressMsg = progressData?.persons?.msg || null;
-    const progressPercent = progressData?.persons?.percent || null;
+    const isRunning = jobData?.status === 'running';
+    const progressMsg = progressData.persons?.msg;
+    const progressPercent = progressData.persons?.percent ?? null;
 
-    // Filter persons based on selection
+    const personsCount = persons.length;
+    const mainCastCount = persons.filter(p => (p.appearances_count || 1) >= 5).length;
+    const statistsCount = persons.filter(p => (p.appearances_count || 1) < 3).length;
+
     const filteredPersons = persons.filter(p => {
         const appearances = p.appearances_count || 1;
         if (filter === 'main') return appearances >= 5;
-        if (filter === 'statists') return appearances < 5;
-        return true; // 'all'
+        if (filter === 'statists') return appearances < 3;
+        return true;
     });
 
-    // Count by filter
-    const mainCastCount = persons.filter(p => (p.appearances_count || 1) >= 5).length;
-    const statistsCount = persons.filter(p => (p.appearances_count || 1) < 5).length;
-
-    const handleMergeFacesRefresh = () => {
+    const handleMergeFacesRefresh = (): void => {
         // Refresh persons from API
         const jobId = jobDataRef.current?.job_id;
         if (jobId) {
@@ -502,7 +531,7 @@ export function StepPersons() {
         }
     };
 
-    const handleSavePerson = async (personId, updates) => {
+    const handleSavePerson = async (personId: number, updates: { name: string; description: string }): Promise<void> => {
         try {
             const res = await fetch(`/api/jobs/${jobData?.job_id}/persons/${personId}`, {
                 method: 'POST',
@@ -512,25 +541,25 @@ export function StepPersons() {
             if (!res.ok) {
                 throw new Error("Save failed");
             }
-            setPersons(prev => prev.map(p => 
-                p.person_id === personId 
+            setPersons(prev => prev.map(p =>
+                p.person_id === personId
                     ? { ...p, ...updates }
                     : p
             ));
         } catch (err) {
             console.error('Failed to save person details:', err);
-            setPersons(prev => prev.map(p => 
-                p.person_id === personId 
+            setPersons(prev => prev.map(p =>
+                p.person_id === personId
                     ? { ...p, ...updates }
                     : p
             ));
         }
     };
 
-    const handleMergePersons = async (sourceId, targetId) => {
+    const handleMergePersons = async (sourceId: number, targetId: number): Promise<void> => {
         const source = persons.find(p => p.person_id === sourceId);
         const target = persons.find(p => p.person_id === targetId);
-        
+
         if (!source || !target) return;
 
         try {
@@ -545,15 +574,15 @@ export function StepPersons() {
             handleMergeFacesRefresh();
         } catch (err) {
             console.error('Failed to merge persons:', err);
-            const mergedPerson = {
+            const mergedPerson: PersonData = {
                 ...target,
                 person_id: targetId,
                 appearances_count: (target.appearances_count || 1) + (source.appearances_count || 1),
                 first_seen_ts: Math.min(target.first_seen_ts || Infinity, source.first_seen_ts || Infinity),
                 last_seen_ts: Math.max(target.last_seen_ts || 0, source.last_seen_ts || 0),
-                name: target.name || source.name || null,
+                name: target.name || source.name || undefined,
                 description: target.description || source.description || '',
-                attributes: { ...(source.attributes || {}), ...(target.attributes || {}) },
+                attributes: { ...(source.attributes as Record<string, string> || {}), ...(target.attributes as Record<string, string> || {}) },
             };
             setPersons(prev => [
                 ...prev.filter(p => p.person_id !== sourceId),
@@ -562,7 +591,7 @@ export function StepPersons() {
         }
     };
 
-    const handleDeletePerson = async (personId) => {
+    const handleDeletePerson = async (personId: number): Promise<void> => {
         if (!window.confirm("Möchtest du diese Person wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.")) return;
         try {
             const res = await fetch(`/api/jobs/${jobData?.job_id}/persons/${personId}`, {
@@ -587,7 +616,7 @@ export function StepPersons() {
                     onClose={() => setEditingPerson(null)}
                 />
             )}
-            
+
             {mergingPersons && (
                 <MergePersonsDialog
                     persons={persons}
@@ -604,7 +633,7 @@ export function StepPersons() {
             {mergingFacesPerson && (
                 <FaceMergeDialog
                     person={mergingFacesPerson}
-                    jobId={jobData?.job_id}
+                    jobId={jobData?.job_id || ''}
                     onClose={() => setMergingFacesPerson(null)}
                     onRefresh={handleMergeFacesRefresh}
                 />

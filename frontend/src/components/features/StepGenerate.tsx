@@ -1,7 +1,7 @@
 import React from 'react';
-import { useJob } from '../../hooks/useJob.jsx';
+import { useJob } from '../../hooks/useJob';
 
-export function StepGenerate() {
+export function StepGenerate(): React.ReactElement | null {
     const { currentStep, gptParams } = useJob();
 
     if (currentStep !== 5) return null;

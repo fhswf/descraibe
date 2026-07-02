@@ -11,7 +11,7 @@ export function StepTranscribe() {
     const hasTranscriptText = segmentCount > 0;
     const isRunning = jobData?.status === 'running';
 
-    const handleUploadSrt = async (e) => {
+    const handleUploadSrt = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
         const file = e.target.files?.[0];
         if (!file) return;
 
@@ -26,7 +26,7 @@ export function StepTranscribe() {
             if (!res.ok) throw new Error("Upload failed");
             // App will pick up the update via SSE fetchJobData
         } catch (err) {
-            alert("SRT Upload error: " + err.message);
+            alert("SRT Upload error: " + (err as Error).message);
         }
     };
 

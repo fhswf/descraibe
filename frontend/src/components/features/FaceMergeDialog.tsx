@@ -1,15 +1,58 @@
 import { useState, useMemo, useEffect, useCallback, memo } from 'react';
 
-export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
-    const [similarFaces, setSimilarFaces] = useState([]);
-    const [unassignedFaces, setUnassignedFaces] = useState([]);
-    const [selectedForMerge, setSelectedForMerge] = useState(new Set());
-    const [selectedForSplit, setSelectedForSplit] = useState(new Set());
+export interface PersonData {
+    person_id: number;
+    name?: string;
+    attributes?: string | Record<string, string>;
+    appearances_count?: number;
+    description?: string;
+    representative_crop?: string;
+    representative_image?: string;
+    first_seen_ts?: number;
+    last_seen_ts?: number;
+    face_ids?: string | string[];
+    [key: string]: unknown;
+}
+
+interface FaceMergeDialogProps {
+    person: PersonData;
+    jobId: string;
+    onClose: () => void;
+    onRefresh: () => void;
+}
+
+interface SimilarFace {
+    face: {
+        face_id: string;
+    };
+    similarity: number;
+}
+
+interface UnassignedFace {
+    face_id: string;
+}
+
+interface FaceThumbnailProps {
+    faceId: string;
+    jobId: string;
+    isOwn?: boolean;
+    similarity?: number;
+    selectable?: boolean;
+    selected?: boolean;
+    onToggle?: (_: string) => void;
+    similarityColor?: string;
+}
+
+export function FaceMergeDialog({ person, jobId, onClose, onRefresh }: FaceMergeDialogProps) {
+    const [similarFaces, setSimilarFaces] = useState<SimilarFace[]>([]);
+    const [unassignedFaces, setUnassignedFaces] = useState<UnassignedFace[]>([]);
+    const [selectedForMerge, setSelectedForMerge] = useState<Set<string>>(new Set());
+    const [selectedForSplit, setSelectedForSplit] = useState<Set<string>>(new Set());
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [threshold, setThreshold] = useState(0.6);
 
-    const faceIds = useMemo(() => {
+    const faceIds = useMemo((): string[] => {
         if (!person.face_ids) return [];
         if (typeof person.face_ids === "string") {
             try { return JSON.parse(person.face_ids); } catch { return []; }
@@ -18,7 +61,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
     }, [person.face_ids]);
 
     useEffect(() => {
-        async function fetchSimilarFaces() {
+        async function fetchSimilarFaces(): Promise<void> {
             setLoading(true);
             try {
                 const res = await fetch(`/api/jobs/${jobId}/persons/${person.person_id}/similar-faces?threshold=${threshold}`);
@@ -34,7 +77,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
         fetchSimilarFaces();
     }, [jobId, person.person_id, threshold]);
 
-    const toggleMergeSelection = useCallback((faceId) => {
+    const toggleMergeSelection = useCallback((faceId: string): void => {
         setSelectedForMerge(prev => {
             const newSet = new Set(prev);
             if (newSet.has(faceId)) { newSet.delete(faceId); } else { newSet.add(faceId); }
@@ -42,7 +85,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
         });
     }, []);
 
-    const toggleSplitSelection = useCallback((faceId) => {
+    const toggleSplitSelection = useCallback((faceId: string): void => {
         setSelectedForSplit(prev => {
             const newSet = new Set(prev);
             if (newSet.has(faceId)) { newSet.delete(faceId); } else { newSet.add(faceId); }
@@ -50,7 +93,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
         });
     }, []);
 
-    const handleSave = async () => {
+    const handleSave = async (): Promise<void> => {
         if (selectedForMerge.size === 0 && selectedForSplit.size === 0) return;
         setSaving(true);
         try {
@@ -89,7 +132,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
         }
     };
 
-    const similarityColor = (sim) => sim >= 0.8 ? "text-green-500" : sim >= 0.7 ? "text-yellow-500" : "text-orange-500";
+    const similarityColor = (sim: number): string => sim >= 0.8 ? "text-green-500" : sim >= 0.7 ? "text-yellow-500" : "text-orange-500";
 
     const hasChanges = selectedForMerge.size > 0 || selectedForSplit.size > 0;
 
@@ -184,7 +227,7 @@ export function FaceMergeDialog({ person, jobId, onClose, onRefresh }) {
     );
 }
 
-export const FaceThumbnail = memo(function FaceThumbnail({ faceId, jobId, isOwn, similarity, selectable, selected, onToggle, similarityColor }) {
+export const FaceThumbnail = memo(function FaceThumbnail({ faceId, jobId, isOwn, similarity, selectable, selected, onToggle, similarityColor }: FaceThumbnailProps) {
     const [imgError, setImgError] = useState(false);
     const imageUrl = `/api/jobs/${jobId}/faces/${faceId}`;
 
@@ -197,7 +240,7 @@ export const FaceThumbnail = memo(function FaceThumbnail({ faceId, jobId, isOwn,
         borderClass = "hover:border-violet-500/50";
     }
 
-    const handleClick = () => {
+    const handleClick = (): void => {
         if (selectable && onToggle) {
             onToggle(faceId);
         }
