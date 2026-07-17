@@ -11,8 +11,8 @@ dependencies = [
 
     # Pipeline dependencies (same as notebook)
     "moviepy>=2.2",
-    "torch==2.11.0",
-    "torchaudio==2.11.0",
+    "torch==2.13.0",
+    "facenet-pytorch",
     "pyarrow",
     "soundfile",
     "faster-whisper>=1.0",
@@ -34,7 +34,7 @@ dependencies = [
     "trackers==2.5.0.post0",
     "uniface[gpu]==3.7.1",
     "onnxruntime-gpu==1.26.0",
-    "torchvision==0.26.0",
+    "torchvision==0.28.0",
     "timm==0.4.12",
 
     # Attribute analysis
@@ -55,8 +55,8 @@ dev = [
 ]
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
 [tool.uv]
@@ -65,9 +65,8 @@ exclude-dependencies = [
 ]
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu128" }
-torchvision = { index = "pytorch-cu128" }
-torchaudio = { index = "pytorch-cu128" }
+torch = { index = "pytorch-cu132" }
+torchvision = { index = "pytorch-cu132" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["backend"]

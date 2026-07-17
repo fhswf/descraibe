@@ -12,9 +12,9 @@
 # GPU Operator still provides the host driver, device plugin and runtime hooks.
 
 # ── Base image ─────────────────────────────────────────────────────────────────
-# GPU-first runtime: PyTorch 2.11.0, CUDA 12.8 and cuDNN 9 are preinstalled in
+# GPU-first runtime: PyTorch 2.13.0, CUDA 13.2 and cuDNN 9 are preinstalled in
 # /opt/conda, which avoids re-downloading the large torch/nvidia wheels in CI.
-FROM pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime
+FROM pytorch/pytorch:2.13.0-cuda13.2-cudnn9-runtime
 
 # ── System dependencies ────────────────────────────────────────────────────────
 # ffmpeg   – required by moviepy / scenedetect
@@ -45,11 +45,10 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
 # Install Python dependencies without bursting cache on every source code change.
-# torch/torchaudio and their CUDA libraries come from the PyTorch base image.
+# torch and its CUDA libraries come from the PyTorch base image.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv export --quiet --no-dev --frozen --no-emit-project \
     --prune torch \
-    --prune torchaudio \
     --output-file /tmp/requirements-runtime.txt \
     && uv pip install --break-system-packages --requirements /tmp/requirements-runtime.txt \
     && rm /tmp/requirements-runtime.txt
@@ -60,7 +59,7 @@ COPY backend ./backend
 # Install the actual project (nearly instant since deps are already there)
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --break-system-packages --no-deps . \
-    && python -c "import torch, torchaudio; assert torch.version.cuda, 'PyTorch CUDA runtime is missing'; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'torchaudio', torchaudio.__version__)"
+    && python -c "import torch, torchvision; assert torch.version.cuda, 'PyTorch CUDA runtime is missing'; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'torchvision', torchvision.__version__)"
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
 # All values can be overridden at runtime:

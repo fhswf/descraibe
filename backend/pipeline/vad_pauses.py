@@ -272,9 +272,7 @@ def extract_pauses(
         (get_speech_timestamps, *_) = utils
         logger.info("Silero VAD model loaded.")
 
-        # Read audio with soundfile instead of Silero's read_audio utility,
-        # which relies on torchaudio.load() – broken in torchaudio >= 2.9
-        # (requires torchcodec).  soundfile is already a project dependency.
+        # Read the extracted WAV directly to avoid Silero's torchaudio dependency.
         wav_data, sr = sf.read(wav_path, dtype="float32", always_2d=False)
         if sr != sample_rate_hz:
             raise RuntimeError(
