@@ -10,7 +10,7 @@ dependencies = [
     "python-multipart>=0.0.31",
     # Pipeline dependencies (same as notebook)
     "moviepy>=2.2",
-    "torch==2.12.1",
+    "torch==2.13.0",
     "facenet-pytorch",
     "torchaudio",
     "pyarrow",
