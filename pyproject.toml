@@ -30,6 +30,12 @@ dependencies = [
     "psycopg[binary]>=3.2.0",
     # Person analysis dependencies
     "pytesseract>=0.3.10",
+    "rfdetr==1.9.2",
+    "trackers==2.5.0.post0",
+    "uniface[gpu]==3.7.1",
+    "onnxruntime-gpu==1.27.0",
+    "torchvision==0.27.1",
+    "timm==0.4.12",
 ]
 
 [project.scripts]
@@ -44,9 +50,22 @@ dev = [
     "pytest>=9.0.3",
 ]
 
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+
 [tool.hatch.build.targets.wheel]
 packages = ["backend"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]   # makes `import backend.session_manager` work
 testpaths  = ["tests"]
+
+[tool.uv]
+exclude-dependencies = [
+    "onnxruntime",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }

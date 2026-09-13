@@ -219,3 +219,4 @@ webapp/config/
 # Playwright test results
 test-results/
 playwright-report/
+models/
