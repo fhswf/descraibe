@@ -1326,13 +1326,13 @@ def run_persons(job_id: str, body: dict = Body(default={})):
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-    if job.get("scene_images") is None or len(job.get("scene_images", [])) == 0:
-        return JSONResponse({"error": "Scene images not available. Run image extraction first."}, status_code=400)
+    if not job.get("video_path"):
+        return JSONResponse({"error": "Video not available."}, status_code=400)
 
     def run():
         sm.job_id_var.set(job_id)
         try:
-            _mark_step_running(job_id, "persons", "Detecting persons in images…")
+            _mark_step_running(job_id, "persons", "Analyzing persons in video…")
 
             def cb_persons(msg: str, current: int | None = None, total: int | None = None):
                 if total:
@@ -1343,7 +1343,7 @@ def run_persons(job_id: str, body: dict = Body(default={})):
 
             job_dir = sm.job_dir(job_id)
             persons_df, faces = persons_mod.analyze_persons(
-                job["scene_images"],
+                job["video_path"],
                 job_dir=str(job_dir),
                 progress_cb=cb_persons,
             )

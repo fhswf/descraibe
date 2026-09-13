@@ -1,1083 +1,701 @@
-"""person_analysis.py – Person detection, tracking and attribute extraction (Step 06).
-
-This module:
-1. Detects faces in scene images using OpenCV DNN YuNet face detector
-2. Extracts face embeddings using FaceNet (facenet-pytorch) for robust person matching
-3. Extracts person regions (full body from face bounding box)
-4. Detects name overlays (Bauchbinden) via Tesseract OCR
-5. Tracks persons across frames using timecode + face embeddings
-6. Extracts visual attributes (clothing colors, etc.)
-7. Returns a persons_df DataFrame for prompt injection
-"""
 from __future__ import annotations
 
+import argparse
+import csv
 import json
-import logging
-import os
-import re
+from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 import pandas as pd
 
-logger = logging.getLogger(__name__)
-
-# ── Environment / config ────────────────────────────────────────────────────────
-
-_YU_NET_MODEL_PATH = os.environ.get(
-    "YU_NET_MODEL_PATH",
-    str(Path(__file__).parent.parent.parent / "models" / "face_detection_yunet_2023mar.onnx")
-)
-_TESSERACT_CMD = os.environ.get("TESSERACT_CMD", "").strip() or None
-_TESSERACT_LANG = os.environ.get("TESSERACT_LANG", "deu+eng").strip()
-_EMBEDDING_THRESHOLD = float(os.environ.get("FACE_EMBEDDING_THRESHOLD", "0.7"))
-
-
-# ── Progress helpers ────────────────────────────────────────────────────────────
-
-def _emit_progress(
-    progress_cb: Optional[Callable[..., None]],
-    message: str,
-    current: Optional[int] = None,
-    total: Optional[int] = None,
-) -> None:
-    if not progress_cb:
-        return
-    try:
-        if current is None or total is None:
-            progress_cb(message)
-        else:
-            progress_cb(message, current, total)
-    except TypeError:
-        progress_cb(message)
-
-
-# ── FaceNet embedding extractor ─────────────────────────────────────────────────
-
-class FaceEmbeddingExtractor:
-    """Extract face embeddings using MTCNN + InceptionResnetV1 (FaceNet)."""
-
-    _instance: Optional["FaceEmbeddingExtractor"] = None
-    _mtcnn: Optional[Any] = None
-    _resnet: Optional[Any] = None
-    _device: Optional[str] = None
-
-    def __new__(cls) -> "FaceEmbeddingExtractor":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    @property
-    def device(self) -> str:
-        if self._device is None:
-            import torch
-            self._device = "cuda" if torch.cuda.is_available() else "cpu"
-            logger.info("FaceEmbeddingExtractor using device: %s", self._device)
-        return self._device
-
-    def _ensure_models(self) -> bool:
-        """Lazy-load MTCNN and InceptionResnetV1 models."""
-        if self._mtcnn is not None and self._resnet is not None:
-            return True
-
-        try:
-            from facenet_pytorch import MTCNN, InceptionResnetV1
-            import torch
-
-            logger.info("Loading FaceNet models (MTCNN + InceptionResnetV1)…")
-            self._mtcnn = MTCNN(
-                image_size=160,
-                margin=20,
-                min_face_size=20,
-                thresholds=[0.6, 0.7, 0.7],
-                factor=0.709,
-                post_process=True,
-                device=self.device,
-            )
-            self._resnet = InceptionResnetV1(pretrained="vggface2").eval().to(self.device)
-            logger.info("FaceNet models loaded successfully")
-            return True
-        except Exception as exc:
-            logger.warning("Failed to load FaceNet models: %s", exc)
-            return False
-
-    def extract_embedding(self, face_image: np.ndarray) -> Optional[np.ndarray]:
-        """Extract 512-dim face embedding from a cropped face image.
-
-        Args:
-            face_image: BGR image of a face (already cropped from YuNet bbox)
-
-        Returns:
-            512-dim embedding vector or None if extraction fails
-        """
-        if not self._ensure_models():
-            return None
-
-        try:
-            from facenet_pytorch import fixed_image_standardization
-
-            # Convert BGR to RGB
-            face_rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
-
-            # Prewhiten (FaceNet preprocessing)
-            prewhitened = fixed_image_standardization(face_rgb)
-
-            # Convert to tensor [1, 3, 160, 160]
-            import torch
-            x = torch.from_numpy(prewhitened).permute(2, 0, 1).unsqueeze(0).float().to(self.device)
-
-            # Get embedding
-            with torch.no_grad():
-                embedding = self._resnet(x)
-
-            return embedding.cpu().numpy().flatten()
-
-        except Exception as exc:
-            logger.debug("Failed to extract face embedding: %s", exc)
-            return None
-
-    def extract_from_image(self, image: np.ndarray, face_bbox: Dict[str, Any]) -> Optional[np.ndarray]:
-        """Extract face embedding directly from full image using YuNet bbox.
-
-        Args:
-            image: Full BGR image
-            face_bbox: Dict with x, y, w, h of face
-
-        Returns:
-            512-dim embedding vector or None
-        """
-        if not self._ensure_models():
-            return None
-
-        x, y, w, h = int(face_bbox["x"]), int(face_bbox["y"]), int(face_bbox["w"]), int(face_bbox["h"])
-
-        # Add margin around face
-        margin = int(min(w, h) * 0.2)
-        x1 = max(0, x - margin)
-        y1 = max(0, y - margin)
-        x2 = min(image.shape[1], x + w + margin)
-        y2 = min(image.shape[0], y + h + margin)
-
-        face_crop = image[y1:y2, x1:x2]
-        if face_crop.size == 0:
-            return None
-
-        # MTCNN expects RGB uint8
-        face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-
-        try:
-            from facenet_pytorch import fixed_image_standardization
-            import torch
-
-            # Prewhiten
-            prewhitened = fixed_image_standardization(face_rgb)
-
-            # Convert to tensor
-            x = torch.from_numpy(prewhitened).permute(2, 0, 1).unsqueeze(0).float().to(self.device)
-
-            with torch.no_grad():
-                embedding = self._resnet(x)
-
-            return embedding.cpu().numpy().flatten()
-
-        except Exception as exc:
-            logger.debug("Failed to extract embedding from image: %s", exc)
-            return None
-
-
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Compute cosine similarity between two embedding vectors."""
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return float(np.dot(a, b) / (norm_a * norm_b))
-
-
-# ── YuNet model download ────────────────────────────────────────────────────────
-
-# Use media.githubusercontent.com for GitHub LFS files
-_YU_NET_MODEL_URL = (
-    "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/"
-    "models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
-)
-
-
-def _download_yunet_model(model_path: Path) -> bool:
-    """Download YuNet ONNX model if not present or corrupted."""
-    import urllib.request
-
-    model_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = model_path.with_suffix(".tmp")
-
-    # Remove any existing (potentially corrupted) model file
-    if model_path.exists():
-        model_path.unlink()
-
-    logger.info("Downloading YuNet model from %s to %s", _YU_NET_MODEL_URL, model_path)
-
-    try:
-        urllib.request.urlretrieve(_YU_NET_MODEL_URL, str(tmp_path))
-        tmp_path.replace(model_path)
-        logger.info("YuNet model downloaded successfully to %s", model_path)
-        return True
-    except Exception as exc:
-        logger.warning("Failed to download YuNet model: %s", exc)
-        if tmp_path.exists():
-            tmp_path.unlink()
-        return False
-
-
-# ── YuNet face detector ─────────────────────────────────────────────────────────
-
-class YuNetDetector:
-    """OpenCV FaceDetectorYN-based YuNet face detector with graceful fallback."""
-
-    _instance: Optional["YuNetDetector"] = None
-    _model: Optional[Any] = None
-    _model_size: Tuple[int, int] = (320, 320)
-    _nms_threshold: float = 0.3
-    _score_threshold: float = 0.5
-
-    def __new__(cls) -> "YuNetDetector":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def _ensure_model(self) -> bool:
-        if self._model is not None:
-            return True
-
-        model_path = Path(_YU_NET_MODEL_PATH)
-        if not model_path.exists():
-            logger.info(
-                "YuNet model not found at %s. Attempting to download...",
-                model_path,
-            )
-            if not _download_yunet_model(model_path):
-                logger.warning(
-                    "Could not download YuNet model. Face detection will be skipped. "
-                    "To fix: either download the model manually from %s "
-                    "or set YU_NET_MODEL_PATH to a valid model file.",
-                    _YU_NET_MODEL_URL,
-                )
-                return False
-
-        try:
-            # Use OpenCV's built-in FaceDetectorYN which handles YuNet models correctly
-            self._model = cv2.FaceDetectorYN.create(
-                model=str(model_path),
-                config="",
-                input_size=self._model_size,
-                score_threshold=self._score_threshold,
-                nms_threshold=self._nms_threshold,
-                top_k=5000,
-            )
-            logger.info("YuNet face detector loaded from %s", model_path)
-            return True
-        except Exception as exc:
-            # Model file exists but is corrupted - try re-downloading
-            logger.warning(
-                "Failed to load YuNet model (possibly corrupted): %s. Attempting re-download...",
-                exc,
-            )
-            if _download_yunet_model(model_path):
-                try:
-                    self._model = cv2.FaceDetectorYN.create(
-                        model=str(model_path),
-                        config="",
-                        input_size=self._model_size,
-                        score_threshold=self._score_threshold,
-                        nms_threshold=self._nms_threshold,
-                        top_k=5000,
-                    )
-                    logger.info("YuNet face detector loaded after re-download from %s", model_path)
-                    return True
-                except Exception as exc2:
-                    logger.warning("Failed to load re-downloaded model: %s", exc2)
-            return False
-
-    def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
-        """Detect faces in an image.
-
-        Returns list of dicts with keys: x, y, w, h, confidence.
-        """
-        if not self._ensure_model():
-            return []
-
-        h, w = image.shape[:2]
-
-        # Set input size to match image dimensions
-        self._model.setInputSize((w, h))
-
-        try:
-            _, results = self._model.detect(image)
-        except Exception as exc:
-            logger.warning("YuNet inference failed: %s", exc)
-            return []
-
-        if results is None:
-            return []
-
-        detections: List[Dict[str, Any]] = []
-
-        # Results format: (num_dets, 15) = [x, y, w, h, 5_landmarks..., conf]
-        for row in results:
-            if len(row) < 15:
+from .persons.appearances import TrackIntervalAccumulator
+from .persons.clustering import run_clustering
+from .persons.config import ANALYSIS_INTERVAL_SECONDS
+from .persons.detection import RFDETRPersonDetector
+from .persons.face_detection import RetinaFaceDetector
+from .persons.face_observations import FaceObservationWriter
+from .persons.face_quality import check_face_quality
+from .persons.face_recognition import FaceMoERecognizer
+from .persons.person_crops import PersonCropWriter
+from .persons.tracking import BytePersonTracker, detect_scene_change_frames
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODEL_ROOT = PROJECT_ROOT / "models"
+
+
+def assign_faces_to_tracks(faces: list[dict], tracked_persons: list[dict]) -> dict[int, dict]:
+    """Ordnet pro Analyseframe höchstens ein Gesicht einem Track zu."""
+    candidates = []
+
+    for face_index, face in enumerate(faces):
+        fx1, fy1, fx2, fy2 = face["bbox"]
+        face_cx = (fx1 + fx2) / 2.0
+        face_cy = (fy1 + fy2) / 2.0
+
+        for person in tracked_persons:
+            x1, y1, x2, y2 = person["bbox"]
+            if not (x1 <= face_cx <= x2 and y1 <= face_cy <= y2):
                 continue
 
-            x, y, bw, bh = int(row[0]), int(row[1]), int(row[2]), int(row[3])
-            confidence = float(row[-1])  # Confidence is the last value
+            person_width = max(1.0, float(x2 - x1))
+            person_height = max(1.0, float(y2 - y1))
+            expected_head_x = (x1 + x2) / 2.0
+            expected_head_y = y1 + 0.20 * person_height
 
-            detections.append({
-                "x": x,
-                "y": y,
-                "w": bw,
-                "h": bh,
-                "confidence": confidence,
-            })
+            score = (
+                ((face_cx - expected_head_x) / person_width) ** 2
+                + ((face_cy - expected_head_y) / person_height) ** 2
+            )
+            candidates.append((score, face_index, person))
 
-        return detections
+    candidates.sort(key=lambda item: item[0])
 
+    assignments: dict[int, dict] = {}
+    used_tracks: set[int] = set()
 
-def detect_faces_in_image(image_path: str) -> List[Dict[str, Any]]:
-    """Load an image and detect faces using YuNet."""
-    img = cv2.imread(str(image_path))
-    if img is None:
-        logger.warning("Could not read image: %s", image_path)
-        return []
+    for _, face_index, person in candidates:
+        track_id = int(person["track_id"])
+        if face_index in assignments or track_id in used_tracks:
+            continue
+        assignments[face_index] = person
+        used_tracks.add(track_id)
 
-    detector = YuNetDetector()
-    return detector.detect(img)
-
-
-# ── Person region extraction ────────────────────────────────────────────────────
-
-def extract_person_region(
-    image: np.ndarray,
-    face_bbox: Dict[str, Any],
-    extend_ratio: float = 1.8,
-) -> np.ndarray:
-    """Extract full-body region from face bounding box.
-
-    Args:
-        image: BGR image array
-        face_bbox: dict with x, y, w, h
-        extend_ratio: how much to extend vertically above and below face
-
-    Returns:
-        Cropped person region image (BGR), or empty array if invalid
-    """
-    h, w = image.shape[:2]
-    fx, fy, fw, fh = int(face_bbox["x"]), int(face_bbox["y"]), int(face_bbox["w"]), int(face_bbox["h"])
-
-    # Extend vertically
-    extra_h = int(fh * extend_ratio)
-    top = max(0, fy - extra_h)
-    bottom = min(h, fy + fh + extra_h)
-
-    # Keep face horizontally centered with some padding
-    pad_x = int(fw * 0.3)
-    left = max(0, fx - pad_x)
-    right = min(w, fx + fw + pad_x)
-
-    if bottom <= top or right <= left:
-        return np.array([])
-
-    return image[top:bottom, left:right]
+    return assignments
 
 
-# ── Name overlay detection (OCR) ────────────────────────────────────────────────
+def build_persons(tracks: list[dict], track_to_person: dict[int, int]) -> list[dict]:
+    """Baut Personen nur aus Tracks mit FaceMoE-basierter Identitätszuordnung."""
+    grouped_tracks: dict[int, list[dict]] = {}
 
-def detect_name_overlay(image_path: str) -> Optional[str]:
-    """Detect name overlay text (Bauchbinden) in an image.
+    for track in tracks:
+        track_id = int(track["track_id"])
+        if track_id not in track_to_person:
+            continue
+        person_id = int(track_to_person[track_id])
+        grouped_tracks.setdefault(person_id, []).append(track)
 
-    Looks for horizontal text bars near the top or bottom of the frame,
-    which is typical for news/broadcast name plates.
+    persons = []
 
-    Returns:
-        Detected name text or None if not found.
-    """
+    for person_id in sorted(grouped_tracks):
+        person_tracks = sorted(
+            grouped_tracks[person_id],
+            key=lambda item: (float(item["start_s"]), int(item["track_id"])),
+        )
+
+        segments = [
+            {
+                "track_id": int(track["track_id"]),
+                "scene_id": int(track["scene_id"]),
+                "start_s": float(track["start_s"]),
+                "end_s": float(track["end_s"]),
+            }
+            for track in person_tracks
+        ]
+
+        appearances = [
+            {"start_s": float(track["start_s"]), "end_s": float(track["end_s"])}
+            for track in person_tracks
+        ]
+
+        persons.append(
+            {
+                "person_id": person_id,
+                "name": f"Person {person_id}",
+                "function": "",
+                "track_ids": [int(track["track_id"]) for track in person_tracks],
+                "segments": segments,
+                "appearances": appearances,
+                "first_seen_ts": min(item["start_s"] for item in appearances),
+                "last_seen_ts": max(item["end_s"] for item in appearances),
+                "attributes": {},
+            }
+        )
+
+    return persons
+
+
+def save_track_identities(
+    output_path: Path,
+    tracks: list[dict],
+    track_to_person: dict[int, int],
+) -> None:
+    """Speichert Track-Zuordnungen, jedoch keine Embeddings."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_path.open("w", newline="", encoding="utf-8-sig") as csv_file:
+        writer = csv.writer(csv_file, delimiter=";")
+        writer.writerow(["person_id", "track_id", "assignment_source"])
+
+        for track in sorted(tracks, key=lambda item: int(item["track_id"])):
+            track_id = int(track["track_id"])
+            if track_id in track_to_person:
+                writer.writerow([int(track_to_person[track_id]), track_id, "facemoe_cluster"])
+            else:
+                writer.writerow(["", track_id, "unassigned_no_embedding"])
+
+
+def save_persons(
+    output_path: Path,
+    video_path: Path,
+    tracks: list[dict],
+    persons: list[dict],
+    unassigned_tracks: list[dict],
+) -> None:
+    """Speichert Personen und nicht zugeordnete Tracks getrennt."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    unassigned_data = []
+    for track in sorted(unassigned_tracks, key=lambda item: int(item["track_id"])):
+        unassigned_data.append(
+            {
+                "track_id": int(track["track_id"]),
+                "scene_id": int(track["scene_id"]),
+                "start_s": float(track["start_s"]),
+                "end_s": float(track["end_s"]),
+                "faces_assigned": int(track.get("faces_assigned", 0)),
+                "faces_usable": int(track.get("faces_usable", 0)),
+                "alignment_failures": int(track.get("alignment_failures", 0)),
+                "embeddings_created": int(track.get("embeddings_created", 0)),
+                "embedding_errors": int(track.get("embedding_errors", 0)),
+            }
+        )
+
+    payload = {
+        "video": video_path.name,
+        "track_count": len(tracks),
+        "person_count": len(persons),
+        "unassigned_track_count": len(unassigned_data),
+        "persons": persons,
+        "unassigned_tracks": unassigned_data,
+    }
+
+    with output_path.open("w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+
+
+def _analyze_video(
+    video_path: str | Path,
+    job_dir: str | Path | None = None,
+    progress_cb=None,
+) -> dict:
+    """Führt die eigentliche automatische Personenanalyse auf dem Video aus."""
+    video_path = Path(video_path)
+    if not video_path.is_file():
+        raise FileNotFoundError(f"Video nicht gefunden:\n{video_path}")
+
+    video = cv2.VideoCapture(str(video_path))
+    if not video.isOpened():
+        raise RuntimeError(f"Video konnte nicht geöffnet werden:\n{video_path}")
+
+    fps = float(video.get(cv2.CAP_PROP_FPS))
+    frame_count = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+    if fps <= 0:
+        video.release()
+        raise RuntimeError("Ungültige Framerate.")
+
+    analysis_interval_frames = max(1, int(round(fps * ANALYSIS_INTERVAL_SECONDS)))
+    base_dir = Path(job_dir) if job_dir else video_path.parent
+    analysis_output_dir = base_dir / "person_analysis"
+    analysis_output_dir.mkdir(parents=True, exist_ok=True)
+
+    print()
+    print("PERSONENANALYSE")
+    print("================")
+    print(f"Video: {video_path}")
+    print(f"FPS: {fps:.3f}")
+    print(f"Frames: {frame_count}")
+    print(f"Gesichtsanalyse alle {ANALYSIS_INTERVAL_SECONDS:.2f} s ({analysis_interval_frames} Frames)")
+    print("FaceMoE-Embeddings: nur im RAM")
+    print("Tracks ohne FaceMoE: bleiben unassigned")
+    print(f"Ausgabe: {analysis_output_dir}")
+    print()
+
+    if progress_cb:
+        progress_cb("Szenenwechsel werden erkannt ...", 0, frame_count)
+
+    scene_change_frames = detect_scene_change_frames(video_path)
+    print(f"Szenenwechsel erkannt: {len(scene_change_frames)}")
+
+    person_detector = RFDETRPersonDetector()
+    person_tracker = BytePersonTracker(frame_rate=fps)
+    face_detector = RetinaFaceDetector(model_cache_dir=MODEL_ROOT / "retinaface")
+    face_recognizer = FaceMoERecognizer(model_root=MODEL_ROOT / "facemoe")
+
+    track_accumulator = TrackIntervalAccumulator(fps=fps)
+    person_crop_writer = PersonCropWriter(
+        output_dir=analysis_output_dir,
+        fps=fps,
+        jpeg_quality=90,
+        clear_existing=True,
+    )
+    face_observation_writer = FaceObservationWriter(
+        output_dir=analysis_output_dir,
+        fps=fps,
+        clear_existing=True,
+    )
+
+    face_stats: dict[int, dict] = {}
+    total_faces_detected = 0
+    total_faces_assigned = 0
+    total_faces_usable = 0
+    total_alignment_failures = 0
+    total_embeddings_created = 0
+    total_embedding_errors = 0
+
+    # Embeddings existieren ausschließlich während dieses Laufs im RAM.
+    face_embedding_records: list[dict] = []
+    rejected_track_ids: list[int] = []
+    rejected_frame_numbers: list[int] = []
+
+    frame_number = 0
+
     try:
-        import pytesseract
-    except ImportError:
-        logger.warning("pytesseract not installed, skipping OCR")
-        return None
+        while True:
+            success, frame_bgr = video.read()
+            if not success:
+                break
 
-    if _TESSERACT_CMD:
-        pytesseract.pytesseract.tesseract_cmd = _TESSERACT_CMD
+            frame_number += 1
 
-    img = cv2.imread(str(image_path))
-    if img is None:
-        return None
+            # 1. Personenerkennung
+            persons = person_detector.detect(frame_bgr)
 
-    h, w = img.shape[:2]
+            # 2. Tracking
+            tracked_persons = person_tracker.update(
+                persons,
+                scene_change=frame_number in scene_change_frames,
+            )
 
-    # Focus on potential Bauchbinden regions (top 25% and bottom 15%)
-    regions = [
-        img[: int(h * 0.25), :],  # Top region
-        img[int(h * 0.85):, :],   # Bottom region
+            # 3. Track-Zeiten und Personencrops
+            current_crop_paths: dict[int, Path] = {}
+
+            for person in tracked_persons:
+                track_id = int(person["track_id"])
+                scene_id = int(person["scene_id"])
+
+                track_accumulator.observe(
+                    track_id=track_id,
+                    scene_id=scene_id,
+                    frame_number=frame_number,
+                )
+
+                crop_path = person_crop_writer.save(
+                    frame_bgr=frame_bgr,
+                    track_id=track_id,
+                    scene_id=scene_id,
+                    frame_number=frame_number,
+                    bbox=person["bbox"],
+                    confidence=person.get("confidence"),
+                )
+
+                if crop_path is not None:
+                    current_crop_paths[track_id] = crop_path
+
+            # 4. Gesichtsanalyse alle 0,5 Sekunden
+            analyze_frame = (frame_number - 1) % analysis_interval_frames == 0
+
+            if analyze_frame and tracked_persons:
+                faces = face_detector.detect(frame_bgr)
+                total_faces_detected += len(faces)
+                assignments = assign_faces_to_tracks(faces, tracked_persons)
+
+                for face_index, person in assignments.items():
+                    face = faces[face_index]
+                    track_id = int(person["track_id"])
+                    scene_id = int(person["scene_id"])
+                    total_faces_assigned += 1
+
+                    stats = face_stats.setdefault(
+                        track_id,
+                        {
+                            "faces_assigned": 0,
+                            "faces_usable": 0,
+                            "alignment_failures": 0,
+                            "embeddings_created": 0,
+                            "embedding_errors": 0,
+                        },
+                    )
+                    stats["faces_assigned"] += 1
+
+                    # 5. Face Quality
+                    face_crop = face["crop"]
+                    face_confidence = float(face["confidence"])
+                    is_usable, quality_info = check_face_quality(face_crop, face_confidence)
+                    blur_score = quality_info.get("blur_score")
+
+                    aligned_crop = face["aligned_crop"]
+                    alignment_ok = aligned_crop is not None
+
+                    # 6. Face-Metadaten speichern
+                    person_crop_path = current_crop_paths.get(track_id)
+                    face_id = None
+
+                    if person_crop_path is not None:
+                        frame_height, frame_width = frame_bgr.shape[:2]
+                        face_id = face_observation_writer.save(
+                            track_id=track_id,
+                            scene_id=scene_id,
+                            frame_number=frame_number,
+                            person_bbox=person["bbox"],
+                            face_bbox=face["bbox"],
+                            person_crop_path=person_crop_path,
+                            frame_width=frame_width,
+                            frame_height=frame_height,
+                            face_confidence=face_confidence,
+                            face_usable=is_usable,
+                            blur_score=blur_score,
+                            alignment_ok=alignment_ok,
+                        )
+
+                    if is_usable:
+                        stats["faces_usable"] += 1
+                        total_faces_usable += 1
+
+                        if not alignment_ok:
+                            stats["alignment_failures"] += 1
+                            total_alignment_failures += 1
+
+                    # 7. FaceMoE
+                    embedding_created = False
+
+                    if is_usable and alignment_ok:
+                        try:
+                            embedding = face_recognizer.extract_embedding(aligned_crop)
+                        except Exception as error:
+                            stats["embedding_errors"] += 1
+                            total_embedding_errors += 1
+                            print(
+                                f"FaceMoE-Fehler | Track {track_id} | Frame {frame_number} | "
+                                f"{type(error).__name__}: {error}"
+                            )
+                        else:
+                            face_embedding_records.append(
+                                {
+                                    "face_id": face_id,
+                                    "track_id": track_id,
+                                    "scene_id": scene_id,
+                                    "frame_number": frame_number,
+                                    "timestamp_s": (frame_number - 1) / fps,
+                                    "embedding": embedding,
+                                }
+                            )
+                            stats["embeddings_created"] += 1
+                            total_embeddings_created += 1
+                            embedding_created = True
+
+                    # Für Same-Frame-Cannot-Link berücksichtigen.
+                    if not embedding_created:
+                        rejected_track_ids.append(track_id)
+                        rejected_frame_numbers.append(frame_number)
+
+            if progress_cb and (
+                frame_number % max(1, int(round(fps))) == 0
+                or frame_number == frame_count
+            ):
+                progress_cb(
+                    f"Personenanalyse: Frame {frame_number}/{frame_count}",
+                    frame_number,
+                    frame_count,
+                )
+
+            if frame_number % 500 == 0:
+                print(f"Frame {frame_number}/{frame_count}")
+
+    finally:
+        video.release()
+        person_crop_writer.close()
+        face_observation_writer.close()
+        face_recognizer.close()
+
+    tracks = track_accumulator.result()
+
+    default_stats = {
+        "faces_assigned": 0,
+        "faces_usable": 0,
+        "alignment_failures": 0,
+        "embeddings_created": 0,
+        "embedding_errors": 0,
+    }
+
+    for track in tracks:
+        track.update(face_stats.get(int(track["track_id"]), default_stats.copy()))
+
+    # Embeddings für das Clustering vorbereiten.
+    if face_embedding_records:
+        embeddings = np.stack(
+            [record["embedding"] for record in face_embedding_records]
+        ).astype(np.float32)
+
+        embedding_frame_numbers = np.asarray(
+            [record["frame_number"] for record in face_embedding_records],
+            dtype=np.int32,
+        )
+        embedding_track_ids = np.asarray(
+            [record["track_id"] for record in face_embedding_records],
+            dtype=np.int32,
+        )
+    else:
+        embeddings = np.empty((0, 512), dtype=np.float32)
+        embedding_frame_numbers = np.empty(0, dtype=np.int32)
+        embedding_track_ids = np.empty(0, dtype=np.int32)
+
+    clustered_mapping = run_clustering(
+        embeddings=embeddings,
+        frame_numbers=embedding_frame_numbers,
+        track_ids=embedding_track_ids,
+        rejected_track_ids=np.asarray(rejected_track_ids, dtype=np.int32),
+        rejected_frame_numbers=np.asarray(rejected_frame_numbers, dtype=np.int32),
+    )
+
+    clustered_track_ids = set(clustered_mapping)
+    unassigned_tracks = [
+        track
+        for track in tracks
+        if int(track["track_id"]) not in clustered_track_ids
     ]
 
-    best_text = None
-    best_confidence = 0.0
+    track_to_person = dict(clustered_mapping)
+    clustered_tracks = [
+        track
+        for track in tracks
+        if int(track["track_id"]) in clustered_track_ids
+    ]
+    persons = build_persons(clustered_tracks, track_to_person)
+
+    track_identity_path = analysis_output_dir / "track_identities.csv"
+    persons_path = analysis_output_dir / "persons.json"
+
+    save_track_identities(track_identity_path, tracks, track_to_person)
+    save_persons(
+        persons_path,
+        video_path,
+        tracks,
+        persons,
+        unassigned_tracks,
+    )
+
+    # Embeddings nicht persistieren und nach dem Clustering freigeben.
+    face_embedding_records.clear()
+    del embeddings
+    del embedding_frame_numbers
+    del embedding_track_ids
+
+    print()
+    print("GESICHTSANALYSE")
+    print("================")
+    print(f"Gesichter erkannt: {total_faces_detected}")
+    print(f"Gesichtern Tracks zugeordnet: {total_faces_assigned}")
+    print(f"Qualitativ verwendbar: {total_faces_usable}")
+    print(f"Alignment fehlgeschlagen: {total_alignment_failures}")
+
+    print()
+    print("FACEMOE")
+    print("=======")
+    print(f"Embeddings erzeugt: {total_embeddings_created}")
+    print(f"Embedding-Fehler: {total_embedding_errors}")
+    print("Embeddings gespeichert: NEIN")
+
+    print()
+    print("AUTOMATISCHE PERSONEN")
+    print("=====================")
+    print(f"Tracks insgesamt: {len(tracks)}")
+    print(f"Tracks mit FaceMoE-Embedding: {len(clustered_track_ids)}")
+    print(f"Nicht zugeordnete Tracks: {len(unassigned_tracks)}")
+    print(f"Automatisch erkannte Personen: {len(persons)}")
+    print(f"Track-Zuordnungen: {track_identity_path}")
+    print(f"Personenergebnis: {persons_path}")
+
+    print()
+    print("PERSONENCROPS")
+    print("=============")
+    print(f"Gespeicherte Personencrops: {person_crop_writer.crop_count}")
+    print(f"Crop-Verzeichnis: {person_crop_writer.crops_dir}")
+    print(f"Manifest: {person_crop_writer.manifest_path}")
+
+    print()
+    print("FACE-METADATEN")
+    print("==============")
+    print(f"Gespeicherte Face-Beobachtungen: {face_observation_writer.face_count}")
+    print(f"Manifest: {face_observation_writer.manifest_path}")
 
-    for region in regions:
-        if region.size == 0:
-            continue
-
-        # Convert to grayscale
-        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-
-        # Apply thresholding to make text stand out
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        # Get OCR data with confidence
-        try:
-            data = pytesseract.image_to_data(
-                thresh,
-                lang=_TESSERACT_LANG,
-                output_type=pytesseract.Output.DICT,
-            )
-        except Exception as exc:
-            logger.debug("Tesseract failed on region: %s", exc)
-            continue
-
-        # Look for text with reasonable confidence
-        for i, conf in enumerate(data.get("conf", [])):
-            conf_val = float(conf) if conf != "-1" else 0.0
-            if conf_val < 40:
-                continue
-
-            text = "".join(
-                c for c in data["text"][i] if c.isprintable()
-            ).strip()
-
-            # Filter out timestamps, watermarks, short strings
-            if len(text) < 2:
-                continue
-            if re.match(r"^\d{1,2}:\d{2}(:\d{2})?$", text):  # timestamps
-                continue
-            if len(text) > 30:  # likely not a person name
-                continue
-
-            if conf_val > best_confidence:
-                best_confidence = conf_val
-                best_text = text
-
-    return best_text
-
-
-# ── Attribute extraction ────────────────────────────────────────────────────────
-
-def _rgb_to_color_name(r: int, g: int, b: int) -> str:
-    """Map RGB to a human-readable color name."""
-    # Simple color mapping based on HSV ranges
-    hsv = cv2.cvtColor(np.uint8([[[b, g, r]]]), cv2.COLOR_BGR2HSV)[0][0]
-    h, s, v = int(hsv[0]), int(hsv[1]), int(hsv[2])
-
-    # Grayscale
-    if s < 30:
-        if v > 200:
-            return "weiß"
-        elif v > 150:
-            return "hellgrau"
-        elif v > 100:
-            return "grau"
-        elif v > 50:
-            return "dunkelgrau"
-        else:
-            return "schwarz"
-
-    # Brown / Orange / Yellow
-    if 5 <= h <= 45:
-        if s > 150 and v > 150:
-            return "orange"
-        if s > 100:
-            return "braun"
-        return "dunkelbraun"
-
-    # Yellow
-    if 20 <= h <= 40 and s > 100:
-        return "gelb"
-
-    # Green
-    if 40 <= h <= 85:
-        if s > 150 and v > 150:
-            return "grün"
-        elif v > 100:
-            return "dunkelgrün"
-        return "olivgrün"
-
-    # Cyan / Teal
-    if 85 <= h <= 110:
-        return "türkis"
-
-    # Blue
-    if 95 <= h <= 135:
-        if v > 150 and s > 150:
-            return "blau"
-        elif v > 100:
-            return "dunkelblau"
-        return "navy"
-
-    # Purple / Magenta
-    if 135 <= h <= 175:
-        return "violett"
-
-    # Red / Pink
-    if (h <= 10 or h >= 170) and s > 100:
-        if v > 150 and s < 180:
-            return "rosa"
-        return "rot"
-
-    return "bunt"
-
-
-def _dominant_color(image: np.ndarray, region: str = "bottom_half") -> Optional[str]:
-    """Extract dominant color name from an image region."""
-    if image.size == 0 or image.shape[0] < 10 or image.shape[1] < 10:
-        return None
-
-    h, w = image.shape[:2]
-
-    # Focus on different regions based on what we're analyzing
-    if region == "top":
-        region_img = image[: h // 2, :]
-    elif region == "bottom":
-        region_img = image[h // 2 :, :]
-    elif region == "bottom_half":
-        region_img = image[h // 2 :, :]
-    else:
-        region_img = image
-
-    # Resize for faster k-means
-    small = cv2.resize(region_img, (50, 50))
-
-    # Reshape to pixel list
-    pixels = small.reshape(-1, 3).astype(np.float32)
-
-    # Simple dominant color via histogram in HSV
-    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
-    hist = cv2.calcHist([hsv], [0], None, [180], [0, 180])
-    hist = hist.flatten()
-    dominant_h = int(np.argmax(hist))
-
-    # Convert back to RGB for color name
-    dummy = np.uint8([[[dominant_h, 200, 200]]])
-    dummy_bgr = cv2.cvtColor(dummy, cv2.COLOR_HSV2BGR)[0][0]
-    r, g, b = int(dummy_bgr[2]), int(dummy_bgr[1]), int(dummy_bgr[0])
-
-    return _rgb_to_color_name(r, g, b)
-
-
-def extract_person_attributes(
-    image: np.ndarray,
-    face_bbox: Dict[str, Any],
-    person_region: np.ndarray,
-) -> Dict[str, Any]:
-    """Extract visual attributes from a person region."""
-    attributes: Dict[str, Any] = {}
-
-    if person_region.size == 0:
-        return attributes
-
-    # Clothing colors
-    if person_region.shape[0] >= 20:
-        top_color = _dominant_color(person_region, region="top")
-        bottom_color = _dominant_color(person_region, region="bottom")
-        if top_color:
-            attributes["top_color"] = top_color
-        if bottom_color:
-            attributes["bottom_color"] = bottom_color
-
-    # Overall dominant color
-    overall_color = _dominant_color(person_region, region="bottom_half")
-    if overall_color:
-        attributes["dominant_color"] = overall_color
-
-    # Face-based age proxy (confidence as proxy)
-    attributes["face_confidence"] = float(face_bbox.get("confidence", 0.0))
-
-    return attributes
-
-
-# ── Person tracking ─────────────────────────────────────────────────────────────
-
-def _compute_iou(bbox1: Dict[str, Any], bbox2: Dict[str, Any]) -> float:
-    """Compute Intersection over Union between two bounding boxes."""
-    x1 = max(bbox1["x"], bbox2["x"])
-    y1 = max(bbox1["y"], bbox2["y"])
-    x2 = min(bbox1["x"] + bbox1["w"], bbox2["x"] + bbox2["w"])
-    y2 = min(bbox1["y"] + bbox1["h"], bbox2["y"] + bbox2["h"])
-
-    if x2 <= x1 or y2 <= y1:
-        return 0.0
-
-    inter = (x2 - x1) * (y2 - y1)
-    area1 = bbox1["w"] * bbox1["h"]
-    area2 = bbox2["w"] * bbox2["h"]
-    union = area1 + area2 - inter
-
-    return inter / union if union > 0 else 0.0
-
-
-def _face_region_color(image: np.ndarray, face_bbox: Dict[str, Any]) -> Tuple[float, float, float]:
-    """Get mean color of face region for visual similarity."""
-    x, y, w, h = int(face_bbox["x"]), int(face_bbox["y"]), int(face_bbox["w"]), int(face_bbox["h"])
-    h_img, w_img = image.shape[:2]
-
-    # Sample a smaller region inside the face
-    x1, y1 = max(0, x + w // 4), max(0, y + h // 4)
-    x2, y2 = min(w_img, x + 3 * w // 4), min(h_img, y + 3 * h // 4)
-
-    if x2 <= x1 or y2 <= y1:
-        return (0.0, 0.0, 0.0)
-
-    face_region = image[y1:y2, x1:x2]
-    mean_color = cv2.mean(face_region)
-    return (mean_color[0], mean_color[1], mean_color[2])
-
-
-def _color_distance(c1: Tuple[float, float, float], c2: Tuple[float, float, float]) -> float:
-    """Euclidean distance between two BGR colors."""
-    return sum((a - b) ** 2 for a, b in zip(c1, c2)) ** 0.5
-
-
-class Person:
-    """Represents a tracked person across video frames."""
-
-    def __init__(
-        self,
-        person_id: int,
-        first_seen_ts: float,
-        name: Optional[str] = None,
-        embedding: Optional[np.ndarray] = None,
-    ):
-        self.person_id = person_id
-        self.name = name
-        self.first_seen_ts = first_seen_ts
-        self.last_seen_ts = first_seen_ts
-        self.appearances: List[Dict[str, Any]] = []
-        self.face_ids: List[int] = []  # Track linked face IDs
-        self.attributes: Dict[str, Any] = {}
-        self.description: str = ""
-        self._face_colors: List[Tuple[float, float, float]] = []
-        # Store face embeddings for matching
-        self._embeddings: List[np.ndarray] = []
-        if embedding is not None:
-            self._embeddings.append(embedding)
-
-    def add_face(
-        self,
-        timestamp_s: float,
-        image_path: str,
-        face_bbox: Dict[str, Any],
-        face_id: int,
-        attributes: Optional[Dict[str, Any]] = None,
-        embedding: Optional[np.ndarray] = None,
-    ) -> None:
-        """Add a face to this person."""
-        self.appearances.append({
-            "timestamp_s": timestamp_s,
-            "image_path": image_path,
-            "face_bbox": face_bbox,
-            "face_id": face_id,
-        })
-        self.face_ids.append(face_id)
-        self.last_seen_ts = timestamp_s
-
-        # Merge attributes (prefer first non-None values)
-        if attributes:
-            for key, value in attributes.items():
-                if key not in self.attributes or self.attributes[key] is None:
-                    self.attributes[key] = value
-
-        # Store embedding for future matching
-        if embedding is not None:
-            self._embeddings.append(embedding)
-            # Keep only last 5 embeddings
-            if len(self._embeddings) > 5:
-                self._embeddings.pop(0)
-
-    def update_color(self, color: Tuple[float, float, float]) -> None:
-        self._face_colors.append(color)
-        if len(self._face_colors) > 5:
-            self._face_colors.pop(0)
-
-    def mean_color(self) -> Tuple[float, float, float]:
-        if not self._face_colors:
-            return (0.0, 0.0, 0.0)
-        return tuple(sum(colors) / len(self._face_colors) for colors in zip(*self._face_colors))
-
-    def mean_embedding(self) -> Optional[np.ndarray]:
-        """Get mean face embedding across all appearances."""
-        if not self._embeddings:
-            return None
-        return np.mean(self._embeddings, axis=0)
-
-    def embedding_similarity(self, other_embedding: np.ndarray) -> float:
-        """Compute cosine similarity between given embedding and this person's mean embedding."""
-        mean_emb = self.mean_embedding()
-        if mean_emb is None:
-            return 0.0
-        return _cosine_similarity(mean_emb, other_embedding)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "person_id": self.person_id,
-            "name": self.name,
-            "first_seen_ts": self.first_seen_ts,
-            "last_seen_ts": self.last_seen_ts,
-            "appearances_count": len(self.appearances),
-            "face_ids": self.face_ids,
-            "attributes": self.attributes,
-            "description": self.description,
-        }
-
-
-def _save_face_crop(
-    img: np.ndarray, 
-    face_bbox: Dict[str, Any], 
-    job_dir: Path,
-    face_idx: int
-) -> Optional[str]:
-    """Extract and save face crop to disk.
-    
-    Args:
-        img: Full BGR image
-        face_bbox: Face bounding box dict with x, y, w, h
-        job_dir: Job directory path
-        face_idx: Unique face index for filename
-        
-    Returns:
-        Relative path to saved face crop or None on failure
-    """
-    try:
-        x, y, w, h = int(face_bbox["x"]), int(face_bbox["y"]), int(face_bbox["w"]), int(face_bbox["h"])
-        
-        # Add margin around face
-        margin = int(min(w, h) * 0.15)
-        x1 = max(0, x - margin)
-        y1 = max(0, y - margin)
-        x2 = min(img.shape[1], x + w + margin)
-        y2 = min(img.shape[0], y + h + margin)
-        
-        face_crop = img[y1:y2, x1:x2]
-        if face_crop.size == 0 or face_crop.shape[0] < 10 or face_crop.shape[1] < 10:
-            return None
-        
-        # Save to faces directory
-        faces_dir = job_dir / "faces"
-        faces_dir.mkdir(exist_ok=True)
-        
-        # Use PNG for better quality
-        crop_path = faces_dir / f"face_{face_idx:05d}.jpg"
-        success = cv2.imwrite(str(crop_path), face_crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        
-        if success:
-            return str(crop_path.relative_to(job_dir))
-        return None
-    except Exception as e:
-        logger.warning("Failed to save face crop: %s", e)
-        return None
-
-
-def _extract_face_bbox(face_bbox: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract face bbox as dict with x, y, w, h."""
     return {
-        "x": float(face_bbox.get("x", 0)),
-        "y": float(face_bbox.get("y", 0)),
-        "w": float(face_bbox.get("w", 0)),
-        "h": float(face_bbox.get("h", 0)),
-        "confidence": float(face_bbox.get("confidence", 0.0)) if "confidence" in face_bbox else None,
+        "video_path": str(video_path),
+        "tracks": tracks,
+        "persons": persons,
+        "unassigned_tracks": unassigned_tracks,
+        "track_to_person": track_to_person,
+        "output_dir": str(analysis_output_dir),
+        "persons_path": str(persons_path),
+        "track_identities_path": str(track_identity_path),
     }
 
 
-def track_persons_across_frames(
-    detections_by_image: List[Dict[str, Any]],
-    job_dir: Optional[Path] = None,
-    progress_cb: Optional[Callable[..., None]] = None,
-) -> Tuple[List[Person], List[Dict[str, Any]]]:
-    """Match detected persons across images using FaceNet embeddings + temporal cues.
+def _parse_bool(value: object) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "ja"}
 
-    Uses face embeddings for robust person matching across frames, regardless of
-    clothing changes, lighting variations, or partial occlusion.
 
-    Args:
-        detections_by_image: List of dicts with keys: image_path, timestamp_s, faces
-        job_dir: Optional job directory for saving face crops
-        progress_cb: Optional callback for progress updates (message, current, total)
-
-    Returns:
-        Tuple of (List of Person objects, List of face dicts)
+def _build_web_result(result: dict) -> tuple[pd.DataFrame, list[dict]]:
     """
-    persons: List[Person] = []
-    faces: List[Dict[str, Any]] = []  # All detected faces
-    next_person_id = 1
-    next_face_id = 1
-    total_images = len(detections_by_image)
+    Wandelt das neue Personenergebnis in das Format um,
+    das die bestehende descraibe-Web-App aktuell erwartet.
+    """
+    persons = result["persons"]
+    track_to_person = result["track_to_person"]
+    analysis_output_dir = Path(result["output_dir"])
+    face_manifest_path = analysis_output_dir / "face_observations.csv"
 
-    # Thresholds
-    TEMPORAL_GAP = 30.0  # seconds - max gap before considering different person
-    IOU_THRESHOLD = 0.2   # Low IoU threshold, relying more on embeddings
-    EMBEDDING_THRESHOLD = _EMBEDDING_THRESHOLD  # Cosine similarity threshold (0.7 default)
+    faces: list[dict] = []
 
-    # Initialize FaceNet extractor
-    embedding_extractor = FaceEmbeddingExtractor()
-    face_net_available = embedding_extractor._ensure_models()
-    if face_net_available:
-        logger.info("FaceNet embedding-based tracking enabled")
-    else:
-        logger.warning("FaceNet unavailable, falling back to IoU+color tracking")
+    if face_manifest_path.is_file():
+        with face_manifest_path.open("r", encoding="utf-8-sig", newline="") as file:
+            reader = csv.DictReader(file, delimiter=";")
 
-    def _emit(message: str, current: int) -> None:
-        if progress_cb:
-            try:
-                progress_cb(message, current, total_images)
-            except TypeError:
-                progress_cb(message)
+            for row in reader:
+                face_id = int(row["face_id"])
+                track_id = int(row["track_id"])
+                person_id = track_to_person.get(track_id)
 
-    _emit(f"Tracking persons across {total_images} frames…", 0)
+                relative_crop = str(row.get("person_crop_path", "")).replace("\\", "/")
+                crop_path = (Path("person_analysis") / relative_crop).as_posix()
 
-    for idx, detection in enumerate(detections_by_image):
-        image_path = detection["image_path"]
-        timestamp_s = detection["timestamp_s"]
-        faces_in_image = detection["faces"]
+                face_bbox = [
+                    int(float(row["face_x1"])),
+                    int(float(row["face_y1"])),
+                    int(float(row["face_x2"])),
+                    int(float(row["face_y2"])),
+                ]
 
-        if (idx + 1) % 20 == 0 or idx == total_images - 1:
-            _emit(f"Tracking persons: {idx + 1}/{total_images} frames…", idx + 1)
-
-        if not faces_in_image:
-            continue
-
-        # Load image for color extraction and embedding
-        img = cv2.imread(str(image_path))
-        if img is None:
-            continue
-
-        # Process each face in this frame
-        for face_bbox in faces_in_image:
-            # Extract face embedding
-            embedding = None
-            if face_net_available:
-                embedding = embedding_extractor.extract_from_image(img, face_bbox)
-
-            # Extract face color
-            face_color = _face_region_color(img, face_bbox)
-
-            # Extract face crop and save
-            crop_path = None
-            if job_dir is not None:
-                crop_path = _save_face_crop(img, face_bbox, job_dir, next_face_id)
-
-            # Create face record
-            face_record = {
-                "face_id": next_face_id,
-                "image_path": str(image_path),
-                "timestamp_s": timestamp_s,
-                "face_bbox": _extract_face_bbox(face_bbox),
-                "embedding": embedding.tolist() if embedding is not None else None,
-                "crop_path": crop_path,
-                "top_color": None,  # Will be filled later
-            }
-            faces.append(face_record)
-
-            # Try to match this face to existing persons
-            matched = False
-            for person in persons:
-                # Check temporal overlap
-                if timestamp_s - person.last_seen_ts > TEMPORAL_GAP:
-                    continue
-
-                # Check embedding similarity (primary match criterion)
-                if embedding is not None and person._embeddings:
-                    sim = person.embedding_similarity(embedding)
-                    if sim >= EMBEDDING_THRESHOLD:
-                        # Matched via face embedding!
-                        person_region = extract_person_region(img, face_bbox)
-                        attributes = extract_person_attributes(img, face_bbox, person_region)
-                        person.add_face(
-                            timestamp_s, image_path, face_bbox, face_id=next_face_id,
-                            attributes=attributes, embedding=embedding
-                        )
-                        person.update_color(face_color)
-                        matched = True
-                        break
-
-                # Fallback: IoU + color if embeddings not available/matched
-                if face_net_available and embedding is not None:
-                    continue  # Skip fallback if we have embeddings but no match
-
-                person_color = person.mean_color()
-                if _color_distance(face_color, person_color) > 100:  # Relaxed color threshold
-                    continue
-
-                if person.appearances:
-                    last_bbox = person.appearances[-1]["face_bbox"]
-                    if _compute_iou(face_bbox, last_bbox) < IOU_THRESHOLD:
-                        continue
-
-                # Matched via fallback!
-                person_region = extract_person_region(img, face_bbox)
-                attributes = extract_person_attributes(img, face_bbox, person_region)
-                person.add_face(
-                    timestamp_s, image_path, face_bbox, face_id=next_face_id,
-                    attributes=attributes, embedding=embedding
+                faces.append(
+                    {
+                        "face_id": face_id,
+                        "track_id": track_id,
+                        "person_id": int(person_id) if person_id is not None else None,
+                        "scene_id": int(row["scene_id"]),
+                        "frame_number": int(row["frame_number"]),
+                        "timestamp_s": float(row["timestamp_s"]),
+                        "crop_path": crop_path,
+                        "person_crop_path": crop_path,
+                        "bbox": face_bbox,
+                        "face_bbox": face_bbox,
+                        "confidence": float(row["face_confidence"]),
+                        "usable": _parse_bool(row["face_usable"]),
+                        "alignment_ok": _parse_bool(row["alignment_ok"]),
+                    }
                 )
-                person.update_color(face_color)
-                matched = True
-                break
 
-            # Create new person for unmatched face
-            if not matched:
-                person = Person(next_person_id, timestamp_s, embedding=embedding)
-                person_region = extract_person_region(img, face_bbox)
-                attributes = extract_person_attributes(img, face_bbox, person_region)
-                person.add_face(
-                    timestamp_s, image_path, face_bbox, face_id=next_face_id,
-                    attributes=attributes, embedding=embedding
-                )
-                person.update_color(face_color)
+    face_ids_by_person: dict[int, list[int]] = defaultdict(list)
+    faces_by_person: dict[int, list[dict]] = defaultdict(list)
 
-                # Try to detect name from this frame
-                name = detect_name_overlay(image_path)
-                if name:
-                    person.name = name
-                    person.description = f"{name}"
+    for face in faces:
+        person_id = face.get("person_id")
+        if person_id is None:
+            continue
+        face_ids_by_person[int(person_id)].append(int(face["face_id"]))
+        faces_by_person[int(person_id)].append(face)
 
-                persons.append(person)
-                next_person_id += 1
+    rows = []
 
-            next_face_id += 1
-
-    _emit(f"Building descriptions for {len(persons)} persons…", total_images)
-
-    # Post-process: build descriptions and update face colors
     for person in persons:
-        attrs = person.attributes
-        color_parts = []
-        if attrs.get("top_color"):
-            color_parts.append(f"{attrs['top_color']}es Oberteil")
-        if attrs.get("bottom_color"):
-            color_parts.append(f"{attrs['bottom_color']}e Hose/dunkle Hose")
+        person_id = int(person["person_id"])
+        person_faces = faces_by_person.get(person_id, [])
+        representative_crop = person_faces[0]["crop_path"] if person_faces else None
 
-        if color_parts:
-            person.description = f"{person.name or f'Person {person.person_id}'}: {', '.join(color_parts)}"
-        elif person.name:
-            person.description = person.name
-        else:
-            person.description = f"Person {person.person_id}"
+        rows.append(
+            {
+                "person_id": person_id,
+                "name": person.get("name", f"Person {person_id}"),
+                "function": person.get("function", ""),
+                "first_seen_ts": float(person["first_seen_ts"]),
+                "last_seen_ts": float(person["last_seen_ts"]),
+                "appearances_count": len(person.get("appearances", [])),
+                "face_ids": json.dumps(face_ids_by_person.get(person_id, [])),
+                "attributes": json.dumps(person.get("attributes", {}), ensure_ascii=False),
+                "description": "",
+                "representative_image": None,
+                "representative_crop": representative_crop,
+                "track_ids": json.dumps(person.get("track_ids", [])),
+                "segments": json.dumps(person.get("segments", [])),
+                "appearances": json.dumps(person.get("appearances", [])),
+            }
+        )
 
-        # Update face colors in the faces list
-        for face_id in person.face_ids:
-            for face in faces:
-                if face["face_id"] == face_id:
-                    face["top_color"] = attrs.get("top_color")
-                    break
+    persons_df = pd.DataFrame(rows)
 
-    logger.info("Tracked %d unique persons and %d faces across %d images", 
-                len(persons), len(faces), len(detections_by_image))
-    return persons, faces
+    if not persons_df.empty:
+        persons_df = persons_df.sort_values("first_seen_ts").reset_index(drop=True)
 
+    return persons_df, faces
 
-# ── Timestamp helpers (shared with image_extraction) ────────────────────────────
-
-_TS_RE = re.compile(r"^(\d{2})-(\d{2})-(\d{2})-(\d{3})$")
-
-
-def _extract_ts_from_filename(path: str) -> Optional[float]:
-    """Parse HH-MM-SS-mmm timestamp from a filename."""
-    parts = Path(path).stem.split("_")
-    for part in reversed(parts):
-        m = _TS_RE.match(part)
-        if m:
-            hh, mm, ss, ms = map(int, m.groups())
-            return hh * 3600 + mm * 60 + ss + ms / 1000.0
-    return None
-
-
-# ── Main entry point ────────────────────────────────────────────────────────────
 
 def analyze_persons(
-    scene_images: List[str],
-    job_dir: Optional[str] = None,
-    progress_cb: Optional[Callable[..., None]] = None,
-) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
-    """Analyze persons in scene images.
-
-    Args:
-        scene_images: List of image file paths (with HH-MM-SS-mmm timestamps in names)
-        job_dir: Optional job directory path for saving face crops
-        progress_cb: Optional callback for progress updates
-
-    Returns:
-        Tuple of (DataFrame with person info, List of face dicts)
-        DataFrame columns: person_id, name, first_seen_ts, last_seen_ts,
-        appearances_count, face_ids, attributes (JSON), description, representative_image
+    video_path: str | Path,
+    job_dir: str | None = None,
+    progress_cb=None,
+) -> tuple[pd.DataFrame, list[dict]]:
     """
-    _emit_progress(progress_cb, "Detecting persons in images…", 0, len(scene_images))
+    Öffentliche Schnittstelle für backend/app.py.
 
-    detections_by_image: List[Dict[str, Any]] = []
-
-    for idx, img_path in enumerate(scene_images):
-        timestamp_s = _extract_ts_from_filename(img_path) or 0.0
-        faces = detect_faces_in_image(img_path)
-
-        detections_by_image.append({
-            "image_path": img_path,
-            "timestamp_s": timestamp_s,
-            "faces": faces,
-        })
-
-        if (idx + 1) % 10 == 0 or idx == len(scene_images) - 1:
-            _emit_progress(
-                progress_cb,
-                f"Detecting faces in image {idx + 1}/{len(scene_images)}…",
-                idx + 1,
-                len(scene_images),
-            )
-
-    _emit_progress(progress_cb, "Tracking persons across frames…")
-    job_dir_path = Path(job_dir) if job_dir else None
-    persons, faces = track_persons_across_frames(
-        detections_by_image, job_dir=job_dir_path, progress_cb=progress_cb
+    Rückgabe bleibt kompatibel zur bisherigen Web-App:
+        persons_df, faces
+    """
+    result = _analyze_video(
+        video_path=video_path,
+        job_dir=job_dir,
+        progress_cb=progress_cb,
     )
 
-    # Build DataFrame
-    rows = []
-    for person in persons:
-        # Pick representative image and crop from first appearance
-        rep_image = None
-        rep_crop = None
-        if person.appearances:
-            rep_image = person.appearances[0].get("image_path")
-            # Find the corresponding face crop
-            first_face_id = person.face_ids[0] if person.face_ids else None
-            if first_face_id:
-                for face in faces:
-                    if face["face_id"] == first_face_id:
-                        rep_crop = face.get("crop_path")
-                        break
+    persons_df, faces = _build_web_result(result)
 
-        rows.append({
-            "person_id": person.person_id,
-            "name": person.name,
-            "first_seen_ts": person.first_seen_ts,
-            "last_seen_ts": person.last_seen_ts,
-            "appearances_count": len(person.appearances),
-            "face_ids": json.dumps(person.face_ids),
-            "attributes": json.dumps(person.attributes),
-            "description": person.description,
-            "representative_image": rep_image,
-            "representative_crop": rep_crop,
-        })
+    if progress_cb:
+        progress_cb(
+            f"Personenanalyse abgeschlossen: {len(persons_df)} Personen",
+            100,
+            100,
+        )
 
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.sort_values("first_seen_ts").reset_index(drop=True)
+    return persons_df, faces
 
-    _emit_progress(progress_cb, f"Person analysis complete: {len(persons)} persons, {len(faces)} faces", len(scene_images), len(scene_images))
-    return df, faces
+
+def print_person_summary(result: dict) -> None:
+    print()
+    print("PERSONEN")
+    print("========")
+
+    for person in result["persons"]:
+        track_text = ", ".join(str(track_id) for track_id in person["track_ids"])
+        appearance_text = ", ".join(
+            f"{appearance['start_s']:.2f}–{appearance['end_s']:.2f}"
+            for appearance in person["appearances"]
+        )
+        print(
+            f"Person {person['person_id']:03d} | "
+            f"Tracks: {track_text} | Zeiten: {appearance_text}"
+        )
+
+    print()
+    print("NICHT ZUGEORDNETE TRACKS")
+    print("========================")
+
+    for track in result["unassigned_tracks"]:
+        print(
+            f"Track {int(track['track_id']):03d} | "
+            f"Szene {int(track['scene_id'])} | "
+            f"{float(track['start_s']):.2f}–{float(track['end_s']):.2f} s | "
+            f"Faces {int(track.get('faces_usable', 0))}/{int(track.get('faces_assigned', 0))}"
+        )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="descraibe-Personenanalyse")
+    parser.add_argument("video", type=Path, help="Pfad zur Videodatei")
+    args = parser.parse_args()
+
+    result = _analyze_video(args.video)
+    print_person_summary(result)
+
+
+if __name__ == "__main__":
+    main()
