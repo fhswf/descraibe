@@ -36,6 +36,10 @@ export interface JobData {
   slots_count?: number;
   images_count?: number;
   persons_count?: number;
+  persons_analyzed?: boolean;
+  persons_version?: string;
+  person_stages?: { tracking_ready: boolean; identities_ready: boolean; identities_stale: boolean; legacy: boolean; face_review_version?: string; tracking_run?: string; identity_run?: string };
+  unassigned_tracks_count?: number;
   gpt_records_broadcast?: unknown;
   gpt_records_directors?: unknown;
   final_mp4_path?: string;
@@ -90,6 +94,50 @@ export interface Person {
   embedding?: number[];
   face_path?: string;
 }
+
+export interface PersonData {
+  person_id: number; name?: string; description?: string; function?: string;
+  track_ids: number[];
+  appearances: Array<{ start_s: number; end_s: number }>;
+  appearances_count: number; first_seen_ts: number; last_seen_ts: number;
+  representative_crop?: string | null; representative_crop_id?: number | null;
+}
+
+export interface PersonTrack {
+  source_track_id?: number; is_split?: boolean;
+  track_id: number; scene_id: number; person_id: number | null; original_person_id: number | null;
+  start_s: number; end_s: number; crop_count: number;
+  start_frame: number | null; end_frame: number | null;
+  facemoe_observation_count: number; review_observation_count: number;
+  review_mode: 'facemoe' | 'retinaface' | 'legacy_unverified' | 'fallback';
+}
+
+export interface PersonCrop {
+  source_track_id?: number; preview_frame?: boolean;
+  crop_id: number; track_id: number; frame_number: number; timestamp_s: number;
+  width: number; height: number; face_bbox: [number, number, number, number] | null;
+  face_id: number | null; excluded: boolean;
+  evidence_status: 'facemoe' | 'retinaface' | 'legacy_unverified' | 'fallback';
+}
+
+export interface PersonReview {
+  persons: PersonData[]; tracks: PersonTrack[]; unassigned_tracks: PersonTrack[];
+  version: string; analysis_id: string; revision: number; review_available: boolean; warning?: string;
+  excluded_face_observations: number[]; legacy_evidence: boolean;
+  tracking_ready?: boolean; identities_ready?: boolean; identities_stale?: boolean;
+}
+
+export interface FaceReview {
+  tracks: Array<PersonTrack & { observations: PersonCrop[]; quality_face_count: number; split_options: Array<{ before_frame: number; left_end_s: number; right_start_s: number }> }>;
+  split_available: boolean; original_tracks_count: number;
+  version: string; analysis_id: string; excluded_face_observations: number[]; identities_stale: boolean;
+}
+
+export type TrackingChange = { action: 'split'; track_id: number; before_frame: number } | { action: 'undo_split'; source_track_id: number };
+
+export type TrackChange = { track_id: number } & (
+  { action: 'assign'; person_id: number } | { action: 'unassign' } | { action: 'create_person' }
+);
 
 export interface GPTResult {
   id: string;
@@ -238,7 +286,7 @@ export interface JobContextValue {
   focusedSlot: number | null;
   setFocusedSlot: (_id: number | null) => void;
   createJob: () => Promise<string | null>;
-  fetchJobData: (_jobId: string) => Promise<void>;
+  fetchJobData: (_jobId: string, _preserveStep?: boolean) => Promise<void>;
   srtTexts: Record<string, string>;
   setSrtTexts: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   isSavingSrt: boolean;
@@ -265,6 +313,7 @@ export interface JobContextValue {
   handleRunSlots: () => Promise<void>;
   handleRunImages: () => Promise<void>;
   handleRunPersons: () => Promise<void>;
+  handleRunTracking: () => Promise<void>;
   handleRunGPT: () => Promise<void>;
   handleUpdateGPTRecord: (_recordId: string, _updates: Partial<GPTRecord>) => void;
   handleRunTTS: () => Promise<void>;

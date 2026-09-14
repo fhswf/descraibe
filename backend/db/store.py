@@ -378,18 +378,20 @@ class DataStore:
 
     # ── Person storage ─────────────────────────────────────────────────────────
 
-    def store_persons(self, job_id: str, persons_list: list[dict[str, Any]]) -> None:
+    def store_persons(self, job_id: str, persons_list: list[dict[str, Any]]) -> bool:
         """Store or update person records for a job."""
         if not job_id:
-            return
+            return False
 
         if not self.enabled:
             self.logger.debug("DB not enabled, persons stored in Parquet only")
-            return
+            return True
 
         try:
             with self._psycopg.connect(self.database_url) as conn:
                 with conn.cursor() as cur:
+                    # File-backed jobs do not otherwise create their optional DB parent.
+                    cur.execute("INSERT INTO jobs(id, status) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING", (job_id, "idle"))
                     if persons_list:
                         keep_ids = [int(p.get("person_id", 0)) for p in persons_list]
                         placeholders = ",".join(["%s"] * len(keep_ids))
@@ -404,8 +406,15 @@ class DataStore:
                         )
 
                     for person in persons_list:
-                        attributes_json = json.dumps(person.get("attributes") or {}, ensure_ascii=False)
-                        appearances_json = json.dumps(person.get("appearances") or [], ensure_ascii=False)
+                        def normalized(value, expected_type):
+                            if isinstance(value, str):
+                                try:
+                                    value = json.loads(value)
+                                except ValueError:
+                                    value = None
+                            return value if isinstance(value, expected_type) else expected_type()
+                        attributes_json = json.dumps(normalized(person.get("attributes"), dict), ensure_ascii=False)
+                        appearances_json = json.dumps(normalized(person.get("appearances"), list), ensure_ascii=False)
                         cur.execute(
                             """
                             INSERT INTO job_persons (
@@ -415,6 +424,7 @@ class DataStore:
                             ON CONFLICT (job_id, person_id) DO UPDATE SET
                                 name = EXCLUDED.name,
                                 attributes = EXCLUDED.attributes,
+                                first_seen_ts = EXCLUDED.first_seen_ts,
                                 last_seen_ts = EXCLUDED.last_seen_ts,
                                 description = EXCLUDED.description,
                                 appearances = EXCLUDED.appearances
@@ -432,8 +442,10 @@ class DataStore:
                         )
                     conn.commit()
             self.logger.info("Stored %d persons for job %s", len(persons_list), job_id)
+            return True
         except Exception as exc:
             self.logger.warning("DB store_persons failed: %s", exc)
+            return False
 
     def get_persons(self, job_id: str) -> list[dict[str, Any]]:
         """Retrieve person records for a job."""

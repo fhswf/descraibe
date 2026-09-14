@@ -16,6 +16,8 @@ import type {
   ProgressData,
 } from '../types';
 
+import { STEP } from '../workflow';
+
 const JobContext = createContext<JobContextValue | null>(null);
 const SAVED_JOBS_STORAGE_KEY = 'descrAIbe.savedJobIds';
 const SAVED_JOB_META_STORAGE_KEY = 'descrAIbe.savedJobMeta';
@@ -161,6 +163,7 @@ interface JobProviderProps {
 }
 
 export function JobProvider({ children }: JobProviderProps) {
+    const completedPersonEvents = useRef(new Set<string>());
     const initialSettings = useMemo(() => readUserSettings(), []);
     const [jobId, setJobId] = useState<string | null>(() => {
         const params = new URLSearchParams(window.location.search);
@@ -535,7 +538,7 @@ export function JobProvider({ children }: JobProviderProps) {
         }
     }, [jobId, srtTexts, setIsSavingSrt]);
 
-    const fetchJobData = useCallback(async (id: string): Promise<void> => {
+    const fetchJobData = useCallback(async (id: string, preserveStep = false): Promise<void> => {
         try {
             const res = await fetch(`/api/jobs/${id}`, {
                 cache: 'no-store',
@@ -553,19 +556,21 @@ export function JobProvider({ children }: JobProviderProps) {
                 if (data.transcript_meta) newDone.add(2);
                 if ((data.slots_count ?? 0) > 0) newDone.add(3);
                 if ((data.images_count ?? 0) > 0) newDone.add(4);
-                if ((data.persons_count ?? 0) > 0) newDone.add(5);
-                if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(6);
-                if (data.final_mp4_path) newDone.add(7);
+                const legacyPersons = data.person_stages?.legacy && (data.persons_analyzed || (data.persons_count ?? 0) > 0);
+                if (data.person_stages?.tracking_ready || legacyPersons) newDone.add(STEP.tracking);
+                if ((data.person_stages?.identities_ready && !data.person_stages.identities_stale) || legacyPersons) newDone.add(STEP.identities);
+                if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(STEP.gpt);
+                if (data.final_mp4_path) newDone.add(STEP.tts);
                 setDoneSteps(newDone);
 
-                let targetStep = 0;
-                for (let i = 0; i <= 7; i++) {
+                let targetStep: number = STEP.results;
+                for (let i = 0; i <= STEP.tts; i++) {
                     if (!newDone.has(i)) {
                         targetStep = i;
                         break;
                     }
                 }
-                setCurrentStep(targetStep);
+                if (!preserveStep) setCurrentStep(targetStep);
 
                 // Restore progress if job is running and we have latest progress
                 const latestProgress = data.latest_progress;
@@ -680,19 +685,12 @@ export function JobProvider({ children }: JobProviderProps) {
 
     const markJobStarted = useCallback((step: string, message: string): void => {
         if (!jobId) return;
-        const stepIndexes: Record<string, number> = {
-            vad: 1,
-            transcribe: 2,
-            slots: 3,
-            images: 4,
-            gpt: 5,
-            tts: 6
-        };
+        const stepIndexes: Record<string, number> = { ...STEP, persons: STEP.identities };
         const startedStepIndex = stepIndexes[step];
         if (startedStepIndex !== undefined) {
             setDoneSteps(prev => {
                 const next = new Set(prev);
-                for (let i = startedStepIndex; i <= 7; i += 1) {
+                for (let i = startedStepIndex; i <= STEP.tts; i += 1) {
                     next.delete(i);
                 }
                 return next;
@@ -778,18 +776,23 @@ export function JobProvider({ children }: JobProviderProps) {
         } catch (err) { alert("Error: " + (err as Error).message); setIsRunAllActive(false); }
     }, [jobId, imagesParams, markJobStarted]);
 
+    const handleRunTracking = useCallback(async (): Promise<void> => {
+        if (!jobId) return;
+        try {
+            markJobStarted('tracking', 'Tracking & Gesichter starten …');
+            const res = await fetch(`/api/jobs/${jobId}/person-analysis/tracking`, { method: 'POST' });
+            if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Tracking konnte nicht gestartet werden.'); }
+        } catch (err) { setIsRunAllActive(false); void fetchJobData(jobId, true); alert((err as Error).message); }
+    }, [jobId, markJobStarted, fetchJobData]);
+
     const handleRunPersons = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         try {
-            const res = await fetch(`/api/jobs/${jobId}/persons`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({})
-            });
-            if (!res.ok) throw new Error("Failed to analyze persons");
-            markJobStarted('persons', 'Personen analysieren...');
-        } catch (err) { alert("Error: " + (err as Error).message); setIsRunAllActive(false); }
-    }, [jobId, markJobStarted]);
+            markJobStarted('identities', 'Personen & Cluster starten …');
+            const res = await fetch(`/api/jobs/${jobId}/person-analysis/identities`, { method: 'POST' });
+            if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Personen & Cluster konnte nicht gestartet werden.'); }
+        } catch (err) { setIsRunAllActive(false); void fetchJobData(jobId, true); alert((err as Error).message); }
+    }, [jobId, markJobStarted, fetchJobData]);
 
     const handleRunGPT = useCallback(async (): Promise<void> => {
         if (!jobId) return;
@@ -855,6 +858,26 @@ export function JobProvider({ children }: JobProviderProps) {
         const { event, data } = payload;
 
         if (event === 'ping' || event === 'connected') return;
+        if (event === 'persons_updated') {
+            void fetchJobData(jobId, true);
+            return;
+        }
+
+        if (event === 'tracking_done' || event === 'identities_done') {
+            const key = `${jobId}:${event}:${String(data.stage_version)}`;
+            if (completedPersonEvents.current.has(key)) return;
+            completedPersonEvents.current.add(key);
+            const step = event === 'tracking_done' ? STEP.tracking : STEP.identities;
+            void fetchJobData(jobId, true);
+            setDoneSteps(prev => new Set(prev).add(step));
+            setCurrentStep(isRunAllActive ? step + 1 : step);
+            setProgressData(prev => ({ ...prev, [event === 'tracking_done' ? 'tracking' : 'identities']: null }));
+            if (isRunAllActive) {
+                if (event === 'tracking_done') void handleRunPersons();
+                else void handleRunGPT();
+            }
+            return;
+        }
 
         if (event === 'progress') {
             const step = String(data.step);
@@ -872,6 +895,7 @@ export function JobProvider({ children }: JobProviderProps) {
                 }
             }));
         } else if (event === 'error') {
+            setIsRunAllActive(false);
             const step = String(data.step);
             updateSavedJobMeta(jobId, {
                 status: 'error',
@@ -902,12 +926,12 @@ export function JobProvider({ children }: JobProviderProps) {
                 setCurrentStep(5);
                 setProgressData(prev => ({ ...prev, images: null }));
             } else if (event === 'persons_done') {
-                setDoneSteps(prev => new Set(prev).add(5));
-                setCurrentStep(6);
+                setDoneSteps(prev => new Set(prev).add(STEP.tracking).add(STEP.identities));
+                setCurrentStep(STEP.gpt);
                 setProgressData(prev => ({ ...prev, persons: null }));
             } else if (event === 'gpt_done') {
-                setDoneSteps(prev => new Set(prev).add(6));
-                setCurrentStep(7);
+                setDoneSteps(prev => new Set(prev).add(STEP.gpt));
+                setCurrentStep(STEP.tts);
                 fetchJobData(jobId); // Need full update for outputs
                 setProgressData(prev => ({ ...prev, gpt: null }));
                 if ((Number(data.error_count) || 0) > 0) {
@@ -915,8 +939,8 @@ export function JobProvider({ children }: JobProviderProps) {
                     alert(`${data.error_count} GPT-Slot(s) konnten nicht generiert werden. Bitte im Slot Manager prüfen oder GPT erneut starten.`);
                 }
             } else if (event === 'tts_done') {
-                setDoneSteps(prev => new Set(prev).add(7));
-                setCurrentStep(8);
+                setDoneSteps(prev => new Set(prev).add(STEP.tts));
+                setCurrentStep(STEP.results);
                 fetchJobData(jobId);
                 setProgressData(prev => ({ ...prev, tts: null }));
                 setIsRunAllActive(false); // Finished all automatic steps
@@ -933,7 +957,7 @@ export function JobProvider({ children }: JobProviderProps) {
                 } else if (event === 'slots_done') {
                     handleRunImages();
                 } else if (event === 'images_done') {
-                    handleRunPersons();
+                    handleRunTracking();
                 } else if (event === 'persons_done') {
                     handleRunGPT();
                 } else if (event === 'gpt_done' && !(data.error_count || 0)) {
@@ -944,7 +968,7 @@ export function JobProvider({ children }: JobProviderProps) {
     }, [
         jobId, fetchJobData, updateSavedJobMeta, setProgressData, setDoneSteps,
         setCurrentStep, isRunAllActive, handleRunTranscribe, handleRunSlots,
-        handleRunImages, handleRunPersons, handleRunGPT, handleRunTTS
+        handleRunImages, handleRunTracking, handleRunPersons, handleRunGPT, handleRunTTS
     ]);
 
     useEffect(() => {
@@ -978,11 +1002,12 @@ export function JobProvider({ children }: JobProviderProps) {
         else if (!doneSteps.has(2)) handleRunTranscribe();
         else if (!doneSteps.has(3)) handleRunSlots();
         else if (!doneSteps.has(4)) handleRunImages();
-        else if (!doneSteps.has(5)) handleRunPersons();
-        else if (!doneSteps.has(6)) handleRunGPT();
-        else if (!doneSteps.has(7)) handleRunTTS();
+        else if (!doneSteps.has(STEP.tracking)) handleRunTracking();
+        else if (!doneSteps.has(STEP.identities)) handleRunPersons();
+        else if (!doneSteps.has(STEP.gpt)) handleRunGPT();
+        else if (!doneSteps.has(STEP.tts)) handleRunTTS();
         else setIsRunAllActive(false); // all done
-    }, [doneSteps, handleRunGPT, handleRunPersons, handleRunImages, handleRunSlots, handleRunTTS, handleRunTranscribe, handleRunVAD, jobId]);
+    }, [doneSteps, handleRunTracking, handleRunGPT, handleRunPersons, handleRunImages, handleRunSlots, handleRunTTS, handleRunTranscribe, handleRunVAD, jobId]);
 
     const stopRunAll = useCallback((): void => {
         setIsRunAllActive(false);
@@ -1043,6 +1068,7 @@ export function JobProvider({ children }: JobProviderProps) {
         handleRunTranscribe,
         handleRunSlots,
         handleRunImages,
+        handleRunTracking,
         handleRunPersons,
         handleRunGPT,
         handleUpdateGPTRecord,
@@ -1061,7 +1087,7 @@ export function JobProvider({ children }: JobProviderProps) {
         isConfigModalOpen, setIsConfigModalOpen, gptParams, setGptParams, availableModels, setAvailableModels,
         vadParams, setVadParams, transcribeParams, setTranscribeParams, slotsParams, setSlotsParams,
         ttsParams, setTtsParams, imagesParams, setImagesParams, handleRunVAD, handleRunTranscribe,
-        handleRunSlots, handleRunImages, handleRunPersons, handleRunGPT, handleUpdateGPTRecord, handleRunTTS, runAllSteps,
+        handleRunSlots, handleRunImages, handleRunTracking, handleRunPersons, handleRunGPT, handleUpdateGPTRecord, handleRunTTS, runAllSteps,
         isRunAllActive, stopRunAll, authState, login, logout, refreshAuthState
     ]);
 

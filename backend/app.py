@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException, Body
-from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse, Response
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -33,7 +33,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from event_bus import BusEvent, event_bus
-import session_manager as sm
+from backend import session_manager as sm
+from backend.pipeline.persons import review_artifacts, stage_state
 from db.store import DataStore
 
 # Pipeline modules are imported lazily inside route handlers to avoid
@@ -1320,6 +1321,110 @@ def run_images(job_id: str, body: dict = Body(default={})):
 
 # ── Person Analysis ─────────────────────────────────────────────────────────────
 
+def _start_person_stage(job_id: str, phase: str):
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    if not job.get("video_path"):
+        return JSONResponse({"error": "Video not available."}, status_code=400)
+    try:
+        if phase == "identities" and not stage_state.active(job["job_dir"]):
+            raise review_artifacts.ReviewError("Bitte zuerst Tracking & Gesichter ausführen.", 409)
+        sm.begin_person_stage(job_id, phase)
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+    def run():
+        sm.job_id_var.set(job_id)
+        try:
+            from backend.pipeline.persons.tracking_stage import run_tracking
+            from backend.pipeline.persons.identity_stage import run_identities
+            def progress(message, current=None, total=None):
+                _push_progress(job_id, phase, message, current or 0, total or 100)
+            (run_tracking if phase == "tracking" else run_identities)(job["video_path"], job["job_dir"], progress)
+            sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
+            sm.set_status(job_id, "idle")
+            _push(job_id, f"{phase}_done", {"stage_version": stage_state.status(job["job_dir"])["tracking_run" if phase == "tracking" else "identity_run"]})
+        except Exception as exc:
+            sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
+            sm.set_status(job_id, "error", str(exc))
+            _push(job_id, "error", {"step": phase, "message": str(exc)})
+    _mark_step_running(job_id, phase, "Personenschritt gestartet …")
+    _start_worker(job_id, phase, run)
+    return {"status": "started"}
+
+
+@app.post("/api/jobs/{job_id}/person-analysis/tracking")
+def run_tracking_stage(job_id: str):
+    return _start_person_stage(job_id, "tracking")
+
+
+@app.post("/api/jobs/{job_id}/person-analysis/identities")
+def run_identity_stage(job_id: str):
+    return _start_person_stage(job_id, "identities")
+
+
+@app.get("/api/jobs/{job_id}/person-analysis/tracking")
+def get_face_review(job_id: str):
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    try:
+        return stage_state.face_snapshot(job["job_dir"])
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+
+@app.patch("/api/jobs/{job_id}/person-analysis/face-review")
+def save_face_review(job_id: str, body: dict = Body(...)):
+    if not sm.get_job(job_id):
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    try:
+        result = sm.mutate_face_review(job_id, body)
+        _push(job_id, "persons_updated", {"face_review_version": result["version"]})
+        return result
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+
+@app.get("/api/jobs/{job_id}/person-analysis/tracking-frame/{source_track_id}/{frame_number}")
+def tracking_frame_preview(job_id: str, source_track_id: int, frame_number: int, analysis_id: str):
+    """Body fallback for a logical segment. Encoded in RAM, never written to disk."""
+    job = sm.get_job(job_id)
+    if not job:
+        raise HTTPException(404, ERR_UNKNOWN_JOB)
+    from backend.pipeline.persons import track_segments
+    try:
+        data = review_artifacts.load_tracking(job["job_dir"])
+        if data.analysis_id != analysis_id:
+            raise review_artifacts.ReviewError("Analyselauf wurde geändert. Bitte neu laden.", 409)
+        row = next((r for r in track_segments.timeline(str(data.root)).get(source_track_id, []) if r["frame_number"] == frame_number), None)
+        if row is None:
+            raise review_artifacts.ReviewError("Trackingframe nicht gefunden.", 404)
+        import cv2
+        capture = cv2.VideoCapture(str(job["video_path"]))
+        try:
+            # Sequential grabbing preserves the exact frame index for interframe codecs.
+            for _ in range(frame_number):
+                if not capture.grab():
+                    raise review_artifacts.ReviewError("Originalframe nicht verfügbar.", 404)
+            ok, frame = capture.retrieve()
+            if not ok:
+                raise review_artifacts.ReviewError("Originalframe nicht verfügbar.", 404)
+            x1, y1, x2, y2 = map(round, row["bbox"])
+            height, width = frame.shape[:2]
+            crop = frame[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
+            if not crop.size:
+                raise review_artifacts.ReviewError("Personencrop nicht verfügbar.", 404)
+            ok, encoded = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if not ok:
+                raise review_artifacts.ReviewError("Personencrop nicht verfügbar.", 404)
+            return Response(encoded.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+        finally:
+            capture.release()
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
 @app.post("/api/jobs/{job_id}/persons")
 def run_persons(job_id: str, body: dict = Body(default={})):
     from pipeline import person_analysis as persons_mod
@@ -1328,6 +1433,10 @@ def run_persons(job_id: str, body: dict = Body(default={})):
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
     if not job.get("video_path"):
         return JSONResponse({"error": "Video not available."}, status_code=400)
+    try:
+        sm.begin_person_stage(job_id, "persons")
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
     def run():
         sm.job_id_var.set(job_id)
@@ -1349,7 +1458,7 @@ def run_persons(job_id: str, body: dict = Body(default={})):
             )
 
             # Store faces list in job state
-            sm.update_job(job_id, persons_df=persons_df, faces=faces)
+            sm.update_job(job_id, persons_df=persons_df, faces=faces, persons_analysis_running=False)
 
             # Persist persons to PostgreSQL if enabled
             if _DATASTORE.enabled and persons_df is not None and not persons_df.empty:
@@ -1363,6 +1472,7 @@ def run_persons(job_id: str, body: dict = Body(default={})):
                 "faces_count": len(faces),
             })
         except Exception as exc:
+            sm.update_job(job_id, persons_analysis_running=False)
             sm.set_status(job_id, "error", str(exc))
             _push(job_id, "error", {"step": "persons", "message": str(exc)})
 
@@ -1377,6 +1487,13 @@ def get_persons(job_id: str):
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+
+    if job.get("persons_analysis_running"):
+        return JSONResponse({"error": "Personenanalyse läuft noch."}, status_code=409)
+    if job.get("person_review_error"):
+        return JSONResponse({"error": job["person_review_error"]}, status_code=409)
+    if job.get("person_review"):
+        return _review_response(job_id, job["person_review"])
 
     persons_df = job.get("persons_df")
     if persons_df is None or persons_df.empty:
@@ -1413,6 +1530,93 @@ def get_persons(job_id: str):
                 person["representative_image"] = closest
 
     return {"persons": persons_list}
+
+
+_REVIEW_DB_LOCK = threading.Lock()
+
+
+def _review_response(job_id: str, result: dict) -> dict:
+    """Optional PostgreSQL projection; the durable JSON remains authoritative."""
+    response = dict(result)
+    if _DATASTORE.enabled:
+        # Requests can finish out of order. Always mirror the latest projection
+        # inside this lock so an older request cannot overwrite a newer save.
+        with _REVIEW_DB_LOCK:
+            latest = (sm.get_job(job_id) or {}).get("person_review")
+            synced = bool(latest) and _DATASTORE.store_persons(job_id, latest["persons"])
+        response["database_sync"] = "synced" if synced else "pending"
+        if not synced:
+            response["warning"] = "Personenstand ist lokal gespeichert; die Datenbank-Synchronisierung steht noch aus."
+    return response
+
+
+def _review_change(job_id: str, operation: str, body: dict):
+    try:
+        result = sm.mutate_person_review(job_id, body.get("version"), operation, body)
+        response = _review_response(job_id, result)
+        _push(job_id, "persons_updated", {"persons_count": len(result["persons"]), "version": result["version"]})
+        return response
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+
+@app.post("/api/jobs/{job_id}/track-assignments")
+def assign_tracks(job_id: str, body: dict = Body(...)):
+    if not sm.get_job(job_id):
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    return _review_change(job_id, "assign", body)
+
+
+def _review_job(job_id: str) -> dict:
+    job = sm.get_job(job_id)
+    if not job:
+        raise HTTPException(404, ERR_UNKNOWN_JOB)
+    if job.get("persons_analysis_running"):
+        raise HTTPException(409, "Personenanalyse läuft noch.")
+    if job.get("person_review_error") or not job.get("person_review"):
+        raise HTTPException(409, job.get("person_review_error") or "Track-Daten sind noch nicht verfügbar.")
+    return job
+
+
+@app.get("/api/jobs/{job_id}/persons/{person_id}/tracks")
+def get_person_tracks(job_id: str, person_id: int):
+    result = _review_job(job_id)["person_review"]
+    if not any(p["person_id"] == person_id for p in result["persons"]):
+        raise HTTPException(404, "Person nicht gefunden.")
+    return {"tracks": [t for t in result["tracks"] if t["person_id"] == person_id], "version": result["version"]}
+
+
+@app.get("/api/jobs/{job_id}/tracks/unassigned")
+def get_unassigned_tracks(job_id: str):
+    result = _review_job(job_id)["person_review"]
+    return {"tracks": result["unassigned_tracks"], "version": result["version"]}
+
+
+@app.get("/api/jobs/{job_id}/tracks/{track_id}/crops")
+def get_track_crops(job_id: str, track_id: int, limit: int = 8):
+    """All review evidence; legacy limit never hides identity observations."""
+    job = _review_job(job_id)
+    try:
+        data = review_artifacts.load(job["job_dir"])
+        snapshot = job["person_review"]
+        return {"crops": data.review_crops(track_id, set(snapshot["excluded_face_observations"])),
+                "analysis_id": data.analysis_id, "version": snapshot["version"]}
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+
+@app.get("/api/jobs/{job_id}/person-crops/{crop_id}")
+def get_person_crop(job_id: str, crop_id: int, analysis_id: str | None = None):
+    job = _review_job(job_id)
+    try:
+        data = review_artifacts.load(job["job_dir"])
+        if data.staged and analysis_id != data.analysis_id:
+            data = review_artifacts.load_tracking(job["job_dir"])
+        if analysis_id is not None and analysis_id != data.analysis_id:
+            raise review_artifacts.ReviewError("Der Personencrop gehört zu einem anderen Analyselauf.", 409)
+        return FileResponse(data.crop_file(crop_id), media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
 
 @app.get("/api/jobs/{job_id}/persons/merge-suggestions")
@@ -1509,6 +1713,8 @@ def merge_persons(job_id: str, body: dict = Body(...)):
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    if review_artifacts.available(job["job_dir"]):
+        return _review_change(job_id, "merge", body)
 
     source_id = body.get("source_person_id")
     target_id = body.get("target_person_id")
@@ -1597,6 +1803,8 @@ def update_person(job_id: str, person_id: int, body: dict = Body(...)):
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    if review_artifacts.available(job["job_dir"]):
+        return _review_change(job_id, "metadata", {**body, "person_id": person_id})
 
     persons_df = job.get("persons_df")
     if persons_df is None or persons_df.empty:
@@ -1625,11 +1833,13 @@ def update_person(job_id: str, person_id: int, body: dict = Body(...)):
 
 
 @app.delete("/api/jobs/{job_id}/persons/{person_id}")
-def delete_person(job_id: str, person_id: int):
+def delete_person(job_id: str, person_id: int, body: dict = Body(default={})):
     """Delete a person from the job."""
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    if review_artifacts.available(job["job_dir"]):
+        return _review_change(job_id, "delete", {**body, "source_person_id": person_id})
 
     persons_df = job.get("persons_df")
     if persons_df is None or persons_df.empty:
@@ -2189,6 +2399,10 @@ def get_job(job_id: str, request: Request):
         "slots_count": len(job["slots_df"]) if job.get("slots_df") is not None else 0,
         "images_count": len(job["scene_images"]) if job.get("scene_images") else 0,
         "persons_count": len(job["persons_df"]) if job.get("persons_df") is not None else 0,
+        "persons_analyzed": bool((job.get("person_review") or {}).get("review_available")) and not job.get("person_review_error") and not job.get("persons_analysis_running"),
+        "persons_version": (job.get("person_review") or {}).get("version"),
+        "unassigned_tracks_count": len((job.get("person_review") or {}).get("unassigned_tracks", [])),
+        "person_stages": stage_state.status(job["job_dir"]) if not job.get("person_review_error") else {"error": job["person_review_error"]},
         
         # Timeline data
         "pauses": make_serializable(job.get("pauses_df")),
@@ -2231,6 +2445,9 @@ def build_hateoas_links(job: dict, base_url: str):
         {"rel": "upload-srt", "href": f"{base}/api/jobs/{jid}/srt", "method": "POST"}
     ]
     if job.get("video_path"):
+        links.append({"rel": "run-tracking", "href": f"{base}/api/jobs/{jid}/person-analysis/tracking", "method": "POST"})
+        if stage_state.active(job["job_dir"]):
+            links.append({"rel": "run-identities", "href": f"{base}/api/jobs/{jid}/person-analysis/identities", "method": "POST"})
         links.append({"rel": "run-vad", "href": f"{base}/api/jobs/{jid}/vad", "method": "POST"})
         links.append({"rel": "run-transcribe", "href": f"{base}/api/jobs/{jid}/transcribe", "method": "POST"})
         
@@ -2465,6 +2682,8 @@ def merge_faces(job_id: str, body: dict = Body(...)):
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    if review_artifacts.available(job["job_dir"]):
+        return JSONResponse({"error": "Dieser Job verwendet ganze Tracks. Bitte die Track-Verwaltung verwenden."}, status_code=409)
 
     action = body.get("action")  # "merge_to_person" or "split_from_person"
     face_ids = body.get("face_ids", [])  # List of face IDs to move

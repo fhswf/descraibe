@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import json
+import math
 from pathlib import Path
 
 
@@ -77,6 +79,8 @@ class FaceObservationWriter:
                 "face_usable",
                 "blur_score",
                 "alignment_ok",
+                "embedding_created",
+                "landmarks", "face_crop_box", "frame_face_bbox",
             ],
             delimiter=";",
         )
@@ -139,13 +143,16 @@ class FaceObservationWriter:
         frame_number: int,
         person_bbox,
         face_bbox,
-        person_crop_path: str | Path,
+        person_crop_path: str | Path | None,
         frame_width: int,
         frame_height: int,
         face_confidence: float,
         face_usable: bool,
         blur_score: float | None,
-        alignment_ok: bool,
+        alignment_ok: bool | None = None,
+        embedding_created: bool | None = None,
+        landmarks=None,
+        face_crop_box=None,
     ) -> int:
         """
         Speichert eine Gesichtsbeobachtung.
@@ -261,21 +268,10 @@ class FaceObservationWriter:
             frame_number - 1
         ) / self.fps
 
-        person_crop_path = Path(
-            person_crop_path
-        )
-
-        try:
-            relative_crop_path = (
-                person_crop_path.relative_to(
-                    self.output_dir
-                )
-            ).as_posix()
-
-        except ValueError:
-            relative_crop_path = (
-                person_crop_path.as_posix()
-            )
+        # Rejected observations retain diagnostics, but require no JPEG.
+        relative_crop_path = ""
+        if person_crop_path is not None:
+            relative_crop_path = Path(person_crop_path).relative_to(self.output_dir).as_posix()
 
         self._writer.writerow(
             {
@@ -327,11 +323,11 @@ class FaceObservationWriter:
                     is not None
                     else ""
                 ),
-                "alignment_ok": (
-                    bool(
-                        alignment_ok
-                    )
-                ),
+                "alignment_ok": "" if alignment_ok is None else bool(alignment_ok),
+                "embedding_created": "" if embedding_created is None else bool(embedding_created),
+                "landmarks": json.dumps([[float(v) if math.isfinite(float(v)) else None for v in point] for point in landmarks]) if landmarks is not None else "null",
+                "face_crop_box": json.dumps(list(map(int, face_crop_box))) if face_crop_box is not None else "null",
+                "frame_face_bbox": json.dumps(list(map(float, face_bbox))),
             }
         )
 

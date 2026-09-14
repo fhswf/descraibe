@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import shutil
+from collections import defaultdict
 from pathlib import Path
 
 import cv2
@@ -10,7 +11,7 @@ import numpy as np
 
 class PersonCropWriter:
     """
-    Speichert jede getrackte Personenbeobachtung als Personencrop.
+    Speichert ausschließlich vom Aufrufer ausgewählte Personencrops.
 
     Struktur:
 
@@ -43,6 +44,7 @@ class PersonCropWriter:
         fps: float,
         jpeg_quality: int = 90,
         clear_existing: bool = True,
+        start_id: int = 0,
     ) -> None:
 
         if fps <= 0:
@@ -144,7 +146,8 @@ class PersonCropWriter:
 
         self._writer.writeheader()
 
-        self._crop_id = 0
+        self._crop_id = start_id
+        self._start_id = start_id
 
     @property
     def crop_count(self) -> int:
@@ -152,7 +155,7 @@ class PersonCropWriter:
         Anzahl der erfolgreich gespeicherten Personencrops.
         """
 
-        return self._crop_id
+        return self._crop_id - self._start_id
 
     def save(
         self,
@@ -282,8 +285,8 @@ class PersonCropWriter:
         # JPEG speichern
         # -----------------------------------------------------
 
-        success = cv2.imwrite(
-            str(crop_path),
+        success, encoded = cv2.imencode(
+            ".jpg",
             person_crop,
             [
                 cv2.IMWRITE_JPEG_QUALITY,
@@ -296,6 +299,8 @@ class PersonCropWriter:
                 "Personencrop konnte nicht gespeichert werden: "
                 f"{crop_path}"
             )
+        # Python handles Windows Unicode/long paths that cv2.imwrite cannot.
+        crop_path.write_bytes(encoded.tobytes())
 
         self._crop_id += 1
 
@@ -369,3 +374,69 @@ class PersonCropWriter:
         if not self._manifest_file.closed:
             self._manifest_file.flush()
             self._manifest_file.close()
+
+
+class FallbackCropCollector:
+    """Keep compact coordinates, never pixels; discard a track once usable face evidence exists.
+
+    A second sequential decode writes at most five crops for each remaining track.
+    Detection/tracking are not repeated. Memory is O(retained tracking observations)
+    in small numeric tuples, not O(video frames) in image arrays.
+    """
+
+    def __init__(self):
+        self.observations = defaultdict(list)
+        self.with_faces = set()
+
+    def observe(self, person: dict, frame_number: int) -> None:
+        tid = int(person["track_id"])
+        if tid not in self.with_faces:
+            self.observations[tid].append((frame_number, int(person["scene_id"]),
+                tuple(float(v) for v in person["bbox"]), person.get("confidence")))
+
+    def face_succeeded(self, track_id: int) -> None:
+        self.with_faces.add(track_id)
+        self.observations.pop(track_id, None)
+
+    def selected(self, limit: int = 5) -> dict[int, list[tuple]]:
+        frames = defaultdict(list)
+        for tid, rows in self.observations.items():
+            numbers = [row[0] for row in rows]
+            count = min(limit, len(rows))
+            indices = set()
+            for i in range(count):
+                target = numbers[0] if count == 1 else numbers[0] + i * (numbers[-1] - numbers[0]) / (count - 1)
+                # Distinct observations even when a track has long detection gaps.
+                index = min((j for j in range(len(rows)) if j not in indices),
+                            key=lambda j: (abs(numbers[j] - target), j))
+                indices.add(index)
+            for index in sorted(indices):
+                number, scene, bbox, confidence = rows[index]
+                frames[number].append((tid, scene, bbox, confidence))
+        return frames
+
+    def save(self, video_path: Path, writer: PersonCropWriter, progress_cb=None) -> int:
+        selected = self.selected()
+        self.observations.clear()
+        if not selected:
+            return 0
+        capture = cv2.VideoCapture(str(video_path))
+        before = writer.crop_count
+        try:
+            if not capture.isOpened():
+                raise RuntimeError("Video konnte für Fallback-Crops nicht geöffnet werden.")
+            last = max(selected)
+            for number in range(1, last + 1):
+                if not capture.grab():
+                    raise RuntimeError(f"Fallback-Frame {number} konnte nicht gelesen werden.")
+                if number in selected:
+                    ok, frame = capture.retrieve()
+                    if not ok:
+                        raise RuntimeError(f"Fallback-Frame {number} konnte nicht dekodiert werden.")
+                    for tid, scene, bbox, confidence in selected[number]:
+                        writer.save(frame, tid, scene, number, bbox, confidence)
+                if progress_cb and (number % 300 == 0 or number == last):
+                    progress_cb("Fallback-Personencrops werden gespeichert ...", number, last)
+        finally:
+            capture.release()
+        return writer.crop_count - before

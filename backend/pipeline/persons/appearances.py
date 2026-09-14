@@ -60,9 +60,8 @@ class TrackIntervalAccumulator:
         """
         Gibt die kompakten Track-Metadaten zurück.
 
-        Frame-Grenzen werden momentan nicht weitergegeben,
-        weil für die dauerhaft gespeicherten Daten die Zeitwerte
-        ausreichen.
+        Frame-Grenzen stammen vom vollständigen Tracking und nicht
+        von der reduzierten Auswahl gespeicherter Review-Crops.
         """
 
         results = []
@@ -87,6 +86,8 @@ class TrackIntervalAccumulator:
                     "observation_count": int(
                         track["observation_count"]
                     ),
+                    "start_frame": int(track["start_frame"]),
+                    "end_frame": int(track["end_frame"]),
                 }
             )
 

@@ -289,11 +289,6 @@ class RetinaFaceDetector:
                     crop_y1
                 )
 
-            aligned_crop = align_face(
-                face_crop,
-                crop_landmarks,
-            )
-
             results.append(
                 {
                     "bbox": (
@@ -306,9 +301,9 @@ class RetinaFaceDetector:
                         face.confidence
                     ),
                     "crop": face_crop,
-                    "aligned_crop": (
-                        aligned_crop
-                    ),
+                    "landmarks": landmarks,
+                    "crop_landmarks": crop_landmarks,
+                    "face_crop_box": face_crop_box,
                 }
             )
 

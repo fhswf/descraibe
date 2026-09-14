@@ -1,3 +1,4 @@
+import { STEP } from '../../workflow';
 import React, { useState } from 'react';
 import { useJob } from '../../hooks/useJob';
 
@@ -92,7 +93,7 @@ function FileRow({ jobId, fileKey, filename }: FileRowProps): React.ReactElement
 export function StepResults(): React.ReactElement | null {
     const { jobId, currentStep, jobData } = useJob();
 
-    if (currentStep !== 7) return null;
+    if (currentStep !== STEP.results) return null;
 
     const paths = jobData?.output_paths || {};
 

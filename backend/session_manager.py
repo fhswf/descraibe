@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from backend.pipeline.persons import review_artifacts, review_state, stage_state
+
 log = logging.getLogger(__name__)
 
 JOB_LOG_FILENAME = "job.log"
@@ -117,9 +119,79 @@ _JSON_FIELDS: List[str] = [
     "gpt_records_directors",
     "final_mp4_path",
     "faces",
+    "persons_analysis_running",
+    "persons_phase",
 ]
 
 # ── Persistence helpers ────────────────────────────────────────────────────────
+
+def _apply_person_review(job: Dict[str, Any], force: bool = False) -> None:
+    """Refresh derived caches. Review JSON, never Parquet, owns manual assignments."""
+    if job.get("persons_analysis_running") or not review_artifacts.available(job["job_dir"]):
+        return
+    root = Path(job["job_dir"]) / "person_analysis"
+    paths = [root / name for name in (*review_artifacts.FILES, review_state.FILENAME, "pipeline_state.json")]
+    signature = tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.is_file() else None for p in paths)
+    if not force and job.get("_person_review_signature") == signature:
+        return
+    try:
+        result = review_state.current(job["job_dir"])
+    except review_artifacts.ReviewError as exc:
+        job["person_review_error"] = str(exc)
+        job.pop("person_review", None)
+        job.pop("_person_review_signature", None)
+        job["persons_df"] = None
+        job["faces"] = []
+        return
+    columns = ["person_id", "name", "description", "function", "track_ids", "segments", "appearances",
+               "appearances_count", "first_seen_ts", "last_seen_ts", "representative_crop",
+               "representative_crop_id", "attributes", "face_ids", "valid_identity_crop_ids", "fallback_crop_ids"]
+    rows = []
+    for person in result["persons"]:
+        row = dict(person)
+        for field in ("track_ids", "segments", "appearances", "attributes", "face_ids", "valid_identity_crop_ids", "fallback_crop_ids"):
+            row[field] = json.dumps(row[field], ensure_ascii=False)
+        rows.append(row)
+    job["persons_df"] = pd.DataFrame(rows, columns=columns)
+    job["faces"] = result["faces"]
+    job["person_review"] = {k: v for k, v in result.items() if k != "faces"}
+    job.pop("person_review_error", None)
+    job["_person_review_signature"] = signature
+
+
+def mutate_face_review(job_id, body):
+    with _LOCK:
+        job = _STORE.get(job_id)
+        if not job:
+            raise review_artifacts.ReviewError("Job nicht gefunden.", 404)
+        if job.get("status") == "running":
+            raise review_artifacts.ReviewError("Bitte laufenden Schritt abwarten.", 409)
+        result = stage_state.save_faces(job["job_dir"], body)
+        _apply_person_review(job, force=True)
+        _persist_job(job)
+        return result
+
+
+def begin_person_stage(job_id, phase):
+    with _LOCK:
+        job = _STORE.get(job_id)
+        if not job or job.get("status") == "running":
+            raise review_artifacts.ReviewError("Ein Verarbeitungsschritt läuft bereits.", 409)
+        job.update(status="running", persons_analysis_running=True, persons_phase=phase)
+        _persist_job(job)
+
+
+def mutate_person_review(job_id: str, expected_version: str | None, operation: str, body: dict) -> dict:
+    with _LOCK:
+        job = _STORE.get(job_id)
+        if not job:
+            raise review_artifacts.ReviewError("Job nicht gefunden.", 404)
+        if job.get("status") == "running":
+            raise review_artifacts.ReviewError("Bitte warten, bis die laufende Verarbeitung abgeschlossen ist.", 409)
+        result = review_state.mutate(job["job_dir"], expected_version, operation, body)
+        _apply_person_review(job, force=True)
+        _persist_job(job)
+        return {k: v for k, v in result.items() if k != "faces"}
 
 def _persist_job(job: Dict[str, Any]) -> None:
     """Write job state to disk (must be called while _LOCK is held or with a copy)."""
@@ -173,6 +245,10 @@ def _load_job_from_disk(job_dir: Path) -> Optional[Dict[str, Any]]:
     # Never leave a job stuck in "running" after a restart
     if job.get("status") == "running":
         job["status"] = "interrupted"
+
+    job["job_dir"] = str(job_dir)
+    job["persons_analysis_running"] = False
+    _apply_person_review(job)
 
     return job
 
@@ -245,6 +321,7 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     with _LOCK:
         job = _STORE.get(job_id)
         if job:
+            _apply_person_review(job)
             return job
             
     # Fallback to disk if not in memory (e.g. populated externally)
@@ -266,6 +343,7 @@ def update_job(job_id: str, **kwargs) -> None:
         if job_id not in _STORE:
             return
         _STORE[job_id].update(kwargs)
+        _apply_person_review(_STORE[job_id], force=bool({"persons_df", "faces"} & kwargs.keys()))
         _persist_job(_STORE[job_id])
 
 

@@ -1,10 +1,11 @@
+import { STEP } from '../../workflow';
 import React from 'react';
 import { useJob } from '../../hooks/useJob';
 
 export function StepTTS(): React.ReactElement | null {
     const { currentStep, ttsParams } = useJob();
 
-    if (currentStep !== 6) return null;
+    if (currentStep !== STEP.tts) return null;
 
     return (
         <div className="flex flex-col gap-5">

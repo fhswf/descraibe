@@ -1,10 +1,11 @@
+import { STEP } from '../../workflow';
 import React from 'react';
 import { useJob } from '../../hooks/useJob';
 
 export function StepGenerate(): React.ReactElement | null {
     const { currentStep, gptParams } = useJob();
 
-    if (currentStep !== 5) return null;
+    if (currentStep !== STEP.gpt) return null;
 
     return (
         <div className="flex flex-col gap-5">
@@ -12,7 +13,7 @@ export function StepGenerate(): React.ReactElement | null {
                 <div className="flex gap-4">
                     <div className="text-3xl leading-none">🤖</div>
                     <div>
-                        <h2 className="text-[1.4rem] font-bold mb-1">Audiodeskriptionen generieren</h2>
+                        <h2 className="text-[1.4rem] font-bold mb-1">Audiodeskription generieren</h2>
                         <p className="text-sm text-text-secondary">GPT beschreibt jeden AD-Slot basierend auf Szenenbildern und deinen Prompts.</p>
                     </div>
                 </div>

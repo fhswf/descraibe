@@ -6,20 +6,8 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-import cv2
-import numpy as np
 import pandas as pd
 
-from .persons.appearances import TrackIntervalAccumulator
-from .persons.clustering import run_clustering
-from .persons.config import ANALYSIS_INTERVAL_SECONDS
-from .persons.detection import RFDETRPersonDetector
-from .persons.face_detection import RetinaFaceDetector
-from .persons.face_observations import FaceObservationWriter
-from .persons.face_quality import check_face_quality
-from .persons.face_recognition import FaceMoERecognizer
-from .persons.person_crops import PersonCropWriter
-from .persons.tracking import BytePersonTracker, detect_scene_change_frames
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -91,6 +79,8 @@ def build_persons(tracks: list[dict], track_to_person: dict[int, int]) -> list[d
                 "scene_id": int(track["scene_id"]),
                 "start_s": float(track["start_s"]),
                 "end_s": float(track["end_s"]),
+                "start_frame": track.get("start_frame"),
+                "end_frame": track.get("end_frame"),
             }
             for track in person_tracks
         ]
@@ -156,6 +146,8 @@ def save_persons(
                 "start_s": float(track["start_s"]),
                 "end_s": float(track["end_s"]),
                 "faces_assigned": int(track.get("faces_assigned", 0)),
+                "start_frame": track.get("start_frame"),
+                "end_frame": track.get("end_frame"),
                 "faces_usable": int(track.get("faces_usable", 0)),
                 "alignment_failures": int(track.get("alignment_failures", 0)),
                 "embeddings_created": int(track.get("embeddings_created", 0)),
@@ -176,361 +168,21 @@ def save_persons(
         json.dump(payload, file, ensure_ascii=False, indent=2)
 
 
-def _analyze_video(
-    video_path: str | Path,
-    job_dir: str | Path | None = None,
-    progress_cb=None,
-) -> dict:
-    """Führt die eigentliche automatische Personenanalyse auf dem Video aus."""
-    video_path = Path(video_path)
-    if not video_path.is_file():
-        raise FileNotFoundError(f"Video nicht gefunden:\n{video_path}")
-
-    video = cv2.VideoCapture(str(video_path))
-    if not video.isOpened():
-        raise RuntimeError(f"Video konnte nicht geöffnet werden:\n{video_path}")
-
-    fps = float(video.get(cv2.CAP_PROP_FPS))
-    frame_count = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    if fps <= 0:
-        video.release()
-        raise RuntimeError("Ungültige Framerate.")
-
-    analysis_interval_frames = max(1, int(round(fps * ANALYSIS_INTERVAL_SECONDS)))
-    base_dir = Path(job_dir) if job_dir else video_path.parent
-    analysis_output_dir = base_dir / "person_analysis"
-    analysis_output_dir.mkdir(parents=True, exist_ok=True)
-
-    print()
-    print("PERSONENANALYSE")
-    print("================")
-    print(f"Video: {video_path}")
-    print(f"FPS: {fps:.3f}")
-    print(f"Frames: {frame_count}")
-    print(f"Gesichtsanalyse alle {ANALYSIS_INTERVAL_SECONDS:.2f} s ({analysis_interval_frames} Frames)")
-    print("FaceMoE-Embeddings: nur im RAM")
-    print("Tracks ohne FaceMoE: bleiben unassigned")
-    print(f"Ausgabe: {analysis_output_dir}")
-    print()
-
-    if progress_cb:
-        progress_cb("Szenenwechsel werden erkannt ...", 0, frame_count)
-
-    scene_change_frames = detect_scene_change_frames(video_path)
-    print(f"Szenenwechsel erkannt: {len(scene_change_frames)}")
-
-    person_detector = RFDETRPersonDetector()
-    person_tracker = BytePersonTracker(frame_rate=fps)
-    face_detector = RetinaFaceDetector(model_cache_dir=MODEL_ROOT / "retinaface")
-    face_recognizer = FaceMoERecognizer(model_root=MODEL_ROOT / "facemoe")
-
-    track_accumulator = TrackIntervalAccumulator(fps=fps)
-    person_crop_writer = PersonCropWriter(
-        output_dir=analysis_output_dir,
-        fps=fps,
-        jpeg_quality=90,
-        clear_existing=True,
-    )
-    face_observation_writer = FaceObservationWriter(
-        output_dir=analysis_output_dir,
-        fps=fps,
-        clear_existing=True,
-    )
-
-    face_stats: dict[int, dict] = {}
-    total_faces_detected = 0
-    total_faces_assigned = 0
-    total_faces_usable = 0
-    total_alignment_failures = 0
-    total_embeddings_created = 0
-    total_embedding_errors = 0
-
-    # Embeddings existieren ausschließlich während dieses Laufs im RAM.
-    face_embedding_records: list[dict] = []
-    rejected_track_ids: list[int] = []
-    rejected_frame_numbers: list[int] = []
-
-    frame_number = 0
-
-    try:
-        while True:
-            success, frame_bgr = video.read()
-            if not success:
-                break
-
-            frame_number += 1
-
-            # 1. Personenerkennung
-            persons = person_detector.detect(frame_bgr)
-
-            # 2. Tracking
-            tracked_persons = person_tracker.update(
-                persons,
-                scene_change=frame_number in scene_change_frames,
-            )
-
-            # 3. Track-Zeiten und Personencrops
-            current_crop_paths: dict[int, Path] = {}
-
-            for person in tracked_persons:
-                track_id = int(person["track_id"])
-                scene_id = int(person["scene_id"])
-
-                track_accumulator.observe(
-                    track_id=track_id,
-                    scene_id=scene_id,
-                    frame_number=frame_number,
-                )
-
-                crop_path = person_crop_writer.save(
-                    frame_bgr=frame_bgr,
-                    track_id=track_id,
-                    scene_id=scene_id,
-                    frame_number=frame_number,
-                    bbox=person["bbox"],
-                    confidence=person.get("confidence"),
-                )
-
-                if crop_path is not None:
-                    current_crop_paths[track_id] = crop_path
-
-            # 4. Gesichtsanalyse alle 0,5 Sekunden
-            analyze_frame = (frame_number - 1) % analysis_interval_frames == 0
-
-            if analyze_frame and tracked_persons:
-                faces = face_detector.detect(frame_bgr)
-                total_faces_detected += len(faces)
-                assignments = assign_faces_to_tracks(faces, tracked_persons)
-
-                for face_index, person in assignments.items():
-                    face = faces[face_index]
-                    track_id = int(person["track_id"])
-                    scene_id = int(person["scene_id"])
-                    total_faces_assigned += 1
-
-                    stats = face_stats.setdefault(
-                        track_id,
-                        {
-                            "faces_assigned": 0,
-                            "faces_usable": 0,
-                            "alignment_failures": 0,
-                            "embeddings_created": 0,
-                            "embedding_errors": 0,
-                        },
-                    )
-                    stats["faces_assigned"] += 1
-
-                    # 5. Face Quality
-                    face_crop = face["crop"]
-                    face_confidence = float(face["confidence"])
-                    is_usable, quality_info = check_face_quality(face_crop, face_confidence)
-                    blur_score = quality_info.get("blur_score")
-
-                    aligned_crop = face["aligned_crop"]
-                    alignment_ok = aligned_crop is not None
-
-                    # 6. Face-Metadaten speichern
-                    person_crop_path = current_crop_paths.get(track_id)
-                    face_id = None
-
-                    if person_crop_path is not None:
-                        frame_height, frame_width = frame_bgr.shape[:2]
-                        face_id = face_observation_writer.save(
-                            track_id=track_id,
-                            scene_id=scene_id,
-                            frame_number=frame_number,
-                            person_bbox=person["bbox"],
-                            face_bbox=face["bbox"],
-                            person_crop_path=person_crop_path,
-                            frame_width=frame_width,
-                            frame_height=frame_height,
-                            face_confidence=face_confidence,
-                            face_usable=is_usable,
-                            blur_score=blur_score,
-                            alignment_ok=alignment_ok,
-                        )
-
-                    if is_usable:
-                        stats["faces_usable"] += 1
-                        total_faces_usable += 1
-
-                        if not alignment_ok:
-                            stats["alignment_failures"] += 1
-                            total_alignment_failures += 1
-
-                    # 7. FaceMoE
-                    embedding_created = False
-
-                    if is_usable and alignment_ok:
-                        try:
-                            embedding = face_recognizer.extract_embedding(aligned_crop)
-                        except Exception as error:
-                            stats["embedding_errors"] += 1
-                            total_embedding_errors += 1
-                            print(
-                                f"FaceMoE-Fehler | Track {track_id} | Frame {frame_number} | "
-                                f"{type(error).__name__}: {error}"
-                            )
-                        else:
-                            face_embedding_records.append(
-                                {
-                                    "face_id": face_id,
-                                    "track_id": track_id,
-                                    "scene_id": scene_id,
-                                    "frame_number": frame_number,
-                                    "timestamp_s": (frame_number - 1) / fps,
-                                    "embedding": embedding,
-                                }
-                            )
-                            stats["embeddings_created"] += 1
-                            total_embeddings_created += 1
-                            embedding_created = True
-
-                    # Für Same-Frame-Cannot-Link berücksichtigen.
-                    if not embedding_created:
-                        rejected_track_ids.append(track_id)
-                        rejected_frame_numbers.append(frame_number)
-
-            if progress_cb and (
-                frame_number % max(1, int(round(fps))) == 0
-                or frame_number == frame_count
-            ):
-                progress_cb(
-                    f"Personenanalyse: Frame {frame_number}/{frame_count}",
-                    frame_number,
-                    frame_count,
-                )
-
-            if frame_number % 500 == 0:
-                print(f"Frame {frame_number}/{frame_count}")
-
-    finally:
-        video.release()
-        person_crop_writer.close()
-        face_observation_writer.close()
-        face_recognizer.close()
-
-    tracks = track_accumulator.result()
-
-    default_stats = {
-        "faces_assigned": 0,
-        "faces_usable": 0,
-        "alignment_failures": 0,
-        "embeddings_created": 0,
-        "embedding_errors": 0,
-    }
-
-    for track in tracks:
-        track.update(face_stats.get(int(track["track_id"]), default_stats.copy()))
-
-    # Embeddings für das Clustering vorbereiten.
-    if face_embedding_records:
-        embeddings = np.stack(
-            [record["embedding"] for record in face_embedding_records]
-        ).astype(np.float32)
-
-        embedding_frame_numbers = np.asarray(
-            [record["frame_number"] for record in face_embedding_records],
-            dtype=np.int32,
-        )
-        embedding_track_ids = np.asarray(
-            [record["track_id"] for record in face_embedding_records],
-            dtype=np.int32,
-        )
-    else:
-        embeddings = np.empty((0, 512), dtype=np.float32)
-        embedding_frame_numbers = np.empty(0, dtype=np.int32)
-        embedding_track_ids = np.empty(0, dtype=np.int32)
-
-    clustered_mapping = run_clustering(
-        embeddings=embeddings,
-        frame_numbers=embedding_frame_numbers,
-        track_ids=embedding_track_ids,
-        rejected_track_ids=np.asarray(rejected_track_ids, dtype=np.int32),
-        rejected_frame_numbers=np.asarray(rejected_frame_numbers, dtype=np.int32),
-    )
-
-    clustered_track_ids = set(clustered_mapping)
-    unassigned_tracks = [
-        track
-        for track in tracks
-        if int(track["track_id"]) not in clustered_track_ids
-    ]
-
-    track_to_person = dict(clustered_mapping)
-    clustered_tracks = [
-        track
-        for track in tracks
-        if int(track["track_id"]) in clustered_track_ids
-    ]
-    persons = build_persons(clustered_tracks, track_to_person)
-
-    track_identity_path = analysis_output_dir / "track_identities.csv"
-    persons_path = analysis_output_dir / "persons.json"
-
-    save_track_identities(track_identity_path, tracks, track_to_person)
-    save_persons(
-        persons_path,
-        video_path,
-        tracks,
-        persons,
-        unassigned_tracks,
-    )
-
-    # Embeddings nicht persistieren und nach dem Clustering freigeben.
-    face_embedding_records.clear()
-    del embeddings
-    del embedding_frame_numbers
-    del embedding_track_ids
-
-    print()
-    print("GESICHTSANALYSE")
-    print("================")
-    print(f"Gesichter erkannt: {total_faces_detected}")
-    print(f"Gesichtern Tracks zugeordnet: {total_faces_assigned}")
-    print(f"Qualitativ verwendbar: {total_faces_usable}")
-    print(f"Alignment fehlgeschlagen: {total_alignment_failures}")
-
-    print()
-    print("FACEMOE")
-    print("=======")
-    print(f"Embeddings erzeugt: {total_embeddings_created}")
-    print(f"Embedding-Fehler: {total_embedding_errors}")
-    print("Embeddings gespeichert: NEIN")
-
-    print()
-    print("AUTOMATISCHE PERSONEN")
-    print("=====================")
-    print(f"Tracks insgesamt: {len(tracks)}")
-    print(f"Tracks mit FaceMoE-Embedding: {len(clustered_track_ids)}")
-    print(f"Nicht zugeordnete Tracks: {len(unassigned_tracks)}")
-    print(f"Automatisch erkannte Personen: {len(persons)}")
-    print(f"Track-Zuordnungen: {track_identity_path}")
-    print(f"Personenergebnis: {persons_path}")
-
-    print()
-    print("PERSONENCROPS")
-    print("=============")
-    print(f"Gespeicherte Personencrops: {person_crop_writer.crop_count}")
-    print(f"Crop-Verzeichnis: {person_crop_writer.crops_dir}")
-    print(f"Manifest: {person_crop_writer.manifest_path}")
-
-    print()
-    print("FACE-METADATEN")
-    print("==============")
-    print(f"Gespeicherte Face-Beobachtungen: {face_observation_writer.face_count}")
-    print(f"Manifest: {face_observation_writer.manifest_path}")
-
-    return {
-        "video_path": str(video_path),
-        "tracks": tracks,
-        "persons": persons,
-        "unassigned_tracks": unassigned_tracks,
-        "track_to_person": track_to_person,
-        "output_dir": str(analysis_output_dir),
-        "persons_path": str(persons_path),
-        "track_identities_path": str(track_identity_path),
-    }
+def _analyze_video(video_path, job_dir=None, progress_cb=None) -> dict:
+    """Compatibility entry point: run both optional-review stages automatically."""
+    from .persons.tracking_stage import run_tracking
+    from .persons.identity_stage import run_identities
+    from .persons import stage_state
+    base = Path(job_dir) if job_dir else Path(video_path).parent
+    run_tracking(video_path, base, progress_cb)
+    snapshot = run_identities(video_path, base, progress_cb)
+    pointer = stage_state.active(base)
+    output = stage_state.run_path(base, pointer["identity_run"], "identities")
+    return {"video_path": str(video_path), "output_dir": str(output),
+            "persons": snapshot["persons"], "tracks": snapshot["tracks"],
+            "unassigned_tracks": snapshot["unassigned_tracks"],
+            "track_to_person": {t["track_id"]: t["person_id"] for t in snapshot["tracks"] if t["person_id"] is not None},
+            "review_snapshot": snapshot}
 
 
 def _parse_bool(value: object) -> bool:
@@ -542,6 +194,15 @@ def _build_web_result(result: dict) -> tuple[pd.DataFrame, list[dict]]:
     Wandelt das neue Personenergebnis in das Format um,
     das die bestehende descraibe-Web-App aktuell erwartet.
     """
+    if "review_snapshot" in result:
+        snapshot = result["review_snapshot"]
+        rows = []
+        for person in snapshot["persons"]:
+            row = dict(person)
+            for field in ("track_ids", "segments", "appearances", "attributes", "face_ids", "valid_identity_crop_ids", "fallback_crop_ids"):
+                row[field] = json.dumps(row[field], ensure_ascii=False)
+            rows.append(row)
+        return pd.DataFrame(rows), snapshot["faces"]
     persons = result["persons"]
     track_to_person = result["track_to_person"]
     analysis_output_dir = Path(result["output_dir"])
@@ -554,6 +215,8 @@ def _build_web_result(result: dict) -> tuple[pd.DataFrame, list[dict]]:
             reader = csv.DictReader(file, delimiter=";")
 
             for row in reader:
+                if not row.get("person_crop_path"):
+                    continue
                 face_id = int(row["face_id"])
                 track_id = int(row["track_id"])
                 person_id = track_to_person.get(track_id)
@@ -583,6 +246,7 @@ def _build_web_result(result: dict) -> tuple[pd.DataFrame, list[dict]]:
                         "confidence": float(row["face_confidence"]),
                         "usable": _parse_bool(row["face_usable"]),
                         "alignment_ok": _parse_bool(row["alignment_ok"]),
+                        "embedding_created": _parse_bool(row.get("embedding_created", False)),
                     }
                 )
 
