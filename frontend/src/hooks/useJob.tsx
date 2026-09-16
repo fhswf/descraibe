@@ -686,6 +686,14 @@ export function JobProvider({ children }: JobProviderProps) {
 
     const markJobStarted = useCallback((step: string, message: string): void => {
         if (!jobId) return;
+        if (step === 'tracking' || step === 'identities' || step === 'attributes') {
+            // Revisions can restart after review invalidates downstream files.
+            // Deduplicate completions within this execution, not across reruns.
+            const prefix = `${jobId}:${step}_done:`;
+            for (const key of completedPersonEvents.current) {
+                if (key.startsWith(prefix)) completedPersonEvents.current.delete(key);
+            }
+        }
         const stepIndexes: Record<string, number> = { ...STEP, persons: STEP.identities };
         const startedStepIndex = stepIndexes[step];
         if (startedStepIndex !== undefined) {

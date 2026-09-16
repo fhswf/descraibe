@@ -1339,7 +1339,7 @@ def run_attribute_stage(job_id: str):
                 lambda msg, cur, total: _push_progress(job_id, 'attributes', msg, cur, total))
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, 'idle')
-            _push(job_id, 'attributes_done', {'stage_version': result['run_id']})
+            _push(job_id, 'attributes_done', {'stage_version': result['version']})
         except Exception as exc:
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, 'error', str(exc))
@@ -1372,13 +1372,13 @@ def save_attribute_review(job_id: str, body: dict = Body(...)):
         return JSONResponse({'error': str(exc)}, status_code=exc.status)
 
 
-@app.get("/api/jobs/{job_id}/person-analysis/attributes/{run_id}/images/{crop_id}")
-def get_attribute_image(job_id: str, run_id: str, crop_id: int):
+@app.get("/api/jobs/{job_id}/person-analysis/attributes/{version}/images/{crop_id}")
+def get_attribute_image(job_id: str, version: str, crop_id: int):
     job = sm.get_job(job_id)
     if not job:
         raise HTTPException(404, ERR_UNKNOWN_JOB)
     try:
-        return FileResponse(attribute_state.image_file(job['job_dir'], run_id, crop_id), media_type='image/jpeg')
+        return FileResponse(attribute_state.image_file(job['job_dir'], version, crop_id), media_type='image/jpeg')
     except review_artifacts.ReviewError as exc:
         raise HTTPException(exc.status, str(exc)) from exc
 
@@ -1392,7 +1392,7 @@ def _start_person_stage(job_id: str, phase: str):
     if not job.get("video_path"):
         return JSONResponse({"error": "Video not available."}, status_code=400)
     try:
-        if phase == "identities" and not stage_state.active(job["job_dir"]):
+        if phase == "identities" and not stage_state.status(job["job_dir"])["tracking_ready"]:
             raise review_artifacts.ReviewError("Bitte zuerst Tracking & Gesichter ausführen.", 409)
         sm.begin_person_stage(job_id, phase)
     except review_artifacts.ReviewError as exc:
@@ -1408,7 +1408,7 @@ def _start_person_stage(job_id: str, phase: str):
             (run_tracking if phase == "tracking" else run_identities)(job["video_path"], job["job_dir"], progress)
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, "idle")
-            _push(job_id, f"{phase}_done", {"stage_version": stage_state.status(job["job_dir"])["tracking_run" if phase == "tracking" else "identity_run"]})
+            _push(job_id, f"{phase}_done", {"stage_version": stage_state.status(job["job_dir"])["tracking_revision" if phase == "tracking" else "identity_revision"]})
         except Exception as exc:
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, "error", str(exc))
@@ -1466,26 +1466,16 @@ def tracking_frame_preview(job_id: str, source_track_id: int, frame_number: int,
         if row is None:
             raise review_artifacts.ReviewError("Trackingframe nicht gefunden.", 404)
         import cv2
-        capture = cv2.VideoCapture(str(job["video_path"]))
-        try:
-            # Sequential grabbing preserves the exact frame index for interframe codecs.
-            for _ in range(frame_number):
-                if not capture.grab():
-                    raise review_artifacts.ReviewError("Originalframe nicht verfügbar.", 404)
-            ok, frame = capture.retrieve()
-            if not ok:
-                raise review_artifacts.ReviewError("Originalframe nicht verfügbar.", 404)
-            x1, y1, x2, y2 = map(round, row["bbox"])
-            height, width = frame.shape[:2]
-            crop = frame[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
-            if not crop.size:
-                raise review_artifacts.ReviewError("Personencrop nicht verfügbar.", 404)
-            ok, encoded = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            if not ok:
-                raise review_artifacts.ReviewError("Personencrop nicht verfügbar.", 404)
-            return Response(encoded.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
-        finally:
-            capture.release()
+        frame = review_artifacts.read_preview_frame(job["video_path"], frame_number)
+        x1, y1, x2, y2 = map(round, row["bbox"])
+        height, width = frame.shape[:2]
+        crop = frame[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
+        if not crop.size:
+            raise review_artifacts.ReviewError("Personencrop nicht verfügbar.", 404)
+        ok, encoded = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if not ok:
+            raise review_artifacts.ReviewError("Personencrop nicht verfügbar.", 404)
+        return Response(encoded.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
     except review_artifacts.ReviewError as exc:
         return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
@@ -1658,13 +1648,12 @@ def get_unassigned_tracks(job_id: str):
 
 @app.get("/api/jobs/{job_id}/tracks/{track_id}/crops")
 def get_track_crops(job_id: str, track_id: int, limit: int = 8):
-    """All review evidence; legacy limit never hides identity observations."""
+    """Representative cluster previews for the current track."""
     job = _review_job(job_id)
     try:
-        data = review_artifacts.load(job["job_dir"])
+        data = review_artifacts.load_for_preview(job["job_dir"])
         snapshot = job["person_review"]
-        return {"crops": data.review_crops(track_id, set(snapshot["excluded_face_observations"])),
-                "analysis_id": data.analysis_id, "version": snapshot["version"]}
+        return {"crops": data.review_crops(track_id, limit=max(1, min(limit, 24))), "analysis_id": data.analysis_id, "version": snapshot["version"]}
     except review_artifacts.ReviewError as exc:
         return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
@@ -1673,11 +1662,9 @@ def get_track_crops(job_id: str, track_id: int, limit: int = 8):
 def get_person_crop(job_id: str, crop_id: int, analysis_id: str | None = None):
     job = _review_job(job_id)
     try:
-        data = review_artifacts.load(job["job_dir"])
-        if data.staged and analysis_id != data.analysis_id:
-            data = review_artifacts.load_tracking(job["job_dir"])
+        data = review_artifacts.load_for_preview(job["job_dir"])
         if analysis_id is not None and analysis_id != data.analysis_id:
-            raise review_artifacts.ReviewError("Der Personencrop gehört zu einem anderen Analyselauf.", 409)
+            raise review_artifacts.ReviewError("Der Personencrop gehört zu einem anderen Trackingstand.", 409)
         return FileResponse(data.crop_file(crop_id), media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
     except review_artifacts.ReviewError as exc:
         return JSONResponse({"error": str(exc)}, status_code=exc.status)
@@ -2511,7 +2498,7 @@ def build_hateoas_links(job: dict, base_url: str):
     ]
     if job.get("video_path"):
         links.append({"rel": "run-tracking", "href": f"{base}/api/jobs/{jid}/person-analysis/tracking", "method": "POST"})
-        if stage_state.active(job["job_dir"]):
+        if stage_state.status(job["job_dir"])["tracking_ready"]:
             links.append({"rel": "run-identities", "href": f"{base}/api/jobs/{jid}/person-analysis/identities", "method": "POST"})
         links.append({"rel": "run-vad", "href": f"{base}/api/jobs/{jid}/vad", "method": "POST"})
         links.append({"rel": "run-transcribe", "href": f"{base}/api/jobs/{jid}/transcribe", "method": "POST"})

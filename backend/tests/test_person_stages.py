@@ -1,4 +1,4 @@
-"""Two independently restartable stages with real decoded video and model doubles."""
+"""Current-state stages with real decoded video and isolated model doubles."""
 import hashlib
 import json
 import subprocess
@@ -102,8 +102,7 @@ def test_stage1_has_no_alignment_recognition_or_clusters(staged_job):
     assert calls["alignment"] == calls["recognition"] == calls["clusters"] == []
     assert len(result["tracks"]) == 5 and sum(t["quality_face_count"] for t in result["tracks"]) == 15
     assert result["identities_ready"] is False
-    pointer = stage_state.active(job)
-    output = stage_state.run_path(job, pointer["tracking_run"], "tracking")
+    output = stage_state.root(job)
     assert len(list(output.rglob("*.jpg"))) == 25  # 15 quality faces + 2*5 fallbacks
     assert not list(output.rglob("persons.json"))
     assert not list(output.rglob("track_identities.csv"))
@@ -112,7 +111,7 @@ def test_stage1_has_no_alignment_recognition_or_clusters(staged_job):
     assert result["tracks"][0]["observations"][0]["face_bbox"] == [10, 10, 30, 30]
 
 
-def test_face_review_before_clustering_and_stale_clusters_are_unchanged(staged_job):
+def test_face_review_preserves_times_and_removes_dependent_results(staged_job):
     job, video, calls = staged_job
     first = run_tracking(video, job)
     first_id = first["tracks"][0]["observations"][0]["face_id"]
@@ -126,14 +125,13 @@ def test_face_review_before_clustering_and_stale_clusters_are_unchanged(staged_j
     assert clustered["persons"][0]["track_ids"] == [1]
     assert clustered["persons"][0]["first_seen_ts"] == 0 and clustered["persons"][0]["last_seen_ts"] == 2
     assert not clustered["identities_stale"]
-    original = hash_outputs(stage_state.root(job) / "runs")
-    # Undo in step 1, after step 2. Projection stays frozen until explicitly rerun.
+    original = hash_outputs(stage_state.root(job) / 'person_crops')
+    # Undo invalidates downstream results; raw crops and track times remain.
     stage_state.save_faces(job, {"version": changed["version"], "face_exclusions": [{"face_id": first_id, "excluded": False}]})
     stale = review_state.current(job)
-    assert stale["identities_stale"] is True
-    assert temporal(stale) == temporal(clustered)
-    assert stale["persons"][0]["representative_crop_id"] == clustered["persons"][0]["representative_crop_id"]
-    assert hash_outputs(stage_state.root(job) / "runs") == original
+    assert not stale['identities_ready'] and stale['persons'] == []
+    assert not (stage_state.root(job) / 'persons.json').exists()
+    assert hash_outputs(stage_state.root(job) / 'person_crops') == original
     again = run_identities(video, job)
     assert not again["identities_stale"]
     assert calls["clusters"][-1]["frame_numbers"].tolist() == [1, 16, 46, 61]
@@ -148,7 +146,7 @@ def test_all_faces_excluded_get_body_fallbacks_and_keep_whole_track_actions(stag
     result = run_identities(video, job)
     assert result["persons"] == [] and len(result["unassigned_tracks"]) == 5
     data = review_artifacts.load(job)
-    crops = data.review_crops(1, set(result["excluded_face_observations"]))
+    crops = data.review_crops(1)
     assert len(crops) == 5 and all(c["evidence_status"] == "fallback" for c in crops)
     assert all(data.crop_file(c["crop_id"]).is_file() for c in crops)
     result = review_state.mutate(job, result["version"], "assign", {"changes": [{"track_id": 1, "action": "create_person"}]})
@@ -159,7 +157,7 @@ def test_all_faces_excluded_get_body_fallbacks_and_keep_whole_track_actions(stag
     assert len(result["unassigned_tracks"]) == 5
 
 
-def test_restart_reads_separate_corrections_and_rejects_changed_video(staged_job):
+def test_restart_reads_current_files_and_rejects_changed_video(staged_job):
     job, video, _ = staged_job
     first = run_tracking(video, job)
     stage_state.save_faces(job, {"version": first["version"], "face_exclusions": [{"face_id": 1, "excluded": True}]})
@@ -170,8 +168,11 @@ def test_restart_reads_separate_corrections_and_rejects_changed_video(staged_job
     reloaded = json.loads(process.stdout)
     assert reloaded["persons"][0]["name"] == "Anna"
     assert reloaded["excluded_face_observations"] == [1]
-    state = json.loads((stage_state.root(job) / "review_state.json").read_text())
-    assert state["schema_version"] == 3 and state["face_reviews"] and state["identity_reviews"]
+    state = stage_state.read_json(stage_state.root(job) / 'persons.json')
+    assert state['persons'][0]['name'] == 'Anna'
+    rows, _ = stage_state.read_csv(stage_state.root(job) / 'face_observations.csv')
+    assert rows[0]['excluded'] == 'True'
+    assert not (stage_state.root(job) / 'review_state.json').exists()
     with video.open("ab") as stream:
         stream.write(b"changed")
     with pytest.raises(review_artifacts.ReviewError):
@@ -188,14 +189,15 @@ def test_combined_compatibility_entry_runs_both_without_review(staged_job):
     assert len(calls["clusters"]) == 1
     assert stage_state.status(job)["identities_ready"] is True
     assert not (stage_state.root(job) / "review_state.json").exists()
-    for path in (stage_state.root(job) / "runs").rglob("*"):
+    assert not (stage_state.root(job) / 'runs').exists()
+    for path in stage_state.root(job).rglob("*"):
         assert path.suffix not in {".npy", ".npz", ".pkl"}
         if path.suffix in {".json", ".csv"}:
             text = path.read_text(encoding="utf-8-sig")
             assert '"embedding":' not in text and ";embedding;" not in text
 
 
-def test_api_stage1_crops_and_stale_result(staged_job, monkeypatch):
+def test_api_stage1_crops_and_downstream_invalidation(staged_job, monkeypatch):
     from fastapi.testclient import TestClient
     from backend import app, session_manager as sm
     job, video, _ = staged_job
@@ -213,8 +215,8 @@ def test_api_stage1_crops_and_stale_result(staged_job, monkeypatch):
     res = client.patch("/api/jobs/job/person-analysis/face-review", json={"version": first["version"], "face_exclusions": [{"face_id": 1, "excluded": True}]})
     assert res.status_code == 200
     after = client.get("/api/jobs/job/persons").json()
-    assert after["identities_stale"] and temporal(before) == temporal(after)
-    assert client.get("/api/jobs/job").json()["person_stages"]["identities_stale"]
+    assert before['persons'] and after['persons'] == []
+    assert not client.get("/api/jobs/job").json()["person_stages"]["identities_ready"]
     assert client.patch("/api/jobs/job/person-analysis/face-review", json={"version": first["version"], "face_exclusions": [{"face_id": 1, "excluded": False}]}).status_code == 409
     assert client.post("/api/jobs/job/track-assignments", json={"version": after["version"], "changes": [], "face_exclusions": [{"face_id": 1, "excluded": True}]}).status_code == 409
 
@@ -224,9 +226,9 @@ def test_failed_runs_preserve_active_outputs_and_corrections(staged_job, monkeyp
     run_tracking(video, job)
     result = run_identities(video, job)
     review_state.mutate(job, result["version"], "metadata", {"person_id": 1, "name": "Anna"})
-    pointer = stage_state.active(job)
+    pointer = stage_state.status(job)
     before = review_state.current(job)
-    review_bytes = (stage_state.root(job) / "review_state.json").read_bytes()
+    review_bytes = hash_outputs(stage_state.root(job))
     def fail(*args, **kwargs):
         raise RuntimeError("controlled stage failure")
     monkeypatch.setattr(sys.modules["backend.pipeline.persons.face_recognition"].FaceMoERecognizer, "__init__", fail)
@@ -235,9 +237,9 @@ def test_failed_runs_preserve_active_outputs_and_corrections(staged_job, monkeyp
     monkeypatch.setattr(sys.modules["backend.pipeline.persons.detection"].RFDETRPersonDetector, "detect", fail)
     with pytest.raises(RuntimeError, match="controlled stage failure"):
         run_tracking(video, job)
-    assert stage_state.active(job) == pointer
+    assert stage_state.status(job) == pointer
     assert review_state.current(job) == before
-    assert (stage_state.root(job) / "review_state.json").read_bytes() == review_bytes
+    assert hash_outputs(stage_state.root(job)) == review_bytes
 
 
 def test_stage_lock_rejects_overlapping_runs_and_reviews(staged_job, monkeypatch):
@@ -257,3 +259,26 @@ def test_stage_lock_rejects_overlapping_runs_and_reviews(staged_job, monkeypatch
         assert client.post("/api/jobs/job/" + route).status_code == 409
     assert client.patch("/api/jobs/job/person-analysis/face-review", json={"version": first["version"], "face_exclusions": [{"face_id": 1, "excluded": True}]}).status_code == 409
     assert not (stage_state.root(job) / "review_state.json").exists()
+
+
+def test_new_tracking_replaces_current_files_and_cached_timeline(staged_job, monkeypatch):
+    job, video, calls = staged_job
+    first = run_tracking(video, job)
+    run_identities(video, job)
+    root = stage_state.root(job)
+    stage_state.atomic_write(root / 'attributes.json', {'persons': {}})
+    # The first snapshot has cached the old timeline. The next tracking run
+    # observes a shorter fifth track at the same storage path.
+    tracker = sys.modules['backend.pipeline.persons.tracking'].BytePersonTracker
+    original = tracker.update
+    offset = calls['detection']
+    def shorter(self, persons, scene_change):
+        return [p for p in original(self, persons, scene_change)
+                if p['track_id'] != 5 or calls['detection'] - offset <= 10]
+    monkeypatch.setattr(tracker, 'update', shorter)
+    second = run_tracking(video, job)
+    assert second['version'] > first['version']
+    assert next(t for t in second['tracks'] if t['track_id'] == 5)['end_frame'] == 10
+    assert not (root / 'persons.json').exists() and not (root / 'attributes.json').exists()
+    assert {p.name for p in root.iterdir()} == {
+        'tracks.json', 'tracking_frames.csv', 'face_observations.csv', 'person_crops.csv', 'person_crops'}

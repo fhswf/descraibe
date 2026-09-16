@@ -1,10 +1,11 @@
-"""Versioned stage outputs and independent optional correction state. No ML imports."""
-import copy
+"""Dateizugriff für den aktuellen Zustand der Personenanalyse."""
+from __future__ import annotations
+
+import csv
 import hashlib
 import json
 import os
 import tempfile
-import uuid
 from pathlib import Path
 
 from .review_artifacts import ReviewError
@@ -32,125 +33,123 @@ def read_json(path):
         raise ReviewError(f"Zustand nicht lesbar: {Path(path).name}", 409) from exc
 
 
+def read_csv(path):
+    try:
+        with Path(path).open(encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream, delimiter=";")
+            return list(reader), list(reader.fieldnames or [])
+    except OSError as exc:
+        raise ReviewError(f"Zustand nicht lesbar: {Path(path).name}", 409) from exc
+
+
+def write_csv(path, rows, fieldnames):
+    path = Path(path)
+    fd, temporary = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=fieldnames, delimiter=";", extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def root(job_dir):
     return Path(job_dir) / "person_analysis"
 
 
-def active(job_dir):
-    path = root(job_dir) / "pipeline_state.json"
-    if not path.exists():
-        return None
-    state = read_json(path)
-    try:
-        for key in ("tracking_run", "identity_run"):
-            if state.get(key) is not None:
-                uuid.UUID(state[key])
-        if not state.get("tracking_run"):
-            raise ValueError()
-    except (ValueError, TypeError, AttributeError) as exc:
-        raise ReviewError("Ungültiger Personen-Pipelinestand.", 409) from exc
-    return state
-
-
-def new_run(job_dir, kind):
-    run_id = str(uuid.uuid4())
-    path = root(job_dir) / "runs" / run_id / kind
-    path.mkdir(parents=True)
-    return run_id, path
-
-
-def run_path(job_dir, run_id, kind):
-    uuid.UUID(run_id)
-    return root(job_dir) / "runs" / run_id / kind
-
-
-def publish(job_dir, tracking_id, identity_id=None):
-    atomic_write(root(job_dir) / "pipeline_state.json", {
-        "schema_version": 1, "tracking_run": tracking_id, "identity_run": identity_id})
-
-
-def corrections(job_dir):
-    path = root(job_dir) / "review_state.json"
-    if not path.exists():
-        return {"schema_version": 3, "face_reviews": {}, "identity_reviews": {}}
-    value = read_json(path)
-    if not isinstance(value, dict):
-        raise ReviewError("Ungültiger Review-State; nichts wurde zurückgesetzt.", 409)
-    if value.get("schema_version") in (1, 2):
-        # Preserve the entire legacy correction snapshot when the first new edit occurs.
-        return {"schema_version": 3, "face_reviews": {}, "identity_reviews": {}, "legacy_review": value}
-    if value.get("schema_version") != 3 or not isinstance(value.get("face_reviews"), dict) or not isinstance(value.get("identity_reviews"), dict):
-        raise ReviewError("Ungültiger Review-State; nichts wurde zurückgesetzt.", 409)
-    return value
-
-
-def face_state(job_dir, tracking_id):
-    state = corrections(job_dir)["face_reviews"].get(tracking_id, {"revision": 0, "excluded_face_observations": []})
-    if not isinstance(state, dict) or type(state.get("revision")) is not int or state["revision"] < 0 or not isinstance(state.get("excluded_face_observations"), list) or any(type(fid) is not int for fid in state["excluded_face_observations"]):
-        raise ReviewError("Ungültige Gesichtsbereinigung.", 409)
-    return state
-
-
-def face_version(tracking_id, state):
-    return f"{tracking_id}:{state['revision']}"
-
-
 def status(job_dir):
-    pointer = active(job_dir)
-    if pointer is None:
-        return {"tracking_ready": False, "identities_ready": False, "identities_stale": False, "legacy": True}
-    face = face_state(job_dir, pointer["tracking_run"])
-    report = read_json(run_path(job_dir, pointer["identity_run"], "identities") / "identity_result.json") if pointer["identity_run"] else None
-    return {"tracking_ready": True, "identities_ready": report is not None,
-            "identities_stale": bool(report and report["face_review_version"] != face_version(pointer["tracking_run"], face)),
-            "face_review_version": face_version(pointer["tracking_run"], face), **pointer, "legacy": False}
+    base = root(job_dir)
+    tracks = read_json(base / "tracks.json") if (base / "tracks.json").is_file() else None
+    persons = read_json(base / "persons.json") if (base / "persons.json").is_file() else None
+    attributes = read_json(base / "attributes.json") if (base / "attributes.json").is_file() else None
+    tracking_revision = tracks.get("revision") if tracks else None
+    identity_revision = persons.get("revision") if persons and persons.get("tracking_revision") == tracking_revision else None
+    identities_stale = bool(persons and identity_revision is None)
+    attributes_ready = bool(attributes and persons and attributes.get("tracking_revision") == tracking_revision
+                            and attributes.get("assignment_revision") == persons.get("assignment_revision"))
+    return {
+        "tracking_ready": tracks is not None, "identities_ready": identity_revision is not None,
+        "attributes_ready": attributes_ready, "identities_stale": identities_stale,
+        "tracking_revision": tracking_revision, "identity_revision": identity_revision, "legacy": False,
+    }
 
 
 def face_snapshot(job_dir):
-    from . import review_artifacts
-    from . import track_segments
-    pointer = active(job_dir)
-    if pointer is None:
-        raise ReviewError("Alter Job: Für Gesichtsbereinigung vor FaceMoE bitte Tracking & Gesichter neu ausführen. Bisherige Ergebnisse bleiben erhalten.", 409)
+    from . import review_artifacts, track_segments
+
     data = review_artifacts.load_tracking(job_dir)
-    state = face_state(job_dir, pointer["tracking_run"])
-    excluded = set(state["excluded_face_observations"])
-    metadata = read_json(data.root / "tracks.json")
-    return {"tracks": track_segments.review_tracks(data, metadata, state),
-            "split_available": (data.root / track_segments.TIMELINE).is_file(),
-            "original_tracks_count": len(data.tracks),
-            "version": face_version(pointer["tracking_run"], state), "analysis_id": data.analysis_id,
-            "excluded_face_observations": sorted(excluded), **status(job_dir)}
+    metadata = data.track_state
+    tracks, result = track_segments.current_tracks(metadata, data.root), []
+    frames = track_segments.timeline(str(data.root)) if (data.root / track_segments.TIMELINE).is_file() else {}
+    for track in tracks:
+        evidence = [row for row in data.evidence_by_track[track["track_id"]] if row["usable"]]
+        observations = data.tracking_crops(track["track_id"])
+        rows = [row for row in frames.get(track["source_track_id"], []) if track["start_frame"] <= row["frame_number"] <= track["end_frame"]]
+        if track["is_split"] and not evidence:
+            observations = [{
+                "crop_id": -row["frame_number"], "track_id": track["track_id"], "source_track_id": track["source_track_id"],
+                "frame_number": row["frame_number"], "timestamp_s": (row["frame_number"] - 1) / metadata["fps"],
+                "width": max(1, round(row["bbox"][2]) - round(row["bbox"][0])),
+                "height": max(1, round(row["bbox"][3]) - round(row["bbox"][1])),
+                "face_bbox": None, "face_id": None, "excluded": False, "evidence_status": "fallback", "preview_frame": True,
+            } for row in track_segments.spaced(rows)]
+        result.append({
+            **track, "quality_face_count": len(evidence), "observations": observations,
+            "split_options": track_segments.split_options(rows, [row["frame_number"] for row in observations], metadata["fps"]),
+        })
+    return {
+        "tracks": result, "split_available": bool(frames),
+        "original_tracks_count": len({track["source_track_id"] for track in tracks}),
+        "version": metadata["revision"], "analysis_id": f"tracking-{metadata['revision']}",
+        "excluded_face_observations": sorted(face["face_id"] for face in data.faces if face["excluded"]),
+        **status(job_dir),
+    }
 
 
 def save_faces(job_dir, body):
-    from . import review_artifacts
-    from . import track_segments
-    pointer = active(job_dir)
-    if pointer is None:
-        raise ReviewError("Tracking-Artefakte fehlen.", 409)
-    tid = pointer["tracking_run"]
-    state = face_state(job_dir, tid)
-    if body.get("version") != face_version(tid, state):
-        raise ReviewError("Gesichtsbereinigung wurde geändert. Bitte neu laden.", 409)
+    from . import person_crops, review_artifacts, track_segments
+
     data = review_artifacts.load_tracking(job_dir)
-    changes = body.get("face_exclusions", [])
-    if not isinstance(changes, list) or (not changes and not body.get("track_changes")):
+    metadata = data.track_state
+    if body.get("version") != metadata.get("revision"):
+        raise ReviewError("Gesichts- oder Trackzustand wurde geändert. Bitte neu laden.", 409)
+    face_changes, track_changes = body.get("face_exclusions", []), body.get("track_changes", [])
+    if not isinstance(face_changes, list) or not isinstance(track_changes, list) or (not face_changes and not track_changes):
         raise ReviewError("Keine Review-Änderungen übermittelt.")
-    excluded, seen = set(state["excluded_face_observations"]), set()
-    for change in changes:
+
+    rows, fields = read_csv(data.root / "face_observations.csv")
+    by_id = {int(row["face_id"]): row for row in rows}
+    changed = False
+    for change in face_changes:
         if not isinstance(change, dict) or set(change) != {"face_id", "excluded"}:
             raise ReviewError("Nur Ausschließen und Wiederherstellen sind erlaubt.")
-        fid = change["face_id"]
-        if type(fid) is not int or fid not in data.observations or fid in seen or type(change["excluded"]) is not bool:
+        face_id, excluded = change["face_id"], change["excluded"]
+        if type(face_id) is not int or type(excluded) is not bool or face_id not in by_id:
             raise ReviewError("Ungültige Face-Beobachtung.")
-        seen.add(fid)
-        excluded.add(fid) if change["excluded"] else excluded.discard(fid)
-    updated = track_segments.apply_changes(data.root, read_json(data.root / "tracks.json"), state, body.get("track_changes", []))
-    if excluded != set(state["excluded_face_observations"]) or updated != state:
-        all_reviews = copy.deepcopy(corrections(job_dir))
-        all_reviews["face_reviews"][tid] = {**updated, "revision": state["revision"] + 1, "excluded_face_observations": sorted(excluded)}
-        atomic_write(root(job_dir) / "review_state.json", all_reviews)
+        value = "True" if excluded else "False"
+        if by_id[face_id].get("excluded", "False") != value:
+            by_id[face_id]["excluded"] = value
+            changed = True
+
+    updated = track_segments.apply_changes(data.root, metadata, track_changes)
+    changed = changed or updated != metadata
+    if not changed:
+        return face_snapshot(job_dir)
+    if updated == metadata:
+        updated = dict(metadata)
+        updated["revision"] = int(metadata["revision"]) + 1
+
+    write_csv(data.root / "face_observations.csv", rows, fields)
+    atomic_write(data.root / "tracks.json", updated)
+    for name in ("persons.json", "attributes.json"):
+        (data.root / name).unlink(missing_ok=True)
+    person_crops.remove_identity_fallbacks(data.root)
+    track_segments.timeline.cache_clear()
     return face_snapshot(job_dir)
 
 

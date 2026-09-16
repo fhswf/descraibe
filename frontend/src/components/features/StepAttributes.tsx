@@ -5,11 +5,11 @@ import { STEP } from '../../workflow';
 
 interface AttributePerson {
     person_id: number; name: string; status: string; error: string | null;
-    automatic: Record<string, string>; overrides: Record<string, string>; effective: Record<string, string>;
+    attributes: Record<string, string>;
     images: { crop_id: number; frame_number: number; track_id: number; timestamp_s: number }[];
 }
 interface AttributeReview {
-    ready: boolean; stale: boolean; run_id: string | null; version?: string;
+    ready: boolean; stale: boolean; version?: string | null;
     error?: string; persons: AttributePerson[]; fields: string[]; labels: Record<string, string>;
 }
 const statuses: Record<string, string> = { ok: 'Extrahiert', no_eligible_images: 'Keine geeigneten Bilder (15-%-Mindesthöhe)', parse_error: 'JSON konnte nicht gelesen werden', generation_error: 'Extraktion fehlgeschlagen' };
@@ -25,7 +25,7 @@ const categoryOptions: Record<string, string[]> = {
 function AttributesPanel({ jobId }: { jobId: string }) {
     const { jobData, handleRunAttributes, progressData, fetchJobData } = useJob();
     const [snapshot, setSnapshot] = useState<AttributeReview | null>(null);
-    const [pending, setPending] = useState<Record<string, { person_id: number; field: string; value: string | null }>>({});
+    const [pending, setPending] = useState<Record<string, { person_id: number; field: string; value: string }>>({});
     const [error, setError] = useState('');
     const [saving, setSaving] = useState(false);
     const [refresh, setRefresh] = useState(0);
@@ -40,7 +40,7 @@ function AttributesPanel({ jobId }: { jobId: string }) {
             .then(async response => { const data = await response.json(); if (!response.ok || data.error) throw new Error(data.error || 'Attribute nicht verfügbar.'); setSnapshot(data); setError(''); })
             .catch(err => { if (!controller.signal.aborted) setError(err.message); });
         return () => controller.abort();
-    }, [jobId, running, dirty, refresh, jobData?.persons_version, jobData?.attribute_stage?.run_id, jobData?.attribute_stage?.stale]);
+    }, [jobId, running, dirty, refresh, jobData?.persons_version, jobData?.attribute_stage?.version, jobData?.attribute_stage?.stale]);
 
 
     useEffect(() => {
@@ -54,7 +54,7 @@ function AttributesPanel({ jobId }: { jobId: string }) {
         setPending({}); setOpen(false); setEnlarged(null);
         if (dirty) setRefresh(n => n + 1);
     };
-    const stale = snapshot?.stale || jobData?.attribute_stage?.stale;
+    const stale = snapshot?.stale || jobData?.attribute_stage?.stale || Boolean(snapshot?.ready && jobData?.attribute_stage && (!jobData.attribute_stage.ready || snapshot.version !== jobData.attribute_stage.version) && dirty);
     const save = async () => {
         setSaving(true); setError('');
         try {
@@ -65,11 +65,11 @@ function AttributesPanel({ jobId }: { jobId: string }) {
         } catch (err) { setError(err instanceof Error ? err.message : 'Speichern fehlgeschlagen.'); }
         finally { setSaving(false); }
     };
-    const imageUrl = (id: number) => `/api/jobs/${jobId}/person-analysis/attributes/${snapshot?.run_id}/images/${id}`;
+    const imageUrl = (id: number) => `/api/jobs/${jobId}/person-analysis/attributes/${snapshot?.version}/images/${id}`;
     const disabled = running || saving || Boolean(stale);
     return <div className="flex flex-col gap-5">
         <h2 className="text-[1.4rem] font-bold">Attribute</h2>
-        <p className="text-sm text-text-secondary">Ausgewählte Personenbilder und automatisch erkannte Attribute. Korrekturen sind optional und werden getrennt gespeichert.</p>
+        <p className="text-sm text-text-secondary">Ausgewählte Personenbilder und automatisch erkannte Attribute. Korrekturen ersetzen die aktuell gespeicherten Werte.</p>
         {stale && <p role="status" className="p-3 border border-amber-500 rounded-lg">Veraltet: Personenstand geändert. Diese Attribute gehören zum bisherigen Lauf. Bitte Attribute nach aktuellem Clustering erneut ausführen.</p>}
         {running && <p role="status">{progressData.attributes?.msg || 'Verarbeitung läuft …'}</p>}
         {error && <p role="alert" className="text-red-400">{error}</p>}
@@ -102,12 +102,12 @@ function AttributesPanel({ jobId }: { jobId: string }) {
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3">{snapshot.fields.map(field => {
                         const key = `${person.person_id}:${field}`;
                         const staged = pending[key];
-                        const value = staged ? staged.value ?? person.automatic[field] : person.effective[field];
+                        const value = staged ? staged.value : person.attributes[field];
                         const options = categoryOptions[field];
                         const inputProps = {
                             id: `attribute-${key}`, 'aria-label': `${snapshot.labels[field]} Person ${person.person_id}`,
                             disabled, value: value || '',
-                            onChange: (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setPending(prev => ({ ...prev, [key]: { person_id: person.person_id, field, value: e.target.value } })),
+                            onChange: (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setPending(prev => { const next = { ...prev }; if (e.target.value === person.attributes[field]) delete next[key]; else next[key] = { person_id: person.person_id, field, value: e.target.value }; return next; }),
                             className: 'w-full px-2 py-1.5 bg-bg-card border border-border-subtle rounded',
                         };
                         return <div key={field} className={`min-w-0 rounded ${staged ? 'bg-violet-500/10' : ''}`}>
@@ -118,9 +118,9 @@ function AttributesPanel({ jobId }: { jobId: string }) {
                                 {options.map(option => <option key={option} value={option}>{option}</option>)}
                             </select> : <input {...inputProps} maxLength={1000} />}
                             <div className="flex flex-wrap gap-x-2 text-xs text-text-muted mt-1">
-                                <span>Automatisch: {person.automatic[field] || '—'}</span>
-                                <button disabled={disabled} aria-label={`Automatischen Wert wiederherstellen: ${snapshot.labels[field]} Person ${person.person_id}`} onClick={() => setPending(prev => ({ ...prev, [key]: { person_id: person.person_id, field, value: null } }))} className="underline">Automatischen Wert wiederherstellen</button>
-                                {staged ? <span className="text-violet-500">vorgemerkt</span> : Object.prototype.hasOwnProperty.call(person.overrides, field) && <span>manuell korrigiert</span>}
+                                <span>Gespeichert: {person.attributes[field] || '—'}</span>
+                                <button disabled={disabled || !staged} aria-label={`Eingabe verwerfen: ${snapshot.labels[field]} Person ${person.person_id}`} onClick={() => setPending(prev => { const next = { ...prev }; delete next[key]; return next; })} className="underline">Eingabe verwerfen</button>
+                                {staged && <span className="text-violet-500">vorgemerkt</span>}
                             </div>
                         </div>;
                     })}</div></section>)}

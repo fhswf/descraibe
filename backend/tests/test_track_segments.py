@@ -1,4 +1,4 @@
-"""Segment ownership, observed times, frozen identities, restart and old jobs."""
+"""Current segment ownership, observed times, invalidation and restart."""
 import csv
 import json
 import subprocess
@@ -19,7 +19,7 @@ def split(job, snapshot, tid=1, frame=31):
 def test_split_partitions_faces_and_exact_tracking_times(staged_job):
     job, video, _ = staged_job
     first = run_tracking(video, job)
-    original = hash_outputs(stage_state.root(job) / "runs")
+    original = hash_outputs(stage_state.root(job) / 'person_crops')
     result = split(job, first)
     segments = [t for t in result["tracks"] if t["source_track_id"] == 1]
     assert [t["track_id"] for t in segments] == [6, 7]
@@ -28,7 +28,7 @@ def test_split_partitions_faces_and_exact_tracking_times(staged_job):
     ids = [c["face_id"] for t in segments for c in t["observations"]]
     assert len(ids) == len(set(ids)) == 5
     assert sorted(ids) == sorted(c["face_id"] for c in first["tracks"][0]["observations"])
-    assert hash_outputs(stage_state.root(job) / "runs") == original
+    assert hash_outputs(stage_state.root(job) / 'person_crops') == original
 
 def test_split_options_start_only_from_second_visible_observation(staged_job):
     job, video, _ = staged_job
@@ -71,13 +71,13 @@ def test_split_at_tracking_gap_uses_real_last_frame(staged_job, monkeypatch):
         split(job, result, tid=6, frame=25)
 
 
-def test_cluster_uses_segments_and_undo_preserves_completed_identity_review(staged_job):
+def test_cluster_uses_segments_and_undo_invalidates_identity_review(staged_job):
     job, video, calls = staged_job
     first = run_tracking(video, job)
     automatic = run_identities(video, job)
     changed = split(job, first)
-    assert review_state.current(job)["persons"] == automatic["persons"]
-    assert review_state.current(job)["identities_stale"]
+    assert automatic['persons'] and review_state.current(job)['persons'] == []
+    assert not review_state.current(job)['identities_ready']
     result = run_identities(video, job)
     assert calls["clusters"][-1]["track_ids"].tolist() == [6, 6, 7, 7]
     assert result["persons"][0]["track_ids"] == [6, 7]
@@ -87,8 +87,8 @@ def test_cluster_uses_segments_and_undo_preserves_completed_identity_review(stag
     frozen = result["persons"]
     undone = stage_state.save_faces(job, {"version": changed["version"], "track_changes": [{"action": "undo_split", "source_track_id": 1}]})
     assert len(undone["tracks"]) == 5
-    assert review_state.current(job)["persons"] == frozen
-    assert review_state.current(job)["identities_stale"]
+    assert frozen and review_state.current(job)['persons'] == []
+    assert not review_state.current(job)['identities_ready']
     rerun = run_identities(video, job)
     assert rerun["persons"][0]["track_ids"] == [1]
     assert not rerun["identities_stale"]
@@ -115,10 +115,15 @@ def test_faceless_segments_get_five_fallbacks_and_no_review_jpegs(staged_job, mo
     from backend import app, session_manager as sm
     job, video, _ = staged_job
     first = run_tracking(video, job)
-    before = hash_outputs(stage_state.root(job) / "runs")
+    before = hash_outputs(stage_state.root(job) / 'person_crops')
     changed = split(job, first, tid=5)
     segments = [t for t in changed["tracks"] if t["source_track_id"] == 5]
     assert all(len(t["observations"]) == 5 for t in segments)
+    for segment in segments:
+        frames = [c['frame_number'] for c in segment['observations']]
+        assert len(set(frames)) == 5
+        assert frames[0] == segment['start_frame'] and frames[-1] == segment['end_frame']
+        assert max(b - a for a, b in zip(frames, frames[1:])) <= 8
     assert all(c["face_id"] is None and c["preview_frame"] for t in segments for c in t["observations"])
     monkeypatch.setattr(sm, "_BASE_DIR", job.parent)
     monkeypatch.setattr(sm, "_STORE", {})
@@ -128,11 +133,11 @@ def test_faceless_segments_get_five_fallbacks_and_no_review_jpegs(staged_job, mo
     url = f"/api/jobs/job/person-analysis/tracking-frame/5/{crop['frame_number']}?analysis_id={changed['analysis_id']}"
     assert client.get(url).status_code == 200
     assert client.get(url).headers["content-type"] == "image/jpeg"
-    assert hash_outputs(stage_state.root(job) / "runs") == before
+    assert hash_outputs(stage_state.root(job) / 'person_crops') == before
     run_identities(video, job)
     data = review_artifacts.load(job)
     for track in segments:
-        crops = data.review_crops(track["track_id"], set())
+        crops = data.review_crops(track["track_id"])
         assert len(crops) == 5
         assert all(track["start_frame"] <= c["frame_number"] <= track["end_frame"] for c in crops)
         assert all(data.crop_file(c["crop_id"]).is_file() for c in crops)
@@ -146,24 +151,23 @@ def test_split_can_leave_child_without_saved_face(staged_job):
     changed = stage_state.save_faces(job, {"version": changed["version"], "face_exclusions": [{"face_id": 1, "excluded": True}]})
     result = run_identities(video, job)
     data = review_artifacts.load(job)
-    assert len(data.review_crops(6, {1})) == 1
-    assert data.review_crops(6, {1})[0]["evidence_status"] == "fallback"
+    assert len(data.review_crops(6)) == 1
+    assert data.review_crops(6)[0]["evidence_status"] == "fallback"
     assert next(t for t in result["tracks"] if t["track_id"] == 6)["start_s"] == 0
 
 
-def test_old_tracking_without_timeline_keeps_reviews_but_rejects_splits(staged_job):
+def test_incomplete_tracking_is_rejected_without_migration(staged_job):
     job, video, _ = staged_job
     first = run_tracking(video, job)
     # Simulate the earlier two-stage format inside this disposable fixture only.
     root = review_artifacts.load_tracking(job).root
     (root / track_segments.TIMELINE).unlink()
-    assert not stage_state.face_snapshot(job)["split_available"]
-    changed = stage_state.save_faces(job, {"version": first["version"], "face_exclusions": [{"face_id": 1, "excluded": True}]})
-    before = (stage_state.root(job) / "review_state.json").read_bytes()
-    with pytest.raises(review_artifacts.ReviewError, match="Frame-Protokoll"):
-        split(job, changed)
-    assert (stage_state.root(job) / "review_state.json").read_bytes() == before
-    assert run_identities(video, job)["persons"]
+    before = hash_outputs(root)
+    with pytest.raises(review_artifacts.ReviewError):
+        stage_state.face_snapshot(job)
+    with pytest.raises(review_artifacts.ReviewError):
+        split(job, first)
+    assert hash_outputs(root) == before
 
 
 def test_invalid_batch_does_not_save_face_change_or_split(staged_job):

@@ -282,35 +282,35 @@ def select_images(
     )
 
 
-def select_existing(data, state, frame_width, frame_height):
-    """Normal crops first per logical track; existing fallback crops only if needed."""
+def select_existing(data, frame_width, frame_height):
+    """Wählt die vorhandenen aktuellen Personencrops ohne neue Bilder zu erzeugen."""
     if frame_width <= 0 or frame_height <= 0:
-        raise ReviewError('Frameabmessungen fehlen; keine Rekonstruktion durchgeführt.', 409)
-    people = {pid: {} for pid in state['assignments'].values() if pid is not None}
-    for tid, crops in data.by_track.items():
-        pid = state['assignments'][str(tid)]
-        if pid is None:
+        raise ReviewError("Frameabmessungen fehlen.", 409)
+    people = {person_id: {} for person_id in data.persons}
+    for track_id, crops in data.by_track.items():
+        person_id = data.assignments[track_id]
+        if person_id is None or data.tracks[track_id]["excluded"]:
             continue
-        groups = [[], []]
-        seen = set()
-        for c in crops:
-            if c['frame_number'] in seen:
+        groups, seen = [[], []], set()
+        for crop in crops:
+            if crop["frame_number"] in seen:
                 continue
-            x1, y1, x2, y2 = c['person_bbox']
-            height_ratio = (y2-y1) / frame_height
+            x1, y1, x2, y2 = crop["person_bbox"]
+            height_ratio = (y2 - y1) / frame_height
             if height_ratio < MIN_PERSON_HEIGHT_RATIO:
                 continue
-            path = data.crop_file(c['crop_id'])
+            path = data.crop_file(crop["crop_id"])
             image = cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
             if image is None:
-                raise ReviewError(f"Vorhandener Crop {c['crop_id']} ist nicht lesbar; keine Rekonstruktion durchgeführt.", 409)
-            seen.add(c['frame_number'])
-            candidate = {**c, 'identity_id': pid, 'bbox': c['person_bbox'],
-                         'height_ratio': height_ratio,
-                         'near_frame_border': is_near_border(tuple(c['person_bbox']), frame_width, frame_height),
-                         'person_blur_score': calculate_person_blur_score(image)}
-            groups[0 if c['face_bbox'] is not None else 1].append(candidate)
+                raise ReviewError(f"Vorhandener Crop {crop['crop_id']} ist nicht lesbar.", 409)
+            seen.add(crop["frame_number"])
+            candidate = {
+                **crop, "identity_id": person_id, "bbox": crop["person_bbox"], "height_ratio": height_ratio,
+                "near_frame_border": is_near_border(tuple(crop["person_bbox"]), frame_width, frame_height),
+                "person_blur_score": calculate_person_blur_score(image),
+            }
+            groups[0 if crop["face_bbox"] is not None else 1].append(candidate)
         candidates = groups[0] or groups[1]
         if candidates:
-            people[pid][tid] = candidates
-    return {pid: select_images(tracks, MAX_IMAGES_PER_PERSON) for pid, tracks in sorted(people.items())}
+            people[person_id][track_id] = candidates
+    return {person_id: select_images(tracks, MAX_IMAGES_PER_PERSON) for person_id, tracks in sorted(people.items())}

@@ -38,8 +38,8 @@ export interface JobData {
   persons_count?: number;
   persons_analyzed?: boolean;
   persons_version?: string;
-  attribute_stage?: { ready: boolean; stale: boolean; run_id: string | null; error?: string };
-  person_stages?: { tracking_ready: boolean; identities_ready: boolean; identities_stale: boolean; legacy: boolean; face_review_version?: string; tracking_run?: string; identity_run?: string };
+  attribute_stage?: { ready: boolean; stale: boolean; version: string | null; error?: string };
+  person_stages?: { tracking_ready: boolean; identities_ready: boolean; identities_stale: boolean; legacy: boolean; tracking_revision?: number | null; identity_revision?: number | null };
   unassigned_tracks_count?: number;
   gpt_records_broadcast?: unknown;
   gpt_records_directors?: unknown;
@@ -102,9 +102,11 @@ export interface PersonData {
   appearances: Array<{ start_s: number; end_s: number }>;
   appearances_count: number; first_seen_ts: number; last_seen_ts: number;
   representative_crop?: string | null; representative_crop_id?: number | null;
+  profile_crop_id?: number | null;
 }
 
 export interface PersonTrack {
+  excluded?: boolean;
   source_track_id?: number; is_split?: boolean;
   track_id: number; scene_id: number; person_id: number | null; original_person_id: number | null;
   start_s: number; end_s: number; crop_count: number;

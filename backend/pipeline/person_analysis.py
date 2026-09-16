@@ -54,120 +54,6 @@ def assign_faces_to_tracks(faces: list[dict], tracked_persons: list[dict]) -> di
     return assignments
 
 
-def build_persons(tracks: list[dict], track_to_person: dict[int, int]) -> list[dict]:
-    """Baut Personen nur aus Tracks mit FaceMoE-basierter Identitätszuordnung."""
-    grouped_tracks: dict[int, list[dict]] = {}
-
-    for track in tracks:
-        track_id = int(track["track_id"])
-        if track_id not in track_to_person:
-            continue
-        person_id = int(track_to_person[track_id])
-        grouped_tracks.setdefault(person_id, []).append(track)
-
-    persons = []
-
-    for person_id in sorted(grouped_tracks):
-        person_tracks = sorted(
-            grouped_tracks[person_id],
-            key=lambda item: (float(item["start_s"]), int(item["track_id"])),
-        )
-
-        segments = [
-            {
-                "track_id": int(track["track_id"]),
-                "scene_id": int(track["scene_id"]),
-                "start_s": float(track["start_s"]),
-                "end_s": float(track["end_s"]),
-                "start_frame": track.get("start_frame"),
-                "end_frame": track.get("end_frame"),
-            }
-            for track in person_tracks
-        ]
-
-        appearances = [
-            {"start_s": float(track["start_s"]), "end_s": float(track["end_s"])}
-            for track in person_tracks
-        ]
-
-        persons.append(
-            {
-                "person_id": person_id,
-                "name": f"Person {person_id}",
-                "function": "",
-                "track_ids": [int(track["track_id"]) for track in person_tracks],
-                "segments": segments,
-                "appearances": appearances,
-                "first_seen_ts": min(item["start_s"] for item in appearances),
-                "last_seen_ts": max(item["end_s"] for item in appearances),
-                "attributes": {},
-            }
-        )
-
-    return persons
-
-
-def save_track_identities(
-    output_path: Path,
-    tracks: list[dict],
-    track_to_person: dict[int, int],
-) -> None:
-    """Speichert Track-Zuordnungen, jedoch keine Embeddings."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with output_path.open("w", newline="", encoding="utf-8-sig") as csv_file:
-        writer = csv.writer(csv_file, delimiter=";")
-        writer.writerow(["person_id", "track_id", "assignment_source"])
-
-        for track in sorted(tracks, key=lambda item: int(item["track_id"])):
-            track_id = int(track["track_id"])
-            if track_id in track_to_person:
-                writer.writerow([int(track_to_person[track_id]), track_id, "facemoe_cluster"])
-            else:
-                writer.writerow(["", track_id, "unassigned_no_embedding"])
-
-
-def save_persons(
-    output_path: Path,
-    video_path: Path,
-    tracks: list[dict],
-    persons: list[dict],
-    unassigned_tracks: list[dict],
-) -> None:
-    """Speichert Personen und nicht zugeordnete Tracks getrennt."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    unassigned_data = []
-    for track in sorted(unassigned_tracks, key=lambda item: int(item["track_id"])):
-        unassigned_data.append(
-            {
-                "track_id": int(track["track_id"]),
-                "scene_id": int(track["scene_id"]),
-                "start_s": float(track["start_s"]),
-                "end_s": float(track["end_s"]),
-                "faces_assigned": int(track.get("faces_assigned", 0)),
-                "start_frame": track.get("start_frame"),
-                "end_frame": track.get("end_frame"),
-                "faces_usable": int(track.get("faces_usable", 0)),
-                "alignment_failures": int(track.get("alignment_failures", 0)),
-                "embeddings_created": int(track.get("embeddings_created", 0)),
-                "embedding_errors": int(track.get("embedding_errors", 0)),
-            }
-        )
-
-    payload = {
-        "video": video_path.name,
-        "track_count": len(tracks),
-        "person_count": len(persons),
-        "unassigned_track_count": len(unassigned_data),
-        "persons": persons,
-        "unassigned_tracks": unassigned_data,
-    }
-
-    with output_path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, ensure_ascii=False, indent=2)
-
-
 def _analyze_video(video_path, job_dir=None, progress_cb=None) -> dict:
     """Compatibility entry point: run both optional-review stages automatically."""
     from .persons.tracking_stage import run_tracking
@@ -176,8 +62,7 @@ def _analyze_video(video_path, job_dir=None, progress_cb=None) -> dict:
     base = Path(job_dir) if job_dir else Path(video_path).parent
     run_tracking(video_path, base, progress_cb)
     snapshot = run_identities(video_path, base, progress_cb)
-    pointer = stage_state.active(base)
-    output = stage_state.run_path(base, pointer["identity_run"], "identities")
+    output = stage_state.root(base)
     return {"video_path": str(video_path), "output_dir": str(output),
             "persons": snapshot["persons"], "tracks": snapshot["tracks"],
             "unassigned_tracks": snapshot["unassigned_tracks"],

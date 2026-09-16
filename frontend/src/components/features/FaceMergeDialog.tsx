@@ -49,14 +49,18 @@ export function PersonPicker({ persons, jobId, analysisId, title, onChoose, onCl
     </div>;
 }
 
-export function TrackRow({ track, change, jobId, analysisId, onChoose, onUndo, onEnlarge, disabled, persons, version, exclusions, onExclude, initialCrops, allowExclusions = false, showAssignments = true, onSplit, splitFrames = [] }: {
+export function TrackRow({ track, change, jobId, analysisId, onChoose, onUndo, onEnlarge, disabled, persons, version, exclusions, onExclude, initialCrops, allowExclusions = false, showAssignments = true, onSplit, splitFrames = [], onProfile, profileCropId, profileDisabled = false }: {
     track: PersonTrack; change?: TrackChange; jobId: string; analysisId: string; disabled: boolean; persons: PersonData[];
     onChoose: () => void; onUndo: () => void; onEnlarge: (_crop: PersonCrop) => void;
     version: string; exclusions: Record<number, boolean>; onExclude: (_faceId: number, _excluded: boolean) => void;
     onSplit?: (_frame: number) => void; splitFrames?: number[];
+    onProfile?: (_cropId: number) => void; profileCropId?: number | null; profileDisabled?: boolean;
     initialCrops?: PersonCrop[]; allowExclusions?: boolean; showAssignments?: boolean;
 }) {
-    const [crops, setCrops] = useState<PersonCrop[]>(initialCrops || []);
+    const [loadedCrops, setCrops] = useState<PersonCrop[]>([]);
+    const crops = initialCrops ?? loadedCrops;
+    const [visibleCount, setVisibleCount] = useState(12);
+    const visibleCrops = allowExclusions ? crops.slice(0, visibleCount) : crops;
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(!initialCrops);
     useEffect(() => {
@@ -86,7 +90,7 @@ export function TrackRow({ track, change, jobId, analysisId, onChoose, onUndo, o
             {track.review_mode === 'fallback' && <p className="text-xs text-text-muted mb-2">Kein brauchbares Gesicht. Zeitlich verteilte Personencrops zur Track-Kontrolle.</p>}
             {track.review_mode === 'legacy_unverified' && <p className="text-xs text-amber-600 mb-2">Altdaten: Qualität und Alignment bestanden; FaceMoE-Erfolg wurde damals nicht protokolliert.</p>}
             {loading && <p className="text-sm text-text-muted">Lade Vorschauen …</p>}{error && <p role="alert" className="text-red-400">{error}</p>}
-            <div className="grid gap-3 items-start" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, var(--review-card-width, 160px)), 1fr))' }}>{crops.map(crop => {
+            <div className="grid gap-3 items-start" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, var(--review-card-width, 160px)), 1fr))' }}>{visibleCrops.map(crop => {
                 const staged = crop.face_id !== null && Object.prototype.hasOwnProperty.call(exclusions, crop.face_id);
                 const excluded = crop.face_id !== null && (exclusions[crop.face_id] ?? crop.excluded);
                 return <div key={crop.crop_id} className={`border rounded-lg overflow-hidden ${staged ? 'border-violet-500' : 'border-border-subtle'}`}>
@@ -97,9 +101,12 @@ export function TrackRow({ track, change, jobId, analysisId, onChoose, onUndo, o
                     <p className="px-2 text-xs">{excluded ? '✕ manuell ausgeschlossen' : crop.evidence_status === 'fallback' ? 'Fallback · keine Face-Evidenz' : crop.evidence_status === 'legacy_unverified' ? 'FaceMoE-Erfolg unbestätigt' : '✓ gültig'}{staged && ' · vorgemerkt'}</p>
                     {allowExclusions && crop.face_id !== null && <button disabled={disabled} onClick={() => onExclude(crop.face_id!, !excluded)} className="p-2 text-xs underline disabled:opacity-50"
                         aria-label={`Face ${crop.face_id} ${excluded ? 'wiederherstellen' : 'ausschließen'}`}>{excluded ? 'Ausschluss aufheben' : 'Beobachtung ausschließen'}</button>}
+                    {onProfile && !excluded && <button disabled={disabled || profileDisabled || profileCropId === crop.crop_id} onClick={() => onProfile(crop.crop_id)} className="block p-2 text-xs underline disabled:opacity-50">{profileCropId === crop.crop_id ? 'Aktuelles Profilbild' : 'Als Profilbild verwenden'}</button>}
                     {onSplit && splitFrames.includes(crop.frame_number) && <button disabled={disabled} className="block p-2 text-xs underline" onClick={() => onSplit(crop.frame_number)}>Vor Frame {crop.frame_number} teilen</button>}
                 </div>;
             })}</div>
+            {allowExclusions && visibleCrops.length < crops.length && <button type="button" onClick={() => setVisibleCount(count => count + 12)}
+                className="mt-3 px-3 py-2 border border-border-subtle rounded-lg text-sm">Weitere Bilder anzeigen ({visibleCrops.length} / {crops.length})</button>}
             {!loading && !error && crops.length === 0 && <p className="text-sm text-text-muted">Keine gespeicherten Crops für diesen Track.</p>}
         </div>
     </section>;
@@ -109,7 +116,8 @@ export function FaceMergeDialog({ person, snapshot, jobId, onClose, onSaved }: {
     person: PersonData | null; snapshot: PersonReview; jobId: string; onClose: () => void; onSaved: (_result: PersonReview) => void;
 }) {
     // Pin the original version while changes are staged, including across SSE refreshes.
-    const [baseline] = useState(snapshot);
+    const [baseline, setBaseline] = useState(snapshot);
+    const [notice, setNotice] = useState('');
     const [pending, setPending] = useState<Record<number, TrackChange>>({});
     const [exclusions, setExclusions] = useState<Record<number, boolean>>({});
     const [pickerTrack, setPickerTrack] = useState<number | null>(null);
@@ -120,6 +128,19 @@ export function FaceMergeDialog({ person, snapshot, jobId, onClose, onSaved }: {
     const changes = Object.values(pending);
     const faceExclusions = Object.entries(exclusions).map(([faceId, excluded]) => ({ face_id: Number(faceId), excluded }));
     const hasChanges = changes.length + faceExclusions.length > 0;
+    const currentPerson = baseline.persons.find(p => p.person_id === person?.person_id);
+    const saveProfile = async (cropId: number | null) => {
+        if (!person || hasChanges || saving) return;
+        setSaving(true); setError(''); setNotice('');
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/persons/${person.person_id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version: baseline.version, profile_crop_id: cropId }) });
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.error || result.detail || 'Profilbild konnte nicht gespeichert werden.');
+            setBaseline(result); onSaved(result); setNotice('Profilbild gespeichert.');
+        } catch (err) { setError(err instanceof Error ? err.message : 'Speichern fehlgeschlagen.'); }
+        finally { setSaving(false); }
+    };
     const close = () => { if (!saving && (!hasChanges || window.confirm('Vorgemerkte Review-Änderungen verwerfen?'))) onClose(); };
     const save = async () => {
         setSaving(true); setError('');
@@ -142,6 +163,7 @@ export function FaceMergeDialog({ person, snapshot, jobId, onClose, onSaved }: {
             <div className="px-4 py-3"><ReviewImageSizeControl stage="persons" /></div>
             <div className="p-4 overflow-y-auto flex-1 space-y-3">
                 {tracks.map(track => <TrackRow key={track.track_id} track={track} change={pending[track.track_id]} jobId={jobId} analysisId={baseline.analysis_id}
+                    onProfile={person ? cropId => void saveProfile(cropId) : undefined} profileCropId={currentPerson?.representative_crop_id} profileDisabled={hasChanges}
                     persons={baseline.persons} disabled={saving} onChoose={() => setPickerTrack(track.track_id)} onEnlarge={setEnlarged}
                     version={baseline.version} exclusions={exclusions} onExclude={(fid, excluded) => setExclusions(prev => {
                         const next = { ...prev };
@@ -154,6 +176,9 @@ export function FaceMergeDialog({ person, snapshot, jobId, onClose, onSaved }: {
             </div>
             <div className="p-4 border-t border-border-subtle bg-bg-card">
                 {error && <p role="alert" className="text-red-400 mb-3">{error}</p>}
+                {notice && <p role="status" className="mb-2 text-sm">{notice}</p>}
+                {person && hasChanges && <p className="mb-2 text-sm">Vor der Profilbildwahl bitte Trackänderungen speichern oder zurücknehmen.</p>}
+                {currentPerson?.profile_crop_id != null && <button disabled={saving || hasChanges} onClick={() => void saveProfile(null)} className="mb-3 text-sm underline">Automatische Bildwahl verwenden</button>}
                 <div className="flex flex-wrap items-center justify-between gap-3"><div className="text-sm text-text-muted"><span>{changes.length} Trackänderungen vorgemerkt</span></div>
                     <div className="flex gap-3"><button disabled={saving} onClick={close}>Abbrechen</button><button onClick={save} disabled={saving || !hasChanges}
                         className="px-4 py-2 bg-violet-600 text-white rounded-lg disabled:opacity-50">{saving ? 'Speichert …' : 'Alle Änderungen speichern'}</button></div>

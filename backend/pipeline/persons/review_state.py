@@ -1,137 +1,62 @@
-"""Canonical manual whole-track assignments; automatic output remains read-only.
-
-Without review_state.json the automatic assignments are immediately usable.
-All public projections are derived, never an independent assignment authority.
-The existing application uses one backend worker; its job lock serializes edits.
-"""
+"""Projiziert den aktuellen Personenstand und schreibt Änderungen direkt in persons.json."""
 from __future__ import annotations
 
-import copy
-import json
 import math
-import os
-import tempfile
 from pathlib import Path
 
 from . import review_artifacts as artifacts
+from . import stage_state
 from .review_artifacts import ReviewError
 
-
-FILENAME = "review_state.json"
+FILENAME = "persons.json"
 
 
 def _metadata(person: dict) -> dict:
-    # Explicit allowlist: model outputs/embeddings cannot enter review persistence.
     return {key: str(person.get(key) or "") for key in ("name", "description", "function")}
 
 
-def read(job_dir: str | Path) -> tuple[artifacts.Artifacts, dict]:
-    data = artifacts.load(job_dir)
-    path = data.root / FILENAME
-    state = None
-    if data.staged:
-        from . import stage_state
-        state = stage_state.corrections(job_dir)["identity_reviews"].get(data.identity_id)
-    elif path.exists():
-        try:
-            state = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise ReviewError("review_state.json ist ungültig; Korrekturen wurden nicht zurückgesetzt.", 409) from exc
-    if state is None:
-        return data, {
-            "schema_version": 2, "analysis_id": data.analysis_id, "revision": 0,
-            "excluded_face_observations": data.used_exclusions if data.staged else [],
-            "next_person_id": max(data.persons, default=0) + 1,
-            "assignments": {str(tid): pid for tid, pid in data.assignments.items()},
-            "persons": {str(pid): _metadata(p) for pid, p in data.persons.items()},
-        }
-    try:
-        if state["analysis_id"] != data.analysis_id:
-            raise ReviewError("Die Korrekturen gehören zu einem anderen Analyselauf. Sie wurden nicht übernommen.", 409)
-        if type(state["schema_version"]) is not int or state["schema_version"] not in {1, 2} or type(state["revision"]) is not int or state["revision"] < 1:
-            raise ValueError("invalid version")
-        if set(state["assignments"]) != {str(tid) for tid in data.tracks}:
-            raise ValueError("incomplete assignments")
-        for pid in state["persons"]:
-            if str(int(pid)) != pid or int(pid) < 1:
-                raise ValueError("invalid person id")
-        for target in state["assignments"].values():
-            if target is not None and (type(target) is not int or str(target) not in state["persons"]):
-                raise ValueError("invalid target")
-        if type(state["next_person_id"]) is not int or state["next_person_id"] <= max(map(int, state["persons"]), default=0):
-            raise ValueError("invalid next id")
-        excluded = [] if state["schema_version"] == 1 else state["excluded_face_observations"]
-        if not isinstance(excluded, list) or any(type(fid) is not int or fid not in data.observations for fid in excluded):
-            raise ValueError("invalid face exclusions")
-        # Reconstruct, rather than carrying arbitrary JSON fields into a new save.
-        return data, {
-            "schema_version": 2, "analysis_id": data.analysis_id, "revision": state["revision"],
-            "excluded_face_observations": sorted(set(excluded)),
-            "next_person_id": state["next_person_id"], "assignments": state["assignments"],
-            "persons": {pid: _metadata(p) for pid, p in state["persons"].items()},
-        }
-    except ReviewError:
-        raise
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        raise ReviewError("review_state.json ist ungültig; Korrekturen wurden nicht zurückgesetzt.", 409) from exc
+def _version(data: artifacts.Artifacts) -> str:
+    return f"{data.tracking_revision}:{data.identity_revision or 0}"
 
 
-def version(state: dict) -> str:
-    return f"{state['analysis_id']}:{state['revision']}"
-
-
-def _representative(data: artifacts.Artifacts, track_ids: list[int], excluded: set[int]) -> dict | None:
-    """Human recognition preview from all evidence, independent of preview sampling."""
+def _representative(data: artifacts.Artifacts, track_ids: list[int]) -> dict | None:
     def number(value):
         try:
             result = float(value)
-            return max(0, result) if math.isfinite(result) else 0
-        except (ValueError, TypeError):
-            return 0
+            return max(0.0, result) if math.isfinite(result) else 0.0
+        except (TypeError, ValueError):
+            return 0.0
 
     faces = []
-    for tid in track_ids:
-        for c in data.evidence_by_track[tid]:
-            if c["face_id"] in excluded:
+    for track_id in track_ids:
+        for crop in data.evidence_by_track[track_id]:
+            if crop["excluded"]:
                 continue
-            width, height = number(c.get("width")), number(c.get("height"))
-            bbox = c.get("face_bbox")
+            width, height = number(crop.get("width")), number(crop.get("height"))
+            bbox = crop.get("face_bbox")
             if not width or not height or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
                 continue
             try:
                 x1, y1, x2, y2 = map(float, bbox)
-            except (ValueError, TypeError):
+            except (TypeError, ValueError):
                 continue
-            if not all(math.isfinite(v) for v in (x1, y1, x2, y2)):
+            if not all(math.isfinite(value) for value in (x1, y1, x2, y2)):
                 continue
-            fw = min(width, x2) - max(0, x1)
-            fh = min(height, y2) - max(0, y1)
-            if fw <= 0 or fh <= 0:
+            face_width, face_height = min(width, x2) - max(0, x1), min(height, y2) - max(0, y1)
+            if face_width <= 0 or face_height <= 0:
                 continue
             try:
-                data.crop_file(c["crop_id"])
+                data.crop_file(crop["crop_id"])
             except ReviewError:
                 continue
-            faces.append((c, math.log1p(number(c.get("blur_score"))),
-                          math.sqrt((fw / width) * (fh / height)),
-                          max(0, min(1, 2 * min(x1 / width, y1 / height, (width-x2) / width, (height-y2) / height))),
-                          min(1, number(c.get("face_confidence"))), math.log1p(width * height)))
+            faces.append((crop, min(1.0, number(crop.get("face_confidence"))), face_width * face_height))
     if faces:
-        # Candidate-relative log normalization limits raw-pixel/blur dominance.
-        max_blur = max(row[1] for row in faces) or 1
-        max_area = max(row[5] for row in faces) or 1
-
-        def face_rank(row):
-            crop, blur, size, margin, confidence, area = row
-            score = .40 * blur / max_blur + .25 * size + .15 * margin + .10 * confidence + .10 * area / max_area
-            # Scores within the same 1e-6 bucket use stable IDs only.
-            return (round(score, 6), -crop["crop_id"], -crop["face_id"])
-
-        return max(faces, key=face_rank)[0]
-    excluded_crops = {c["crop_id"] for fid, c in data.observations.items() if fid in excluded}
-    fallback = [c for tid in track_ids for c in data.by_track[tid] if c["crop_id"] not in excluded_crops]
-    # Missing legacy JPEGs must not prevent reviewing an otherwise valid job.
-    for crop in sorted(fallback, key=lambda c: (c["width"] * c["height"], -c["crop_id"]), reverse=True):
+        best_confidence = max(row[1] for row in faces)
+        # 0.01 percentage points: size only breaks near-ties in face confidence.
+        close = [row for row in faces if best_confidence - row[1] <= 0.0001 + 1e-12]
+        return max(close, key=lambda row: (row[2], row[1], -row[0]["crop_id"]))[0]
+    fallback = [crop for track_id in track_ids for crop in data.by_track[track_id]]
+    for crop in sorted(fallback, key=lambda item: (item["width"] * item["height"], -item["crop_id"]), reverse=True):
         try:
             data.crop_file(crop["crop_id"])
             return crop
@@ -140,160 +65,183 @@ def _representative(data: artifacts.Artifacts, track_ids: list[int], excluded: s
     return None
 
 
-def project(data: artifacts.Artifacts, state: dict) -> dict:
-    excluded = set(state["excluded_face_observations"])
-    tracks = []
-    grouped: dict[int, list[dict]] = {}
-    for tid, original in sorted(data.tracks.items()):
-        target = state["assignments"][str(tid)]
-        crops = data.by_track[tid]
-        track = {**original, "person_id": target, "crop_count": len(crops),
-                 "original_person_id": data.assignments[tid],
-                 "facemoe_observation_count": sum(c["evidence_status"] == "facemoe" for c in data.evidence_by_track[tid]),
-                 "review_observation_count": len(data.review_crops(tid, excluded)),
-                 "review_mode": (data.evidence_by_track[tid][0]["evidence_status"] if data.evidence_by_track[tid] else "fallback")}
+def profile_crop(data, crop_id, track_ids):
+    if type(crop_id) is not int:
+        return None
+    crop = data.crops.get(crop_id)
+    if crop is None or crop["track_id"] not in track_ids or data.tracks[crop["track_id"]]["excluded"]:
+        return None
+    evidence = [face for face in data.faces if face["crop_id"] == crop_id]
+    if evidence and not any(face["usable"] and not face["excluded"] for face in evidence):
+        return None
+    try:
+        data.crop_file(crop_id)
+    except ReviewError:
+        return None
+    return crop
+
+
+def _attributes(data: artifacts.Artifacts) -> dict[int, dict]:
+    path = data.root / "attributes.json"
+    if data.assignment_revision is None or not path.is_file():
+        return {}
+    payload = stage_state.read_json(path)
+    if payload.get("assignment_revision") != data.assignment_revision:
+        return {}
+    return {int(pid): row.get("attributes", {}) for pid, row in payload.get("persons", {}).items()}
+
+
+def project(data: artifacts.Artifacts) -> dict:
+    tracks, grouped = [], {}
+    for track_id, original in sorted(data.tracks.items()):
+        person_id = data.assignments[track_id]
+        review_crops = data.review_crops(track_id)
+        track = {
+            **original, "person_id": person_id, "crop_count": len(data.by_track[track_id]),
+            "facemoe_observation_count": sum(bool(row["embedding_created"]) and not row["excluded"] for row in data.evidence_by_track[track_id]),
+            "review_observation_count": len(review_crops),
+            "review_mode": review_crops[0]["evidence_status"] if review_crops else "fallback",
+        }
         tracks.append(track)
-        if target is not None:
-            grouped.setdefault(target, []).append(track)
+        if person_id is not None:
+            grouped.setdefault(person_id, []).append(track)
+
+    current_attributes = _attributes(data)
     persons = []
-    for pid, person_tracks in grouped.items():
-        person_tracks.sort(key=lambda t: (t["start_s"], t["track_id"]))
-        crop_candidates = [c for t in person_tracks for c in data.review_crops(t["track_id"], excluded) if not c["excluded"]]
-        crop_candidates.sort(key=lambda c: (c["timestamp_s"], c["crop_id"]))
-        representative = _representative(data, [t["track_id"] for t in person_tracks], excluded)
-        segments = [{k: t[k] for k in ("track_id", "scene_id", "start_s", "end_s")} for t in person_tracks]
+    for person_id, person_tracks in grouped.items():
+        person_tracks.sort(key=lambda track: (track["start_s"], track["track_id"]))
+        source = data.persons[person_id]
+        track_ids = [track["track_id"] for track in person_tracks]
+        manual = profile_crop(data, source.get("profile_crop_id"), track_ids)
+        representative = manual or _representative(data, track_ids)
+        crop_candidates = [crop for track_id in track_ids for crop in data.review_crops(track_id)]
         persons.append({
-            "person_id": pid, **state["persons"][str(pid)],
-            "track_ids": [t["track_id"] for t in person_tracks], "segments": segments,
-            "appearances": [{"start_s": t["start_s"], "end_s": t["end_s"]} for t in person_tracks],
-            "appearances_count": len(person_tracks),
-            "first_seen_ts": min(t["start_s"] for t in person_tracks),
-            "last_seen_ts": max(t["end_s"] for t in person_tracks),
+            "person_id": person_id, **_metadata(source), "track_ids": track_ids,
+            "segments": [{key: track[key] for key in ("track_id", "scene_id", "start_s", "end_s")} for track in person_tracks],
+            "appearances": [{"start_s": track["start_s"], "end_s": track["end_s"]} for track in person_tracks],
+            "appearances_count": len(person_tracks), "first_seen_ts": min(track["start_s"] for track in person_tracks),
+            "last_seen_ts": max(track["end_s"] for track in person_tracks),
             "representative_crop": "person_analysis/" + representative["crop_path"] if representative else None,
             "representative_crop_id": representative["crop_id"] if representative else None,
-            "valid_identity_crop_ids": [c["crop_id"] for t in person_tracks for c in data.evidence_by_track[t["track_id"]] if c["face_id"] not in excluded and c["evidence_status"] == "facemoe"],
-            "fallback_crop_ids": [c["crop_id"] for c in crop_candidates if c["evidence_status"] == "fallback"],
-            "attributes": data.persons.get(pid, {}).get("attributes", {}),
-            "face_ids": [f["face_id"] for f in data.faces if f["face_id"] not in excluded and state["assignments"][str(f["track_id"])] == pid],
+            "profile_crop_id": manual["crop_id"] if manual else None,
+            "valid_identity_crop_ids": [crop["crop_id"] for track_id in track_ids for crop in data.evidence_by_track[track_id]
+                                        if not crop["excluded"] and crop["embedding_created"]],
+            "fallback_crop_ids": [crop["crop_id"] for crop in crop_candidates if crop["evidence_status"] == "fallback"],
+            "attributes": current_attributes.get(person_id, {}),
+            "face_ids": [face["face_id"] for face in data.faces if not face["excluded"] and data.assignments[face["track_id"]] == person_id],
         })
-    persons.sort(key=lambda p: (p["first_seen_ts"], p["person_id"]))
-    stage_info = {}
-    if data.staged:
-        from .stage_state import status
-        stage_info = status(data.base_root.parent)
-    return {"persons": persons, "tracks": tracks, **stage_info,
-            "unassigned_tracks": [t for t in tracks if t["person_id"] is None],
-            "version": version(state), "analysis_id": data.analysis_id,
-            "revision": state["revision"], "review_available": not data.staged or data.identity_id is not None,
-            "excluded_face_observations": sorted(excluded), "legacy_evidence": data.legacy_evidence,
-            "faces": [{**f, "excluded": f["face_id"] in excluded, "person_id": state["assignments"][str(f["track_id"]) ]} for f in data.faces]}
+    persons.sort(key=lambda person: (person["first_seen_ts"], person["person_id"]))
+    identity_ready = data.identity_revision is not None
+    return {
+        "persons": persons, "tracks": tracks,
+        "unassigned_tracks": [track for track in tracks if track["person_id"] is None and not track["excluded"]],
+        "version": _version(data), "analysis_id": data.analysis_id, "revision": data.identity_revision or 0,
+        "review_available": identity_ready,
+        "excluded_face_observations": sorted(face["face_id"] for face in data.faces if face["excluded"]),
+        "faces": [{**face, "person_id": data.assignments[face["track_id"]]} for face in data.faces],
+        **stage_state.status(data.root.parent),
+    }
 
 
 def current(job_dir: str | Path) -> dict:
-    return project(*read(job_dir))
+    return project(artifacts.load(job_dir))
 
 
-def _write(path: Path, state: dict) -> None:
-    fd, temporary = tempfile.mkstemp(prefix="review_state-", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(state, stream, ensure_ascii=False, allow_nan=False, indent=2)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+def _payload(data: artifacts.Artifacts, persons: dict[int, dict], revision: int, assignment_revision: int) -> dict:
+    return {
+        "schema_version": 1, "revision": revision, "assignment_revision": assignment_revision,
+        "tracking_revision": data.tracking_revision,
+        "persons": [{"person_id": person_id, **_metadata(person), "track_ids": sorted(set(person["track_ids"])),
+                     "profile_crop_id": person.get("profile_crop_id") if profile_crop(data, person.get("profile_crop_id"), person["track_ids"]) else None}
+                    for person_id, person in sorted(persons.items()) if person["track_ids"]],
+    }
 
 
 def mutate(job_dir: str | Path, expected_version: str | None, operation: str, body: dict) -> dict:
-    """Caller holds the session-manager lock through commit and cache refresh."""
-    data, state = read(job_dir)
-    if data.staged and not data.identity_id:
+    data = artifacts.load(job_dir)
+    if data.identity_revision is None:
         raise ReviewError("Bitte zuerst Personen & Cluster ausführen.", 409)
-    if data.staged and body.get("face_exclusions"):
-        raise ReviewError("Face-Ausschlüsse bitte in Tracking & Gesichter ändern.", 409)
-    if expected_version != version(state):
-        raise ReviewError("Der Personenstand wurde geändert. Bitte neu laden und die Änderung erneut prüfen.", 409)
-    state = copy.deepcopy(state)
-    active = {pid for pid in state["assignments"].values() if pid is not None}
+    if expected_version != _version(data):
+        raise ReviewError("Der Personenstand wurde geändert. Bitte neu laden.", 409)
+    persons = {pid: {**_metadata(person), "profile_crop_id": person.get("profile_crop_id"), "track_ids": list(person["track_ids"])} for pid, person in data.persons.items()}
 
-    def existing(pid: object) -> int:
-        if type(pid) is not int or pid not in active:
-            raise ReviewError("Zielperson nicht gefunden.", 404)
-        return pid
+    def existing(person_id):
+        if type(person_id) is not int or person_id not in persons:
+            raise ReviewError("Person nicht gefunden.", 404)
+        return person_id
 
+    assignments_changed = False
     if operation == "assign":
         changes = body.get("changes")
-        exclusions = body.get("face_exclusions", [])
-        if not isinstance(changes, list) or not isinstance(exclusions, list) or not (changes or exclusions) or len(changes) > len(data.tracks):
+        if not isinstance(changes, list) or not changes:
             raise ReviewError("Keine gültigen Trackänderungen übermittelt.")
-        seen = set()
+        next_person_id = max(persons, default=0) + 1
+        seen_tracks = set()
         for change in changes:
-            if not isinstance(change, dict):
-                raise ReviewError("Ungültige Trackänderung.")
-            tid = change.get("track_id")
-            if type(tid) is not int or tid not in data.tracks or tid in seen:
-                raise ReviewError("Unbekannter oder mehrfach übermittelter Track.")
-            seen.add(tid)
+            track_id = change.get("track_id") if isinstance(change, dict) else None
+            if type(track_id) is not int or track_id not in data.tracks or data.tracks[track_id]["excluded"]:
+                raise ReviewError("Unbekannter oder ausgeschlossener Track.")
+            if track_id in seen_tracks:
+                raise ReviewError("Track mehrfach übermittelt.")
+            seen_tracks.add(track_id)
+            old = data.assignments[track_id]
             action = change.get("action")
             if action == "assign":
                 target = existing(change.get("person_id"))
             elif action == "unassign":
                 target = None
             elif action == "create_person":
-                target = state["next_person_id"]
-                state["next_person_id"] += 1
-                state["persons"][str(target)] = {"name": f"Person {target}", "description": "", "function": ""}
+                target = next_person_id; next_person_id += 1
+                persons[target] = {"name": f"Person {target}", "description": "", "function": "", "track_ids": []}
             else:
                 raise ReviewError("Unbekannte Trackaktion.")
-            state["assignments"][str(tid)] = target
-        excluded = set(state["excluded_face_observations"])
-        seen_faces = set()
-        for change in exclusions:
-            if not isinstance(change, dict) or set(change) != {"face_id", "excluded"}:
-                raise ReviewError("Ungültiger Face-Ausschluss. Einzelne Faces können nicht zugewiesen werden.")
-            fid = change["face_id"]
-            if type(fid) is not int or fid not in data.observations or fid in seen_faces or type(change["excluded"]) is not bool:
-                raise ReviewError("Unbekannte oder mehrfach übermittelte Face-Beobachtung.")
-            seen_faces.add(fid)
-            if change["excluded"]:
-                excluded.add(fid)
-            else:
-                excluded.discard(fid)
-        state["excluded_face_observations"] = sorted(excluded)
-    elif operation in {"merge", "delete"}:
-        source = existing(body.get("source_person_id"))
-        target = existing(body.get("target_person_id")) if operation == "merge" else None
+            if old == target:
+                continue
+            if old in persons:
+                persons[old]["track_ids"] = [value for value in persons[old]["track_ids"] if value != track_id]
+            if target is not None and track_id not in persons[target]["track_ids"]:
+                persons[target]["track_ids"].append(track_id)
+            data.assignments[track_id] = target
+            assignments_changed = True
+    elif operation == "merge":
+        source, target = existing(body.get("source_person_id")), existing(body.get("target_person_id"))
         if source == target:
             raise ReviewError("Eine Person kann nicht mit sich selbst zusammengeführt werden.")
-        if target is not None:
-            for field in ("name", "description", "function"):
-                if not state["persons"][str(target)][field]:
-                    state["persons"][str(target)][field] = state["persons"][str(source)][field]
-        for tid, assigned in state["assignments"].items():
-            if assigned == source:
-                state["assignments"][tid] = target
+        for field in ("name", "description", "function"):
+            if not persons[target][field]:
+                persons[target][field] = persons[source][field]
+        persons[target]["track_ids"] = sorted(set(persons[target]["track_ids"] + persons[source]["track_ids"]))
+        del persons[source]
+        assignments_changed = True
+    elif operation == "delete":
+        del persons[existing(body.get("source_person_id"))]
+        assignments_changed = True
     elif operation == "metadata":
-        pid = existing(body.get("person_id"))
-        for field in ("name", "description"):
+        person = persons[existing(body.get("person_id"))]
+        changed = False
+        for field in ("name", "description", "function"):
             if field in body:
                 value = body[field]
                 if not isinstance(value, str) or len(value) > 10000:
-                    raise ReviewError("Name und Beschreibung müssen gültige Texte sein.")
-                state["persons"][str(pid)][field] = value.strip()
+                    raise ReviewError("Ungültige Personenmetadaten.")
+                value = value.strip()
+                changed |= person[field] != value
+                person[field] = value
+        if "profile_crop_id" in body:
+            crop_id = body["profile_crop_id"]
+            if crop_id is not None and profile_crop(data, crop_id, person["track_ids"]) is None:
+                raise ReviewError("Profilbild muss ein gültiger Crop dieser Person sein.")
+            changed |= person.get("profile_crop_id") != crop_id
+            person["profile_crop_id"] = crop_id
+        if not changed:
+            return project(data)
     else:
         raise ReviewError("Unbekannte Personenaktion.")
-    state["revision"] += 1
-    result = project(data, state)
-    try:
-        if data.staged:
-            from . import stage_state
-            all_reviews = copy.deepcopy(stage_state.corrections(job_dir))
-            all_reviews["identity_reviews"][data.identity_id] = state
-            _write(stage_state.root(job_dir) / FILENAME, all_reviews)
-        else:
-            _write(data.root / FILENAME, state)
-    except OSError as exc:
-        raise ReviewError("Die Korrekturen konnten nicht gespeichert werden.", 500) from exc
-    return result
+
+    persons = {pid: person for pid, person in persons.items() if person["track_ids"]}
+    revision = data.identity_revision + 1
+    assignment_revision = data.assignment_revision + int(assignments_changed)
+    stage_state.atomic_write(data.root / FILENAME, _payload(data, persons, revision, assignment_revision))
+    if assignments_changed:
+        (data.root / "attributes.json").unlink(missing_ok=True)
+    return project(artifacts.load(job_dir))

@@ -40,7 +40,7 @@ def test_only_selected_full_person_crops_are_encoded(staged_job, monkeypatch):
     assert len(list((job / "person_analysis").rglob("*.jpg"))) == len(writes) == 25
     assert all(shape == (100, 40, 3) for shape in writes)
     data = review_artifacts.load(job)
-    assert len(data.review_crops(1, set())) == 4
+    assert len(data.review_crops(1)) == 4
     assert all(data.crop_file(cid).is_file() for cid in data.crops)
 
 
@@ -55,5 +55,5 @@ def test_no_faces_keeps_all_tracks_and_fallbacks(staged_job, monkeypatch):
     assert calls["recognition"] == []
     assert len(list((job / "person_analysis").rglob("*.jpg"))) == 25
     data = review_artifacts.load(job)
-    assert all(len(data.review_crops(tid, set())) == 5 for tid in data.tracks)
+    assert all(len(data.review_crops(tid)) == 5 for tid in data.tracks)
     assert stage_state.status(job)["identities_ready"] is True

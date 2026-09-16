@@ -10,6 +10,7 @@ function TrackingPanel({ jobId }: { jobId: string }) {
     const { jobData, progressData, handleRunTracking, fetchJobData } = useJob();
     const [snapshot, setSnapshot] = useState<FaceReview | null>(null);
     const [pending, setPending] = useState<Record<number, boolean>>({});
+    const [trackExcludes, setTrackExcludes] = useState<Record<number, boolean>>({});
     const [splits, setSplits] = useState<Record<number, TrackingChange>>({});
     const [open, setOpen] = useState(false);
     const [error, setError] = useState('');
@@ -17,7 +18,7 @@ function TrackingPanel({ jobId }: { jobId: string }) {
     const [fallbacks, setFallbacks] = useState(false);
     const [enlarged, setEnlarged] = useState<PersonCrop | null>(null);
     const [refresh, setRefresh] = useState(0);
-    const dirty = Object.keys(pending).length + Object.keys(splits).length > 0;
+    const dirty = Object.keys(pending).length + Object.keys(splits).length + Object.keys(trackExcludes).length > 0;
     const running = jobData?.status === 'running';
     useEffect(() => {
         if (running || dirty) return;
@@ -26,7 +27,7 @@ function TrackingPanel({ jobId }: { jobId: string }) {
             .then(async res => { const data = await res.json(); if (!res.ok) throw new Error(data.error || 'Tracking-Daten nicht verfügbar.'); setSnapshot(data); setError(''); })
             .catch(err => { if (!controller.signal.aborted) setError(err.message); });
         return () => controller.abort();
-    }, [jobId, jobData?.person_stages?.face_review_version, jobData?.person_stages?.tracking_run, running, dirty, refresh]);
+    }, [jobId, jobData?.person_stages?.tracking_revision, running, dirty, refresh]);
     useEffect(() => {
         if (!open) return;
         const previous = document.body.style.overflow;
@@ -38,20 +39,20 @@ function TrackingPanel({ jobId }: { jobId: string }) {
         setSaving(true); setError('');
         try {
             const res = await fetch(`/api/jobs/${jobId}/person-analysis/face-review`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ version: snapshot.version, face_exclusions: Object.entries(pending).map(([id, excluded]) => ({ face_id: Number(id), excluded })), track_changes: Object.values(splits) }) });
+                body: JSON.stringify({ version: snapshot.version, face_exclusions: Object.entries(pending).map(([id, excluded]) => ({ face_id: Number(id), excluded })), track_changes: [...Object.entries(trackExcludes).map(([id, excluded]) => ({ action: 'set_excluded', track_id: Number(id), excluded })), ...Object.values(splits)] }) });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Speichern fehlgeschlagen.');
-            setSnapshot(data); setPending({}); setSplits({}); void fetchJobData(jobId, true);
+            setSnapshot(data); setPending({}); setSplits({}); setTrackExcludes({}); void fetchJobData(jobId, true);
         } catch (err) { setError(err instanceof Error ? err.message : 'Speichern fehlgeschlagen.'); }
         finally { setSaving(false); }
     };
-    const discard = () => { setPending({}); setSplits({}); setRefresh(n => n + 1); };
+    const discard = () => { setPending({}); setSplits({}); setTrackExcludes({}); setRefresh(n => n + 1); };
     const close = () => { if (!saving && (!dirty || window.confirm('Vorgemerkte Review-Änderungen verwerfen?'))) { discard(); setOpen(false); } };
     const stale = snapshot?.identities_stale || jobData?.person_stages?.identities_stale;
     const summary = snapshot ? `${snapshot.tracks.length} Tracks · ${snapshot.tracks.reduce((n, t) => n + t.quality_face_count, 0)} Face-Beobachtungen` : '';
     return <div className="flex flex-col gap-5" data-review-size="tracking">
         <h2 className="text-[1.4rem] font-bold">Tracking &amp; Gesichter</h2>
-        <p className="text-sm text-text-secondary">Die Review ist optional. Face-Ausschlüsse ändern keine Trackzeiten. Für einen dauerhaften Personenwechsel kann ein Track zeitlich geteilt werden.</p>
+        <p className="text-sm text-text-secondary">Die Review ist optional. Face- und Track-Ausschlüsse bleiben umkehrbar. Gespeicherte Änderungen erfordern eine neue Personen- und Attributberechnung. Für einen dauerhaften Personenwechsel kann ein Track zeitlich geteilt werden.</p>
         {running && <p role="status">{progressData.tracking?.msg || 'Verarbeitung läuft …'}</p>}
         {!open && error && <p role="alert" className="text-amber-600">{error}</p>}
         {stale && !open && <p role="status" className="p-3 border border-amber-500 rounded-lg">Personen &amp; Cluster ist veraltet. Vorhandene Personen bleiben bis zum erneuten Ausführen von Schritt 2 unverändert.</p>}
@@ -76,6 +77,8 @@ function TrackingPanel({ jobId }: { jobId: string }) {
                         const change = splits[source];
                         const option = change?.action === 'split' ? track.split_options?.find(o => o.before_frame === change.before_frame && track.track_id === change.track_id) : null;
                         return <div key={`${snapshot.version}:${track.track_id}`} className={change ? 'border-2 border-violet-500 rounded-lg' : ''}>
+                            <label className="flex items-center gap-2 px-3 py-2 text-sm"><input type="checkbox" disabled={saving || running} checked={trackExcludes[track.track_id] ?? track.excluded ?? false}
+                                onChange={e => setTrackExcludes(prev => { const next = { ...prev }; if (e.target.checked === Boolean(track.excluded)) delete next[track.track_id]; else next[track.track_id] = e.target.checked; return next; })} />Track {track.track_id} ausschließen{track.track_id in trackExcludes && ' · vorgemerkt'}</label>
                             <TrackRow track={{ ...track, review_mode: track.quality_face_count ? 'retinaface' : 'fallback', review_observation_count: track.observations.length }}
                                 jobId={jobId} analysisId={snapshot.analysis_id} version={snapshot.version} initialCrops={track.observations} disabled={saving || running}
                                 persons={[]} onChoose={() => {}} onUndo={() => {}} onEnlarge={setEnlarged} exclusions={pending} allowExclusions showAssignments={false}
@@ -93,7 +96,7 @@ function TrackingPanel({ jobId }: { jobId: string }) {
                 </div>
                 <div className="p-4 border-t border-border-subtle bg-bg-card">
                     {error && <p role="alert" className="text-red-500 mb-2">{error}</p>}
-                    <div className="flex flex-wrap justify-between gap-3 items-center"><span>{Object.keys(pending).length} Face-Änderungen vorgemerkt · {Object.keys(splits).length} Split-Änderungen vorgemerkt</span>
+                    <div className="flex flex-wrap justify-between gap-3 items-center"><span>{Object.keys(pending).length} Face-Änderungen vorgemerkt · {Object.keys(splits).length} Split-Änderungen · {Object.keys(trackExcludes).length} Track-Ausschlüsse vorgemerkt</span>
                         <div className="flex gap-3"><button disabled={saving || !dirty} onClick={() => { if (window.confirm('Vorgemerkte Review-Änderungen verwerfen?')) discard(); }}>Verwerfen</button>
                             <button disabled={saving || running || !dirty} onClick={() => void save()} className="px-4 py-2 bg-violet-600 text-white rounded-lg disabled:opacity-50">{saving ? 'Speichert …' : 'Review-Änderungen speichern'}</button></div></div>
                 </div>

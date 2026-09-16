@@ -30,42 +30,43 @@ def attribute_job(staged_job, monkeypatch):
     return job, video, calls
 
 
-def test_run_overrides_reload_reset_and_stale(attribute_job):
+def test_current_values_batch_reload_and_replacement(attribute_job):
     job, video, calls = attribute_job
     result = attribute_stage.run_attributes(video, job)
     assert calls[0] == 'load' and calls[-1] == 'close' and len(calls) == 3
     assert len(result['persons'][0]['images']) == 1
-    assert len(result['persons'][0]['automatic']) == 12
-    output = attribute_state.run_root(job, result['run_id']) / 'attributes.json'
-    original = output.read_bytes()
+    assert len(result['persons'][0]['attributes']) == 12
+    output = stage_state.root(job) / 'attributes.json'
     field = FIELDS[0]
     saved = attribute_state.save_review(job, {'version': result['version'], 'changes': [
-        {'person_id': 1, 'field': field, 'value': 'manual'}]})
-    assert attribute_state.snapshot(job)['persons'][0]['effective'][field] == 'manual'
-    assert saved['persons'][0]['automatic'][field] == 'automatic'
-    assert output.read_bytes() == original
+        {'person_id': 1, 'field': field, 'value': 'manual'},
+        {'person_id': 1, 'field': FIELDS[1], 'value': 'second'}]})
+    assert attribute_state.snapshot(job)['persons'][0]['attributes'][field] == 'manual'
+    assert saved['persons'][0]['attributes'][FIELDS[1]] == 'second'
+    assert json.loads(output.read_text())['persons']['1']['attributes'][field] == 'manual'
+    assert not {'automatic', 'overrides', 'effective'} & saved['persons'][0].keys()
     with pytest.raises(ReviewError):
         attribute_state.save_review(job, {'version': result['version'], 'changes': []})
     reset = attribute_state.save_review(job, {'version': saved['version'], 'changes': [
-        {'person_id': 1, 'field': field, 'value': None}]})
-    assert reset['persons'][0]['effective'][field] == 'automatic'
+        {'person_id': 1, 'field': field, 'value': ''}]})
+    assert reset['persons'][0]['attributes'][field] == ''
     current = review_state.current(job)
     review_state.mutate(job, current['version'], 'assign', {'changes': [
         {'track_id': 2, 'action': 'assign', 'person_id': 1}]})
-    assert attribute_state.status(job)['stale']
+    assert not attribute_state.status(job)['ready'] and not output.exists()
     with pytest.raises(ReviewError):
         attribute_state.save_review(job, {'version': reset['version'], 'changes': []})
     again = attribute_stage.run_attributes(video, job)
-    assert not again['stale'] and again['run_id'] != result['run_id']
+    assert not again['stale'] and again['version'] != result['version']
     assert len(again['persons'][0]['images']) == 2  # existing fallback track
-    assert again['persons'][0]['overrides'] == {}
-    assert output.read_bytes() == original
+    assert again['persons'][0]['attributes'][field] == 'automatic'
+    assert not (stage_state.root(job) / 'runs').exists()
 
 
 def test_no_eligible_images_does_not_load_model(attribute_job, monkeypatch):
     job, video, calls = attribute_job
     original = attribute_selection.select_existing
-    monkeypatch.setattr(attribute_stage, 'select_existing', lambda data, state, w, h: original(data, state, w, h*10))
+    monkeypatch.setattr(attribute_stage, 'select_existing', lambda data, w, h: original(data, w, h*10))
     result = attribute_stage.run_attributes(video, job)
     assert calls == []
     assert result['persons'][0]['status'] == 'no_eligible_images'
@@ -74,13 +75,16 @@ def test_no_eligible_images_does_not_load_model(attribute_job, monkeypatch):
 
 def test_face_exclusion_retains_crop_but_invalidates_run(attribute_job):
     job, video, _ = attribute_job
-    data, state, _ = attribute_state.source(job)
-    before = attribute_selection.select_existing(data, state, 200, 100)
+    data = attribute_state.source(job)
+    before = attribute_selection.select_existing(data, 200, 100)
     faces = stage_state.face_snapshot(job)
     stage_state.save_faces(job, {'version': faces['version'], 'face_exclusions': [
         {'face_id': faces['tracks'][0]['observations'][0]['face_id'], 'excluded': True}]})
-    after_data, after_state = review_state.read(job)
-    assert attribute_selection.select_existing(after_data, after_state, 200, 100) == before
+    from backend.pipeline.persons import review_artifacts
+    after_data = review_artifacts.load_tracking(job)
+    # Only the face flag changed; use the previous assignment to compare candidates.
+    after_data.persons, after_data.assignments = data.persons, data.assignments
+    assert attribute_selection.select_existing(after_data, 200, 100) == before
     with pytest.raises(ReviewError):
         attribute_stage.run_attributes(video, job)
 
@@ -110,7 +114,7 @@ def test_person_error_does_not_stop_remaining_people(attribute_job, monkeypatch)
     assert parse_json('```json\n' + json.dumps({field: 'ok' for field in FIELDS}) + '\n```') == {field: 'ok' for field in FIELDS}
 
 
-def test_api_restart_images_and_automatic_values_remain_separate(attribute_job, monkeypatch):
+def test_api_restart_current_values_and_versioned_images(attribute_job, monkeypatch):
     from fastapi.testclient import TestClient
     from backend import app, session_manager as sm
     job, video, _ = attribute_job
@@ -124,25 +128,26 @@ def test_api_restart_images_and_automatic_values_remain_separate(attribute_job, 
         {'person_id': 1, 'field': FIELDS[0], 'value': 'Restart'}]})
     assert response.status_code == 200
     sm._STORE.clear()
-    assert client.get(url + 'attributes').json()['persons'][0]['effective'][FIELDS[0]] == 'Restart'
+    loaded = client.get(url + 'attributes').json()
+    assert loaded['persons'][0]['attributes'][FIELDS[0]] == 'Restart'
     crop = result['persons'][0]['images'][0]
-    image = client.get(url + f"attributes/{result['run_id']}/images/{crop['crop_id']}")
+    image = client.get(url + f"attributes/{loaded['version']}/images/{crop['crop_id']}")
     assert image.status_code == 200 and image.headers['content-type'] == 'image/jpeg'
-    assert client.get(url + 'attributes/invalid/images/1').status_code == 404
-    assert json.loads(sm.get_job('job')['persons_df'].iloc[0]['attributes']) == {}
+    assert client.get(url + 'attributes/invalid/images/1').status_code == 409
+    assert json.loads(sm.get_job('job')['persons_df'].iloc[0]['attributes'])[FIELDS[0]] == 'Restart'
     code = 'import json,sys; from backend.pipeline.persons.attribute_state import snapshot; print(json.dumps(snapshot(sys.argv[1])))'
     restarted = json.loads(subprocess.check_output([sys.executable, '-B', '-c', code, str(job)], text=True))
-    assert restarted['persons'][0]['effective'][FIELDS[0]] == 'Restart'
+    assert restarted['persons'][0]['attributes'][FIELDS[0]] == 'Restart'
 
-def test_split_segments_are_separate_candidates_and_recluster_is_stale(attribute_job):
+def test_split_segments_are_separate_candidates_and_recluster_removes_attributes(attribute_job):
     job, video, _ = attribute_job
     attribute_stage.run_attributes(video, job)
     faces = stage_state.face_snapshot(job)
     stage_state.save_faces(job, {'version': faces['version'], 'track_changes': [
         {'action': 'split', 'track_id': 1, 'before_frame': 31}]})
-    assert attribute_state.status(job)['stale']
+    assert not attribute_state.status(job)['ready']
     run_identities(video, job)
-    assert attribute_state.status(job)['stale']
+    assert not attribute_state.status(job)['ready']
     result = attribute_stage.run_attributes(video, job)
     assert {c['track_id'] for c in result['persons'][0]['images']} == {6, 7}
     current = review_state.current(job)
@@ -153,16 +158,16 @@ def test_split_segments_are_separate_candidates_and_recluster_is_stale(attribute
 
 def test_quality_flags_do_not_filter_and_missing_jpeg_is_not_reconstructed(attribute_job):
     job, _, _ = attribute_job
-    data, state, _ = attribute_state.source(job)
-    expected = attribute_selection.select_existing(data, state, 200, 100)
+    data = attribute_state.source(job)
+    expected = attribute_selection.select_existing(data, 200, 100)
     for crop in data.by_track[1]:
         crop.update(quality_usable=False, face_usable=False)
-    selected = attribute_selection.select_existing(data, state, 200, 100)
+    selected = attribute_selection.select_existing(data, 200, 100)
     assert [c['crop_id'] for c in selected[1]] == [c['crop_id'] for c in expected[1]]
     path = data.crop_file(data.by_track[1][0]['crop_id'])
     path.write_bytes(b'invalid jpeg')
-    with pytest.raises(ReviewError, match='keine Rekonstruktion'):
-        attribute_selection.select_existing(data, state, 200, 100)
+    with pytest.raises(ReviewError, match='nicht lesbar'):
+        attribute_selection.select_existing(data, 200, 100)
     assert path.read_bytes() == b'invalid jpeg'
 
 

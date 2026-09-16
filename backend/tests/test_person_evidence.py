@@ -1,122 +1,95 @@
-"""Review evidence/exclusions, independent of model/GPU dependencies."""
-import csv
+"""Current face flags, invalidation, restart and rejection of old jobs."""
 import json
 import subprocess
 import sys
-
 import pytest
-
-from backend.tests.test_person_review import job_dir, api  # noqa: F401 - shared fixtures
-from backend.pipeline.persons import review_state as review, review_artifacts as artifacts
-
-
-def exclude(job, value=True, changes=None):
-    return review.mutate(job, review.current(job)["version"], "assign", {
-        "changes": changes or [], "face_exclusions": [{"face_id": 1, "excluded": value}]})
+from backend.tests.test_person_review import job_dir, api
+from backend.pipeline.persons import stage_state, review_state as review, review_artifacts as artifacts
 
 
-def temporal(result):
-    keys = ("person_id", "track_ids", "appearances", "appearances_count", "first_seen_ts", "last_seen_ts")
-    return [{k: p[k] for k in keys} for p in result["persons"]]
+def exclude(job, value=True):
+    return stage_state.save_faces(job, {'version': stage_state.face_snapshot(job)['version'],
+        'face_exclusions': [{'face_id': 1, 'excluded': value}]})
 
 
-def test_exclusion_restore_preserves_times_and_originals(job_dir):
-    root = job_dir / "person_analysis"
-    before = {name: (root / name).read_bytes() for name in artifacts.FILES}
-    initial = review.current(job_dir)
+def test_exclusion_restore_preserves_track_times_and_crops(job_dir):
+    root = job_dir / 'person_analysis'
+    initial = stage_state.face_snapshot(job_dir)
+    originals = {name: (root / name).read_bytes() for name in ('tracking_frames.csv', 'person_crops.csv')}
+    stage_state.atomic_write(root / 'attributes.json', {'persons': {}})
     result = exclude(job_dir)
-    assert temporal(result) == temporal(initial)
-    assert result["persons"][0]["representative_crop_id"] != 1
-    assert result["persons"][0]["valid_identity_crop_ids"] == []
-    assert result["excluded_face_observations"] == [1]
-    assert artifacts.load(job_dir).review_crops(1, {1})[0]["excluded"] is True
-    assert review.current(job_dir) == result
-    restored = exclude(job_dir, False)
-    assert temporal(restored) == temporal(initial)
-    assert restored["persons"][0]["representative_crop_id"] == 1
-    assert restored["persons"][0]["valid_identity_crop_ids"] == [1]
-    assert before == {name: (root / name).read_bytes() for name in artifacts.FILES}
-    saved = json.loads((root / review.FILENAME).read_text())
-    assert saved["schema_version"] == 2
-    assert saved["excluded_face_observations"] == []
-    assert set(saved) == {"schema_version", "analysis_id", "revision", "next_person_id", "assignments", "persons", "excluded_face_observations"}
+    assert [(t['start_s'], t['end_s']) for t in result['tracks']] == [(t['start_s'], t['end_s']) for t in initial['tracks']]
+    assert result['excluded_face_observations'] == [1]
+    rows, _ = stage_state.read_csv(root / 'face_observations.csv')
+    assert rows[0]['excluded'] == 'True'
+    assert not (root / 'persons.json').exists() and not (root / 'attributes.json').exists()
+    assert artifacts.load_tracking(job_dir).review_crops(1, include_excluded=True)[0]['excluded']
+    assert exclude(job_dir, False)['excluded_face_observations'] == []
+    assert originals == {name: (root / name).read_bytes() for name in originals}
+    assert not (root / 'review_state.json').exists()
 
 
-def test_exclusion_follows_observation_through_track_move(job_dir):
-    result = exclude(job_dir, changes=[{"track_id": 1, "action": "assign", "person_id": 2}])
-    person = next(p for p in result["persons"] if p["person_id"] == 2)
-    assert person["track_ids"] == [1, 3]
-    assert person["first_seen_ts"] == 10 and person["last_seen_ts"] == 32
-    assert 1 not in person["valid_identity_crop_ids"]
-    assert person["representative_crop_id"] != 1
-    assert result["excluded_face_observations"] == [1]
-
-
-@pytest.mark.parametrize("bad", [{"face_id": 999, "excluded": True}, {"face_id": True, "excluded": True},
-    {"face_id": 1, "excluded": "true"}, {"face_id": 1, "excluded": True, "person_id": 2}])
+@pytest.mark.parametrize('bad', [{'face_id': 999, 'excluded': True}, {'face_id': True, 'excluded': True},
+    {'face_id': 1, 'excluded': 'true'}, {'face_id': 1, 'excluded': True, 'person_id': 2}])
 def test_invalid_exclusion_rolls_back_entire_batch(job_dir, bad):
-    initial = review.current(job_dir)
+    before = review.current(job_dir)
+    version = stage_state.face_snapshot(job_dir)['version']
     with pytest.raises(artifacts.ReviewError):
-        review.mutate(job_dir, initial["version"], "assign", {"changes": [{"track_id": 1, "action": "unassign"}], "face_exclusions": [bad]})
-    assert review.current(job_dir) == initial
+        stage_state.save_faces(job_dir, {'version': version,
+            'face_exclusions': [{'face_id': 1, 'excluded': True}, bad],
+            'track_changes': [{'action': 'set_excluded', 'track_id': 2, 'excluded': True}]})
+    assert review.current(job_dir) == before
 
 
-def test_v1_state_is_migrated_without_losing_assignments(job_dir):
-    result = exclude(job_dir)
-    path = job_dir / "person_analysis" / review.FILENAME
-    state = json.loads(path.read_text())
-    state["schema_version"] = 1
-    state.pop("excluded_face_observations")
-    path.write_text(json.dumps(state))
-    loaded = review.current(job_dir)
-    assert temporal(loaded) == temporal(result)
-    assert loaded["excluded_face_observations"] == []
-    exclude(job_dir)
-    assert json.loads(path.read_text())["schema_version"] == 2
+def test_old_run_structure_is_not_migrated(tmp_path):
+    root = tmp_path / 'person_analysis'
+    old = root / 'runs' / 'old-run'
+    old.mkdir(parents=True)
+    (old / 'persons.json').write_text('{"persons": []}')
+    (root / 'pipeline_state.json').write_text('{"tracking_run": "old-run"}')
+    before = {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    assert not stage_state.status(tmp_path)['tracking_ready']
+    with pytest.raises(artifacts.ReviewError):
+        artifacts.load(tmp_path)
+    assert before == {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()}
 
 
-def test_legacy_success_is_not_invented(job_dir):
-    path = job_dir / "person_analysis" / "face_observations.csv"
-    with path.open(encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.DictReader(f, delimiter=";"))
-    for row in rows:
-        row.pop("embedding_created")
-    with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=rows[0], delimiter=";")
-        writer.writeheader()
-        writer.writerows(rows)
-    result = review.current(job_dir)
-    assert result["legacy_evidence"] is True
-    assert result["tracks"][0]["facemoe_observation_count"] == 0
-    assert result["persons"][0]["valid_identity_crop_ids"] == []
-    assert artifacts.load(job_dir).review_crops(1, set())[0]["evidence_status"] == "legacy_unverified"
+def test_pending_embedding_counts_as_zero(job_dir):
+    root = job_dir / 'person_analysis'
+    rows, fields = stage_state.read_csv(root / 'face_observations.csv')
+    rows[0]['embedding_created'] = ''
+    stage_state.write_csv(root / 'face_observations.csv', rows, fields)
+    (root / 'persons.json').unlink()
+    assert review.current(job_dir)['tracks'][0]['facemoe_observation_count'] == 0
+    assert artifacts.load_tracking(job_dir).faces[0]['embedding_created'] is None
 
 
 def test_api_exclusions_reload_and_restore(api, job_dir):
     client, sm, _ = api
-    before = client.get("/api/jobs/job/persons").json()
-    response = client.post("/api/jobs/job/track-assignments", json={"version": before["version"], "changes": [], "face_exclusions": [{"face_id": 1, "excluded": True}]})
+    url = '/api/jobs/job/person-analysis/'
+    first = client.get(url + 'tracking').json()
+    response = client.patch(url + 'face-review', json={'version': first['version'],
+        'face_exclusions': [{'face_id': 1, 'excluded': True}]})
     assert response.status_code == 200
-    assert temporal(response.json()) == temporal(before)
     sm._STORE.clear()
-    reloaded = client.get("/api/jobs/job/persons").json()
-    assert reloaded["excluded_face_observations"] == [1]
-    script = "import json,sys,os; from pathlib import Path; os.environ['AD_JOBS_DIR']=str(Path(sys.argv[1]).parent); from backend.session_manager import get_job; print(json.dumps(get_job('job')['person_review']))"
-    process = subprocess.run([sys.executable, "-c", script, str(job_dir)], capture_output=True, text=True, check=True)
-    restarted = json.loads(process.stdout)
-    assert restarted["excluded_face_observations"] == [1]
-    assert temporal(restarted) == temporal(before)
-    assert client.get("/api/jobs/job/tracks/1/crops").json()["crops"][0]["excluded"] is True
-    response = client.post("/api/jobs/job/track-assignments", json={"version": reloaded["version"], "changes": [], "face_exclusions": [{"face_id": 1, "excluded": False}]})
-    assert response.status_code == 200
-    assert response.json()["excluded_face_observations"] == []
+    reloaded = client.get(url + 'tracking').json()
+    assert reloaded['excluded_face_observations'] == [1]
+    script = 'import json,sys; from backend.pipeline.persons.stage_state import face_snapshot; print(json.dumps(face_snapshot(sys.argv[1])))'
+    restarted = json.loads(subprocess.check_output([sys.executable, '-c', script, str(job_dir)], text=True))
+    assert restarted == reloaded
+    response = client.patch(url + 'face-review', json={'version': reloaded['version'],
+        'face_exclusions': [{'face_id': 1, 'excluded': False}]})
+    assert response.status_code == 200 and response.json()['excluded_face_observations'] == []
 
 
-def test_missing_v2_exclusions_are_not_silently_reset(job_dir):
-    exclude(job_dir)
-    path = job_dir / "person_analysis" / review.FILENAME
-    state = json.loads(path.read_text())
-    state.pop("excluded_face_observations")
-    path.write_text(json.dumps(state))
-    with pytest.raises(artifacts.ReviewError):
-        review.current(job_dir)
+def test_track_exclusion_is_persistent_reversible_and_invalidates(job_dir):
+    first = stage_state.face_snapshot(job_dir)
+    changed = stage_state.save_faces(job_dir, {'version': first['version'], 'track_changes': [
+        {'action': 'set_excluded', 'track_id': 1, 'excluded': True}]})
+    state = stage_state.read_json(job_dir / 'person_analysis' / 'tracks.json')
+    assert state['tracks'][0]['excluded'] is True
+    assert 1 not in [t['track_id'] for t in review.current(job_dir)['unassigned_tracks']]
+    restored = stage_state.save_faces(job_dir, {'version': changed['version'], 'track_changes': [
+        {'action': 'set_excluded', 'track_id': 1, 'excluded': False}]})
+    assert restored['tracks'][0]['excluded'] is False
+    assert 1 in [t['track_id'] for t in review.current(job_dir)['unassigned_tracks']]

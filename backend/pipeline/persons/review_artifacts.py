@@ -1,16 +1,14 @@
-"""Read the existing analysis outputs. No model imports or image generation."""
+"""Liest ausschließlich den aktuellen Zustand unter person_analysis/."""
 from __future__ import annotations
 
 import csv
-import hashlib
-import io
-import json
 import math
-from functools import lru_cache
+from collections import OrderedDict
 from pathlib import Path
+from threading import RLock
 
-
-FILES = ("persons.json", "track_identities.csv", "person_crops.csv", "face_observations.csv")
+TRACKING_FILES = ("tracks.json", "tracking_frames.csv", "person_crops.csv", "face_observations.csv")
+FILES = (*TRACKING_FILES, "persons.json", "attributes.json")
 
 
 class ReviewError(ValueError):
@@ -20,225 +18,269 @@ class ReviewError(ValueError):
 
 
 def available(job_dir: str | Path) -> bool:
-    from . import stage_state
-    if stage_state.active(job_dir):
-        return True
     root = Path(job_dir) / "person_analysis"
-    return all((root / name).is_file() for name in FILES[:3])
+    return all((root / name).is_file() for name in TRACKING_FILES)
 
 
-def _number(value: object) -> float:
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError("non-finite number")
-    return result
+def _bool(value) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes"}
 
 
-def _rows(data: bytes) -> list[dict]:
-    return list(csv.DictReader(io.StringIO(data.decode("utf-8-sig")), delimiter=";"))
+def _optional_bool(value) -> bool | None:
+    return None if value is None or str(value).strip() == "" else _bool(value)
+
+
+def _number(value, default=0.0) -> float:
+    try:
+        result = float(value)
+        return result if math.isfinite(result) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _rows(path: Path) -> list[dict]:
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        return list(csv.DictReader(stream, delimiter=";"))
 
 
 class Artifacts:
-    def __init__(self, root: Path, identity_root: Path | None = None, staged: bool = False):
-        self.root = root.resolve()
-        self.staged = staged
-        self.identity_id = identity_root.parent.name if identity_root else None
-        self.tracking_id = root.parent.name if staged else None
-        self.base_root = root.parents[2] if staged else root
-        self.crop_roots = {}
-        raw = {}
-        for name in FILES:
-            source = identity_root if staged and name in FILES[:2] else root
-            raw[name] = (source / name).read_bytes() if source and (source / name).is_file() else b""
-        if staged:
-            raw["tracks.json"] = (root / "tracks.json").read_bytes()
-            raw["identity_result.json"] = (identity_root / "identity_result.json").read_bytes() if identity_root else b""
-            raw["extra_crops"] = (identity_root / "person_crops.csv").read_bytes() if identity_root else b""
-        self.analysis_id = hashlib.sha256(b"\0".join(raw.values())).hexdigest()
-        payload = json.loads(raw["persons.json"].decode("utf-8-sig")) if raw["persons.json"] else {"persons": [], "unassigned_tracks": []}
-        self.identity_report = json.loads(raw["identity_result.json"]) if staged and identity_root else None
-        self.used_splits = (self.identity_report or {}).get("track_splits", {})
-        self.used_exclusions = (self.identity_report or {}).get("excluded_face_observations", [])
-        successful_faces = {r["face_id"] for r in self.identity_report["observations"] if r["status"] == "success"} if self.identity_report else set()
-        self.persons = {int(p["person_id"]): p for p in payload["persons"]}
-        self.tracks: dict[int, dict] = {}
-        if staged:
-            for track in (self.identity_report or {}).get("tracks", json.loads(raw["tracks.json"])["tracks"]):
-                self._add_track(track)
-        else:
-            for person in payload["persons"]:
-                for segment in person["segments"]:
-                    self._add_track(segment)
-            for track in payload["unassigned_tracks"]:
-                self._add_track(track)
-        self.assignments: dict[int, int | None] = {}
-        for row in _rows(raw["track_identities.csv"]):
-            tid = int(row["track_id"])
-            target = int(row["person_id"]) if row["person_id"] else None
-            if tid in self.assignments or tid not in self.tracks or (target is not None and target not in self.persons):
-                raise ValueError("invalid track assignment")
-            self.assignments[tid] = target
-        if staged and identity_root is None:
-            self.assignments = {tid: None for tid in self.tracks}
-        if set(self.assignments) != set(self.tracks):
-            raise ValueError("incomplete track assignments")
-        self.crops: dict[int, dict] = {}
-        self.by_track: dict[int, list[dict]] = {tid: [] for tid in self.tracks}
-        by_path = {}
-        crop_sources = [(root, raw["person_crops.csv"])] + ([(identity_root, raw["extra_crops"])] if identity_root else [])
-        for crop_root, crop_bytes in crop_sources:
-            for row in _rows(crop_bytes):
-                tid, cid = int(row["track_id"]), int(row["crop_id"])
-                if staged and crop_root == root:
-                    from .track_segments import resolve_track
-                    tid = resolve_track(tid, int(row["frame_number"]), {"track_splits": self.used_splits})
-                if tid not in self.tracks or cid in self.crops:
-                    raise ValueError("invalid crop reference")
-                relative = row["crop_path"].replace("\\", "/")
-                crop = {
-                    "crop_id": cid, "track_id": tid, "scene_id": int(row["scene_id"]),
-                    "frame_number": int(row["frame_number"]), "timestamp_s": _number(row["timestamp_s"]),
-                    "crop_path": ((crop_root.relative_to(self.base_root) / relative).as_posix()), "width": int(row["x2"]) - int(row["x1"]),
-                    "height": int(row["y2"]) - int(row["y1"]), "face_bbox": None,
-                    "person_bbox": [int(row[k]) for k in ("x1", "y1", "x2", "y2")],
-                }
-                self.crops[cid] = crop
-                self.crop_roots[cid] = crop_root
-                self.by_track[tid].append(crop)
-                if crop_root == root:
-                    by_path[relative] = crop
-        self.faces = []
-        self.observations: dict[int, dict] = {}
-        self.evidence_by_track = {tid: [] for tid in self.tracks}
-        self.legacy_evidence = False
-        for row in _rows(raw["face_observations.csv"]):
-            crop = by_path.get(row["person_crop_path"].replace("\\", "/"))
-            if crop is None:
-                continue
-            bbox = [int(float(row[key])) for key in ("face_x1", "face_y1", "face_x2", "face_y2")]
-            crop["face_bbox"] = bbox
-            usable = row["face_usable"].lower() in {"true", "1"}
-            aligned = row["alignment_ok"].lower() in {"true", "1"}
-            verified = "embedding_created" in row
-            created = row.get("embedding_created", "").lower() in {"true", "1"}
-            try:
-                confidence = _number(row.get("face_confidence") or 0)
-            except (TypeError, ValueError):
-                confidence = 0
-            if (staged and usable) or (not staged and usable and aligned and (created or not verified)):
-                fid = int(row["face_id"])
-                if fid in self.observations:
-                    raise ValueError("duplicate observation")
-                evidence_status = ("facemoe" if fid in successful_faces else "retinaface") if staged else ("facemoe" if verified else "legacy_unverified")
-                try:
-                    blur_score = max(0, _number(row.get("blur_score") or 0))
-                except (TypeError, ValueError):
-                    blur_score = 0
-                observation = {**crop, "face_id": fid, "evidence_status": evidence_status,
-                               "blur_score": blur_score, "face_confidence": confidence}
-                self.observations[fid] = observation
-                self.evidence_by_track[crop["track_id"]].append(observation)
-                self.legacy_evidence |= not staged and not verified
-            self.faces.append({
-                "face_id": int(row["face_id"]), "track_id": crop["track_id"],
-                "scene_id": crop["scene_id"], "frame_number": crop["frame_number"],
-                "timestamp_s": crop["timestamp_s"],
-                "crop_path": "person_analysis/" + crop["crop_path"],
-                "person_crop_path": "person_analysis/" + crop["crop_path"],
-                "bbox": bbox, "face_bbox": bbox,
-                "usable": row["face_usable"].lower() in {"true", "1"},
-                "confidence": confidence,
-                "alignment_ok": row["alignment_ok"].lower() in {"true", "1"},
-                "embedding_created": created if verified else None,
-            })
-        for crops in self.by_track.values():
-            crops.sort(key=lambda c: (c["frame_number"], c["crop_id"]))
-        for rows in self.evidence_by_track.values():
-            rows.sort(key=lambda c: (c["frame_number"], c["face_id"]))
+    def __init__(self, root: Path, include_persons: bool = True):
+        from . import stage_state, track_segments
 
-    def _add_track(self, row: dict) -> None:
-        tid = int(row["track_id"])
-        if tid in self.tracks:
-            raise ValueError("duplicate track")
-        start, end = _number(row["start_s"]), _number(row["end_s"])
-        if start > end:
-            raise ValueError("invalid interval")
-        self.tracks[tid] = {"track_id": tid, "scene_id": int(row["scene_id"]), "start_s": start, "end_s": end,
-                            "start_frame": row.get("start_frame"), "end_frame": row.get("end_frame"),
-                            "source_track_id": row.get("source_track_id", tid), "is_split": row.get("is_split", False)}
+        self.root = root.resolve()
+        self.track_state = stage_state.read_json(self.root / "tracks.json")
+        self.tracking_revision = int(self.track_state["revision"])
+        self.tracks = {track["track_id"]: track for track in track_segments.current_tracks(self.track_state, self.root)}
+        self._tracks_by_source = {}
+        for track in self.tracks.values():
+            self._tracks_by_source.setdefault(track["source_track_id"], []).append(track)
+        self.persons, self.assignments = {}, {track_id: None for track_id in self.tracks}
+        self.identity_revision = self.assignment_revision = None
+        if include_persons and (self.root / "persons.json").is_file():
+            self._load_persons(stage_state.read_json(self.root / "persons.json"))
+        self.analysis_id = f"tracking-{self.tracking_revision}"
+        self.crops, self.by_track = {}, {track_id: [] for track_id in self.tracks}
+        self.faces, self.observations = [], {}
+        self.evidence_by_track = {track_id: [] for track_id in self.tracks}
+        self._load_crops()
+        self._load_faces()
+
+    def _load_persons(self, payload: dict) -> None:
+        if payload.get("tracking_revision") != self.tracking_revision or not isinstance(payload.get("persons"), list):
+            raise ReviewError("Personenzuordnungen passen nicht zum aktuellen Tracking.", 409)
+        self.identity_revision = int(payload.get("revision", 0))
+        self.assignment_revision = int(payload.get("assignment_revision", self.identity_revision))
+        used = set()
+        for raw in payload["persons"]:
+            person_id = int(raw["person_id"])
+            if person_id < 1 or person_id in self.persons:
+                raise ReviewError("Ungültige Personenzuordnungen.", 409)
+            person = {
+                "person_id": person_id, "name": str(raw.get("name") or f"Person {person_id}"),
+                "description": str(raw.get("description") or ""), "function": str(raw.get("function") or ""),
+                "track_ids": [int(value) for value in raw.get("track_ids", [])],
+                "profile_crop_id": raw.get("profile_crop_id"),
+            }
+            for track_id in person["track_ids"]:
+                if track_id not in self.tracks or track_id in used or self.tracks[track_id]["excluded"]:
+                    raise ReviewError("Ungültige Personenzuordnungen.", 409)
+                used.add(track_id)
+                self.assignments[track_id] = person_id
+            self.persons[person_id] = person
+
+    def _resolve_track(self, source: int, frame: int) -> int:
+        # The current tracks have already been validated once in __init__.
+        for track in self._tracks_by_source.get(source, []):
+            if track["start_frame"] <= frame <= track["end_frame"]:
+                return track["track_id"]
+        raise ReviewError("Beobachtung liegt außerhalb der aktuellen Tracksegmente.", 409)
+
+    def _load_crops(self) -> None:
+        for row in _rows(self.root / "person_crops.csv"):
+            crop_id = int(row["crop_id"])
+            source = int(row["source_track_id"])
+            frame = int(row["frame_number"])
+            track_id = self._resolve_track(source, frame)
+            crop = {
+                "crop_id": crop_id, "track_id": track_id, "source_track_id": source, "scene_id": int(row["scene_id"]),
+                "frame_number": frame, "timestamp_s": _number(row["timestamp_s"]),
+                "crop_path": row["crop_path"].replace("\\", "/"), "crop_type": row.get("crop_type") or "",
+                "width": int(row["x2"]) - int(row["x1"]), "height": int(row["y2"]) - int(row["y1"]),
+                "person_bbox": [int(row[key]) for key in ("x1", "y1", "x2", "y2")], "face_bbox": None,
+            }
+            self.crops[crop_id] = crop
+            self.by_track[track_id].append(crop)
+        for rows in self.by_track.values():
+            rows.sort(key=lambda row: (row["frame_number"], row["crop_id"]))
+
+    def _load_faces(self) -> None:
+        crops_by_path = {crop["crop_path"]: crop for crop in self.crops.values()}
+        for row in _rows(self.root / "face_observations.csv"):
+            face_id, source, frame = int(row["face_id"]), int(row["source_track_id"]), int(row["frame_number"])
+            track_id = self._resolve_track(source, frame)
+            crop = crops_by_path.get(row.get("person_crop_path", "").replace("\\", "/"))
+            bbox = [int(float(row[key])) for key in ("face_x1", "face_y1", "face_x2", "face_y2")]
+            if crop is not None:
+                crop["face_bbox"] = bbox
+            face = {
+                "face_id": face_id, "track_id": track_id, "source_track_id": source, "scene_id": int(row["scene_id"]),
+                "frame_number": frame, "timestamp_s": _number(row["timestamp_s"]),
+                "crop_id": crop["crop_id"] if crop else None, "crop_path": crop["crop_path"] if crop else None,
+                "face_bbox": bbox, "usable": _bool(row.get("face_usable")), "excluded": _bool(row.get("excluded")),
+                "confidence": _number(row.get("face_confidence")), "blur_score": max(0.0, _number(row.get("blur_score"))),
+                "alignment_ok": _optional_bool(row.get("alignment_ok")),
+                "embedding_created": _optional_bool(row.get("embedding_created")),
+            }
+            self.faces.append(face)
+            if not face["usable"] or crop is None:
+                continue
+            observation = {
+                **crop, "face_id": face_id, "face_bbox": bbox, "usable": True, "excluded": face["excluded"],
+                "blur_score": face["blur_score"], "face_confidence": face["confidence"],
+                "alignment_ok": face["alignment_ok"], "embedding_created": face["embedding_created"],
+                "evidence_status": "facemoe" if face["embedding_created"] else "retinaface",
+            }
+            self.observations[face_id] = observation
+            self.evidence_by_track[track_id].append(observation)
+        for rows in self.evidence_by_track.values():
+            rows.sort(key=lambda row: (row["frame_number"], row["face_id"]))
 
     def crop_file(self, crop_id: int) -> Path:
-        crop = self.crops.get(crop_id)
+        crop = self.crops.get(int(crop_id))
         if crop is None:
             raise ReviewError("Personencrop nicht gefunden.", 404)
-        path = (self.base_root / crop["crop_path"]).resolve()
-        if not path.is_relative_to((self.crop_roots[crop_id] / "person_crops").resolve()) or not path.is_file():
+        path = (self.root / crop["crop_path"]).resolve()
+        if not path.is_relative_to((self.root / "person_crops").resolve()) or not path.is_file():
             raise ReviewError("Personencrop nicht gefunden.", 404)
         return path
 
-    def sample(self, track_id: int, limit: int = 8) -> list[dict]:
-        if track_id not in self.tracks:
-            raise ReviewError("Track nicht gefunden.", 404)
-        rows = self.by_track[track_id]
-        count = min(max(1, limit), 24, len(rows))
-        if count == 0:
-            return []
-        indices = [len(rows) // 2] if count == 1 else [round(i * (len(rows) - 1) / (count - 1)) for i in range(count)]
-        return [dict(rows[i]) for i in indices]
+    @staticmethod
+    def _sample(rows: list[dict], limit: int) -> list[dict]:
+        limit = max(1, int(limit))
+        if len(rows) <= limit:
+            return [dict(row) for row in rows]
+        if limit == 1:
+            return [dict(rows[len(rows) // 2])]
+        return [dict(rows[round(i * (len(rows) - 1) / (limit - 1))]) for i in range(limit)]
 
-    def review_crops(self, track_id: int, excluded: set[int]) -> list[dict]:
+    def review_crops(self, track_id: int, limit: int = 5, include_excluded: bool = False) -> list[dict]:
         if track_id not in self.tracks:
             raise ReviewError("Track nicht gefunden.", 404)
-        evidence = self.evidence_by_track[track_id]
-        if self.staged and self.identity_id:
-            evidence = [c for c in evidence if c["face_id"] not in excluded]
-            preferred = [c for c in evidence if c["evidence_status"] == "facemoe"]
-            evidence = preferred or evidence
-            if len(evidence) > 5:
-                evidence = [evidence[round(i * (len(evidence) - 1) / 4)] for i in range(5)]
+        all_evidence = self.evidence_by_track[track_id]
+        evidence = all_evidence if include_excluded else [row for row in all_evidence if not row["excluded"]]
         if evidence:
-            return [{**c, "excluded": c["face_id"] in excluded} for c in evidence]
-        excluded_crops = {c["crop_id"] for fid, c in self.observations.items() if fid in excluded}
-        candidates = [c for c in self.by_track[track_id] if c["crop_id"] not in excluded_crops]
-        if len(candidates) > 5:
-            candidates = [candidates[round(i * (len(candidates) - 1) / 4)] for i in range(5)]
-        return [{**c, "face_bbox": None, "face_id": None, "excluded": False,
-                 "evidence_status": "fallback"} for c in candidates]
+            facemoe = [row for row in evidence if row["embedding_created"]]
+            return self._sample(facemoe or evidence, limit)
+        excluded_crop_ids = set() if include_excluded else {row["crop_id"] for row in all_evidence if row["excluded"]}
+        fallback = [{**crop, "face_id": None, "excluded": False, "evidence_status": "fallback"}
+                    for crop in self.by_track[track_id] if crop["crop_id"] not in excluded_crop_ids]
+        return self._sample(fallback, limit)
 
-
-@lru_cache(maxsize=8)
-def _cached(root: str, signature: tuple) -> Artifacts:
-    return Artifacts(Path(root))
+    def tracking_crops(self, track_id: int) -> list[dict]:
+        """All quality-usable faces, including exclusions, independent of Identity."""
+        evidence = self.evidence_by_track[track_id]
+        if evidence:
+            return [{**row, "evidence_status": "retinaface"} for row in evidence]
+        return self.review_crops(track_id, limit=5, include_excluded=True)
 
 
 def load(job_dir: str | Path) -> Artifacts:
-    from . import stage_state
-    pointer = stage_state.active(job_dir)
-    if pointer:
-        tracking = stage_state.run_path(job_dir, pointer["tracking_run"], "tracking")
-        identity = stage_state.run_path(job_dir, pointer["identity_run"], "identities") if pointer["identity_run"] else None
-        return _cached_stage(str(tracking), str(identity) if identity else None)
-    root = Path(job_dir) / "person_analysis"
     if not available(job_dir):
-        raise ReviewError("Für diesen Job liegen noch keine vollständigen Track-Daten vor.", 409)
+        raise ReviewError("Für diesen Job liegen noch keine vollständigen Tracking-Daten vor.", 409)
     try:
-        signature = tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.is_file() else None for p in (root / name for name in FILES))
-        return _cached(str(root.resolve()), signature)
+        return Artifacts(Path(job_dir) / "person_analysis", include_persons=True)
+    except ReviewError:
+        raise
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise ReviewError("Die Track-Artefakte konnten nicht gelesen werden.", 409) from exc
+        raise ReviewError("Die Personenanalyse konnte nicht gelesen werden.", 409) from exc
 
 
-@lru_cache(maxsize=8)
-def _cached_stage(tracking, identity):
-    try:
-        return Artifacts(Path(tracking), Path(identity) if identity else None, staged=True)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise ReviewError("Stufen-Artefakte konnten nicht gelesen werden.", 409) from exc
-
-
-def load_tracking(job_dir):
-    from . import stage_state
-    pointer = stage_state.active(job_dir)
-    if pointer is None:
+def load_tracking(job_dir: str | Path) -> Artifacts:
+    if not available(job_dir):
         raise ReviewError("Tracking fehlt.", 409)
-    return _cached_stage(str(stage_state.run_path(job_dir, pointer["tracking_run"], "tracking")), None)
+    try:
+        return Artifacts(Path(job_dir) / "person_analysis", include_persons=False)
+    except ReviewError:
+        raise
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ReviewError("Die Tracking-Daten konnten nicht gelesen werden.", 409) from exc
+
+
+def read_preview_frame(video_path: str | Path, frame_number: int):
+    """Read a 1-based review frame; retry sequentially if seeking visibly fails.
+
+    Reported positions cannot prove pixel accuracy for every codec/container.
+    This is only used for previews, never for ML or persisted crop selection.
+    """
+    import cv2
+
+    if frame_number < 1:
+        raise ReviewError("Originalframe nicht verfügbar.", 404)
+    capture = cv2.VideoCapture(str(video_path))
+    try:
+        try:
+            if capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number - 1):
+                ok, frame = capture.read()
+                position = capture.get(cv2.CAP_PROP_POS_FRAMES)
+                if ok and frame is not None and abs(position - frame_number) < 0.5:
+                    return frame
+        except cv2.error:
+            pass
+    finally:
+        capture.release()
+
+    # Reopen rather than relying on another seek to reset a problematic decoder.
+    capture = cv2.VideoCapture(str(video_path))
+    try:
+        for _ in range(frame_number):
+            if not capture.grab():
+                raise ReviewError("Originalframe nicht verfügbar.", 404)
+        ok, frame = capture.retrieve()
+        if not ok or frame is None:
+            raise ReviewError("Originalframe nicht verfügbar.", 404)
+        return frame
+    except cv2.error as exc:
+        raise ReviewError("Originalframe nicht verfügbar.", 404) from exc
+    finally:
+        capture.release()
+
+
+# Only read endpoints use these instances. Writers keep using fresh load() data.
+# One current entry per job, at most four jobs; nothing is persisted to disk.
+_preview_cache: OrderedDict = OrderedDict()
+_preview_lock = RLock()
+
+
+def _preview_signature(root: Path) -> tuple:
+    result = []
+    for name in (*TRACKING_FILES, "persons.json"):
+        try:
+            stat = (root / name).stat()
+            result.append((stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
+        except FileNotFoundError:
+            result.append(None)
+    return tuple(result)
+
+
+def load_for_preview(job_dir: str | Path) -> Artifacts:
+    """Read-only cached metadata; detect replacements, edits and deletions."""
+    from . import track_segments
+
+    root = (Path(job_dir) / "person_analysis").resolve()
+    with _preview_lock:
+        for _ in range(2):
+            signature = _preview_signature(root)
+            entry = _preview_cache.get(root)
+            if entry is not None and entry[0] == signature:
+                _preview_cache.move_to_end(root)
+                return entry[1]
+            _preview_cache.pop(root, None)
+            track_segments.timeline.cache_clear()
+            data = load(root.parent)
+            if signature != _preview_signature(root):
+                continue
+            _preview_cache[root] = (signature, data)
+            while len(_preview_cache) > 4:
+                _preview_cache.popitem(last=False)
+            return data
+    raise ReviewError("Tracking-Daten wurden geändert. Bitte neu laden.", 409)
