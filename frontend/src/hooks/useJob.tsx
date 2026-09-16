@@ -559,6 +559,7 @@ export function JobProvider({ children }: JobProviderProps) {
                 const legacyPersons = data.person_stages?.legacy && (data.persons_analyzed || (data.persons_count ?? 0) > 0);
                 if (data.person_stages?.tracking_ready || legacyPersons) newDone.add(STEP.tracking);
                 if ((data.person_stages?.identities_ready && !data.person_stages.identities_stale) || legacyPersons) newDone.add(STEP.identities);
+                if (data.attribute_stage?.ready && !data.attribute_stage.stale) newDone.add(STEP.attributes);
                 if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(STEP.gpt);
                 if (data.final_mp4_path) newDone.add(STEP.tts);
                 setDoneSteps(newDone);
@@ -794,6 +795,15 @@ export function JobProvider({ children }: JobProviderProps) {
         } catch (err) { setIsRunAllActive(false); void fetchJobData(jobId, true); alert((err as Error).message); }
     }, [jobId, markJobStarted, fetchJobData]);
 
+    const handleRunAttributes = useCallback(async (): Promise<void> => {
+        if (!jobId) return;
+        try {
+            markJobStarted('attributes', 'Attribute starten …');
+            const res = await fetch(`/api/jobs/${jobId}/person-analysis/attributes`, { method: 'POST' });
+            if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Attribute konnte nicht gestartet werden.'); }
+        } catch (err) { setIsRunAllActive(false); void fetchJobData(jobId, true); alert((err as Error).message); }
+    }, [jobId, markJobStarted, fetchJobData]);
+
     const handleRunGPT = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         if (!gptParams) {
@@ -858,22 +868,23 @@ export function JobProvider({ children }: JobProviderProps) {
         const { event, data } = payload;
 
         if (event === 'ping' || event === 'connected') return;
-        if (event === 'persons_updated') {
+        if (event === 'persons_updated' || event === 'attributes_updated') {
             void fetchJobData(jobId, true);
             return;
         }
 
-        if (event === 'tracking_done' || event === 'identities_done') {
+        if (event === 'tracking_done' || event === 'identities_done' || event === 'attributes_done') {
             const key = `${jobId}:${event}:${String(data.stage_version)}`;
             if (completedPersonEvents.current.has(key)) return;
             completedPersonEvents.current.add(key);
-            const step = event === 'tracking_done' ? STEP.tracking : STEP.identities;
+            const step = event === 'tracking_done' ? STEP.tracking : event === 'identities_done' ? STEP.identities : STEP.attributes;
             void fetchJobData(jobId, true);
             setDoneSteps(prev => new Set(prev).add(step));
             setCurrentStep(isRunAllActive ? step + 1 : step);
-            setProgressData(prev => ({ ...prev, [event === 'tracking_done' ? 'tracking' : 'identities']: null }));
+            setProgressData(prev => ({ ...prev, [event === 'tracking_done' ? 'tracking' : event === 'identities_done' ? 'identities' : 'attributes']: null }));
             if (isRunAllActive) {
                 if (event === 'tracking_done') void handleRunPersons();
+                else if (event === 'identities_done') void handleRunAttributes();
                 else void handleRunGPT();
             }
             return;
@@ -927,7 +938,7 @@ export function JobProvider({ children }: JobProviderProps) {
                 setProgressData(prev => ({ ...prev, images: null }));
             } else if (event === 'persons_done') {
                 setDoneSteps(prev => new Set(prev).add(STEP.tracking).add(STEP.identities));
-                setCurrentStep(STEP.gpt);
+                setCurrentStep(STEP.attributes);
                 setProgressData(prev => ({ ...prev, persons: null }));
             } else if (event === 'gpt_done') {
                 setDoneSteps(prev => new Set(prev).add(STEP.gpt));
@@ -968,7 +979,7 @@ export function JobProvider({ children }: JobProviderProps) {
     }, [
         jobId, fetchJobData, updateSavedJobMeta, setProgressData, setDoneSteps,
         setCurrentStep, isRunAllActive, handleRunTranscribe, handleRunSlots,
-        handleRunImages, handleRunTracking, handleRunPersons, handleRunGPT, handleRunTTS
+        handleRunImages, handleRunTracking, handleRunPersons, handleRunAttributes, handleRunGPT, handleRunTTS
     ]);
 
     useEffect(() => {
@@ -1004,10 +1015,11 @@ export function JobProvider({ children }: JobProviderProps) {
         else if (!doneSteps.has(4)) handleRunImages();
         else if (!doneSteps.has(STEP.tracking)) handleRunTracking();
         else if (!doneSteps.has(STEP.identities)) handleRunPersons();
+        else if (!doneSteps.has(STEP.attributes)) handleRunAttributes();
         else if (!doneSteps.has(STEP.gpt)) handleRunGPT();
         else if (!doneSteps.has(STEP.tts)) handleRunTTS();
         else setIsRunAllActive(false); // all done
-    }, [doneSteps, handleRunTracking, handleRunGPT, handleRunPersons, handleRunImages, handleRunSlots, handleRunTTS, handleRunTranscribe, handleRunVAD, jobId]);
+    }, [doneSteps, handleRunTracking, handleRunGPT, handleRunPersons, handleRunAttributes, handleRunImages, handleRunSlots, handleRunTTS, handleRunTranscribe, handleRunVAD, jobId]);
 
     const stopRunAll = useCallback((): void => {
         setIsRunAllActive(false);
@@ -1069,7 +1081,7 @@ export function JobProvider({ children }: JobProviderProps) {
         handleRunSlots,
         handleRunImages,
         handleRunTracking,
-        handleRunPersons,
+        handleRunPersons, handleRunAttributes,
         handleRunGPT,
         handleUpdateGPTRecord,
         handleRunTTS,
@@ -1087,7 +1099,7 @@ export function JobProvider({ children }: JobProviderProps) {
         isConfigModalOpen, setIsConfigModalOpen, gptParams, setGptParams, availableModels, setAvailableModels,
         vadParams, setVadParams, transcribeParams, setTranscribeParams, slotsParams, setSlotsParams,
         ttsParams, setTtsParams, imagesParams, setImagesParams, handleRunVAD, handleRunTranscribe,
-        handleRunSlots, handleRunImages, handleRunTracking, handleRunPersons, handleRunGPT, handleUpdateGPTRecord, handleRunTTS, runAllSteps,
+        handleRunSlots, handleRunImages, handleRunTracking, handleRunPersons, handleRunAttributes, handleRunGPT, handleUpdateGPTRecord, handleRunTTS, runAllSteps,
         isRunAllActive, stopRunAll, authState, login, logout, refreshAuthState
     ]);
 

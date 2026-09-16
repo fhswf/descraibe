@@ -42,7 +42,7 @@ class PersonCropWriter:
         self,
         output_dir: str | Path,
         fps: float,
-        jpeg_quality: int = 90,
+        jpeg_quality: int = 95,
         clear_existing: bool = True,
         start_id: int = 0,
     ) -> None:

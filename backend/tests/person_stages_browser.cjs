@@ -42,8 +42,8 @@ const path = require('node:path');
     await page.route('**/api/jobs/job/gpt', route => route.fulfill({ json: { status: 'started' } }));
     await page.goto(`${base}/?job=job`);
     await page.getByRole('button', { name: /Alle Schritte ausführen/ }).click();
-    await expect.poll(() => requests.filter(p => /person-analysis\/(tracking|identities)$/.test(p)), { timeout: 20000 })
-      .toEqual(['/api/jobs/job/person-analysis/tracking', '/api/jobs/job/person-analysis/identities']);
+    await expect.poll(() => requests.filter(p => /person-analysis\/(tracking|identities|attributes)$/.test(p)), { timeout: 20000 })
+      .toEqual(['/api/jobs/job/person-analysis/tracking', '/api/jobs/job/person-analysis/identities', '/api/jobs/job/person-analysis/attributes']);
     const snapshot = async () => (await page.request.get(`${base}/api/jobs/job/persons`)).json();
     await expect.poll(async () => (await snapshot()).identities_ready).toBe(true);
     // Configuration may intentionally contain no GPT credentials/model on this host.
@@ -51,7 +51,7 @@ const path = require('node:path');
     if (await page.getByRole('button', { name: /Ausführung anhalten/ }).count())
       await page.getByRole('button', { name: /Ausführung anhalten/ }).click();
     assert(!dialogs.some(d => /bestätigen|Bereinigung/.test(d)), 'Optional reviews never interrupt Run All');
-    console.log('PASS: Run All -> tracking -> identities automatically, without manual review');
+    console.log('PASS: Run All -> tracking -> identities -> attributes automatically, without manual review');
     const nav = async n => {
       const review = page.getByRole('dialog', { name: 'Tracking-Review', exact: true });
       if (await review.count()) await review.getByRole('button', { name: 'Tracking-Review schließen', exact: true }).click();
@@ -59,6 +59,21 @@ const path = require('node:path');
       if (n === 5) await page.getByRole('button', { name: 'Tracks prüfen', exact: true }).click();
     };
     const track = id => page.getByRole('region', { name: `Track ${id}`, exact: true });
+    await nav(7);
+    const attributes = page.getByRole('article', { name: 'Attribute Person 1' });
+    await expect(attributes.getByRole('textbox')).toHaveCount(12);
+    await expect(attributes.locator('img')).toHaveCount(1);
+    await expect.poll(() => attributes.locator('img').evaluate(img => img.naturalWidth)).toBeGreaterThan(0);
+    await attributes.getByRole('textbox').first().fill('Manuelle Korrektur');
+    await page.getByRole('button', { name: 'Alle Attributänderungen speichern' }).click();
+    await expect(page.getByRole('button', { name: 'Alle Attributänderungen speichern' })).toBeDisabled();
+    await page.reload(); await nav(7);
+    await expect(attributes.getByRole('textbox').first()).toHaveValue('Manuelle Korrektur');
+    await expect(attributes.getByText(/Automatisch: Testwert/).first()).toBeVisible();
+    await attributes.getByRole('button', { name: 'Automatischen Wert wiederherstellen' }).first().click();
+    await page.getByRole('button', { name: 'Alle Attributänderungen speichern' }).click();
+    await expect(attributes.getByRole('textbox').first()).toHaveValue('Testwert');
+    console.log('PASS: attribute images, 12 fields, separate override, save/reload/reset');
     await page.reload();
     await nav(5);
     await expect(track(1)).toBeVisible();

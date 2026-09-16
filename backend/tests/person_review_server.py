@@ -37,6 +37,14 @@ def main():
             crop.write_bytes(jpeg.tobytes())
     else:
         job, _, _ = runpy.run_path(str(tests / "test_person_stages.py"))["staged_job"].__wrapped__(base, patches)
+        from backend.pipeline.persons import attribute_stage
+        from backend.pipeline.persons.qwen_attributes import FIELDS
+        class QwenDouble:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def predict(self, pid, paths):
+                return json.dumps({field: "Testwert" for field in FIELDS})
+        patches.setattr(attribute_stage, "QwenAttributes", QwenDouble)
     from backend.app import app
     from starlette.staticfiles import StaticFiles
     import uvicorn

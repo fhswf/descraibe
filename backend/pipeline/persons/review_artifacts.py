@@ -100,6 +100,7 @@ class Artifacts:
                     "frame_number": int(row["frame_number"]), "timestamp_s": _number(row["timestamp_s"]),
                     "crop_path": ((crop_root.relative_to(self.base_root) / relative).as_posix()), "width": int(row["x2"]) - int(row["x1"]),
                     "height": int(row["y2"]) - int(row["y1"]), "face_bbox": None,
+                    "person_bbox": [int(row[k]) for k in ("x1", "y1", "x2", "y2")],
                 }
                 self.crops[cid] = crop
                 self.crop_roots[cid] = crop_root

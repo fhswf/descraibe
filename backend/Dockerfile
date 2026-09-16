@@ -6,15 +6,15 @@
 #   docker build -t audiodeskription-backend .
 #
 # Run (GPU image, pass your OpenAI API key at runtime):
-#   docker run -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-backend
+#   docker run --gpus all -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-backend
 #
 # The runtime image already includes PyTorch, CUDA and cuDNN. The Kubernetes
 # GPU Operator still provides the host driver, device plugin and runtime hooks.
 
 # ── Base image ─────────────────────────────────────────────────────────────────
-# GPU-first runtime: PyTorch, CUDA 13.0 and cuDNN 9 are preinstalled in
+# GPU-first runtime: PyTorch 2.11.0, CUDA 12.8 and cuDNN 9 are preinstalled in
 # /opt/conda, which avoids re-downloading the large torch/nvidia wheels in CI.
-FROM pytorch/pytorch:2.12.1-cuda13.0-cudnn9-runtime
+FROM pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime
 
 # ── System dependencies ────────────────────────────────────────────────────────
 # ffmpeg   – required by moviepy / scenedetect

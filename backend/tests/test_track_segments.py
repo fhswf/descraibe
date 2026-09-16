@@ -30,6 +30,29 @@ def test_split_partitions_faces_and_exact_tracking_times(staged_job):
     assert sorted(ids) == sorted(c["face_id"] for c in first["tracks"][0]["observations"])
     assert hash_outputs(stage_state.root(job) / "runs") == original
 
+def test_split_options_start_only_from_second_visible_observation(staged_job):
+    job, video, _ = staged_job
+
+    snapshot = run_tracking(video, job)
+
+    track = next(t for t in snapshot["tracks"] if t["track_id"] == 1)
+
+    visible_frames = sorted(
+        crop["frame_number"]
+        for crop in track["observations"]
+    )
+    split_frames = [
+        option["before_frame"]
+        for option in track["split_options"]
+    ]
+
+    assert len(visible_frames) >= 2
+
+    # Die erste sichtbare Beobachtung darf keine Split-Option anbieten.
+    assert visible_frames[0] not in split_frames
+
+    # Ab der zweiten sichtbaren Beobachtung darf gesplittet werden.
+    assert visible_frames[1] in split_frames
 
 def test_split_at_tracking_gap_uses_real_last_frame(staged_job, monkeypatch):
     job, video, calls = staged_job

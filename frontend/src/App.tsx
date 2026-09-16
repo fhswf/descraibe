@@ -12,6 +12,7 @@ import { StepSlots } from './components/features/StepSlots';
 import { StepImages } from './components/features/StepImages';
 import { WORKFLOW } from './workflow';
 import { StepTracking } from './components/features/StepTracking';
+import { StepAttributes } from './components/features/StepAttributes';
 import { StepPersons } from './components/features/StepPersons';
 import { ConfigModal } from './components/features/ConfigModal';
 import { StepGenerate } from './components/features/StepGenerate';
@@ -433,6 +434,7 @@ function App(): React.ReactElement {
             <StepImages />
             <StepTracking />
             <StepPersons />
+            <StepAttributes />
             <StepGenerate />
             <StepTTS />
             <StepResults />
@@ -625,10 +627,10 @@ interface StepNavigationProps {
 }
 
 function StepNavigation({ currentStep, setCurrentStep, doneSteps }: StepNavigationProps): React.ReactElement {
-  const { jobData, progressData, handleRunVAD, handleRunTranscribe, handleRunSlots, handleRunImages, handleRunTracking, handleRunPersons, handleRunGPT, handleRunTTS } = useJob();
+  const { jobData, progressData, handleRunVAD, handleRunTranscribe, handleRunSlots, handleRunImages, handleRunTracking, handleRunPersons, handleRunAttributes, handleRunGPT, handleRunTTS } = useJob();
 
   const actions: Record<string, () => Promise<void>> = { vad: handleRunVAD, transcribe: handleRunTranscribe, slots: handleRunSlots,
-    images: handleRunImages, tracking: handleRunTracking, identities: handleRunPersons, gpt: handleRunGPT, tts: handleRunTTS };
+    images: handleRunImages, tracking: handleRunTracking, identities: handleRunPersons, attributes: handleRunAttributes, gpt: handleRunGPT, tts: handleRunTTS };
   const steps = WORKFLOW.map((step, index) => ({ ...step, num: index + 1, action: actions[step.key] }));
   const runningStep = jobData?.status === 'running'
     ? jobData?.latest_progress?.step || Object.entries(progressData || {}).find(([, data]) => data !== null)?.[0]

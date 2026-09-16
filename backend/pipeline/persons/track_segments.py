@@ -175,9 +175,11 @@ def review_tracks(data, metadata, review):
                 "width": max(1, round(r["bbox"][2])-round(r["bbox"][0])), "height": max(1, round(r["bbox"][3])-round(r["bbox"][1])),
                 "face_bbox": None, "face_id": None, "excluded": False, "evidence_status": "fallback", "preview_frame": True}
                 for r in spaced(rows)]
-        for crop in track["observations"]:
-            at = bisect.bisect_left(numbers, crop["frame_number"])
-            if at > 0 and at < len(numbers):
+        visible_frames = sorted({crop["frame_number"] for crop in track["observations"]})
+
+        for frame_number in visible_frames[1:]:
+            at = bisect.bisect_left(numbers, frame_number)
+            if at > 0 and at < len(numbers) and numbers[at] == frame_number:
                 track["split_options"].append({"before_frame": numbers[at], "left_end_s": (numbers[at-1]-1)/metadata["fps"],
-                                               "right_start_s": (numbers[at]-1)/metadata["fps"]})
+                                            "right_start_s": (numbers[at]-1)/metadata["fps"]})
     return sorted(tracks.values(), key=lambda t: (t["source_track_id"], t["start_s"]))

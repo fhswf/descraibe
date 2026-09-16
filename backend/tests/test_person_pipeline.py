@@ -1,6 +1,5 @@
 """Integration tests for the person analysis pipeline endpoints."""
 import pytest
-from unittest.mock import patch, MagicMock
 import pandas as pd
 
 
@@ -44,45 +43,6 @@ class TestPersonsEndpoint:
 
         response = client.get("/api/jobs/unknown-job-id/persons")
         assert response.status_code == 404
-
-    @patch("backend.pipeline.person_analysis.analyze_persons")
-    def test_post_persons_success(self, mock_analyze, app_with_job):
-        """POST /api/jobs/{job_id}/persons triggers analysis."""
-        from backend import session_manager as sm
-
-        client, job_id = app_with_job
-
-        # Mock the analysis function to return a sample DataFrame
-        mock_df = pd.DataFrame([
-            {
-                "person_id": 1,
-                "name": "Test Person",
-                "first_seen_ts": 10.0,
-                "last_seen_ts": 20.0,
-                "appearances_count": 2,
-                "attributes": '{"top_color": "blau"}',
-                "description": "Test Person: blaues Oberteil",
-            }
-        ])
-        mock_analyze.return_value = mock_df
-
-        response = client.post(f"/api/jobs/{job_id}/persons")
-        assert response.status_code == 200
-        data = response.json()
-        assert data == {"status": "started"}
-
-    def test_post_persons_no_images(self, app_with_job):
-        """POST /api/jobs/{job_id}/persons returns 400 when no images."""
-        from backend import session_manager as sm
-
-        client, job_id = app_with_job
-
-        # Remove scene images
-        sm.update_job(job_id, scene_images=None)
-
-        response = client.post(f"/api/jobs/{job_id}/persons")
-        assert response.status_code == 400
-        assert "Scene images not available" in response.json()["error"]
 
 
 class TestPersonHateoasLinks:

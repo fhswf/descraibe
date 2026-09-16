@@ -38,6 +38,7 @@ export interface JobData {
   persons_count?: number;
   persons_analyzed?: boolean;
   persons_version?: string;
+  attribute_stage?: { ready: boolean; stale: boolean; run_id: string | null; error?: string };
   person_stages?: { tracking_ready: boolean; identities_ready: boolean; identities_stale: boolean; legacy: boolean; face_review_version?: string; tracking_run?: string; identity_run?: string };
   unassigned_tracks_count?: number;
   gpt_records_broadcast?: unknown;
@@ -313,6 +314,7 @@ export interface JobContextValue {
   handleRunSlots: () => Promise<void>;
   handleRunImages: () => Promise<void>;
   handleRunPersons: () => Promise<void>;
+  handleRunAttributes: () => Promise<void>;
   handleRunTracking: () => Promise<void>;
   handleRunGPT: () => Promise<void>;
   handleUpdateGPTRecord: (_recordId: string, _updates: Partial<GPTRecord>) => void;

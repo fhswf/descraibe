@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from event_bus import BusEvent, event_bus
 from backend import session_manager as sm
-from backend.pipeline.persons import review_artifacts, stage_state
+from backend.pipeline.persons import review_artifacts, stage_state, attribute_state
 from db.store import DataStore
 
 # Pipeline modules are imported lazily inside route handlers to avoid
@@ -1319,6 +1319,70 @@ def run_images(job_id: str, body: dict = Body(default={})):
     return {"status": "started"}
 
 
+# Attribute extraction is independent of the existing AD input and prompts.
+@app.post("/api/jobs/{job_id}/person-analysis/attributes")
+def run_attribute_stage(job_id: str):
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    try:
+        attribute_state.source(job['job_dir'])
+        sm.begin_person_stage(job_id, 'attributes')
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({'error': str(exc)}, status_code=exc.status)
+
+    def run():
+        sm.job_id_var.set(job_id)
+        try:
+            from backend.pipeline.persons.attribute_stage import run_attributes
+            result = run_attributes(job['video_path'], job['job_dir'],
+                lambda msg, cur, total: _push_progress(job_id, 'attributes', msg, cur, total))
+            sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
+            sm.set_status(job_id, 'idle')
+            _push(job_id, 'attributes_done', {'stage_version': result['run_id']})
+        except Exception as exc:
+            sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
+            sm.set_status(job_id, 'error', str(exc))
+            _push(job_id, 'error', {'step': 'attributes', 'message': str(exc)})
+    _mark_step_running(job_id, 'attributes', 'Attribute starten …')
+    _start_worker(job_id, 'attributes', run)
+    return {'status': 'started'}
+
+
+@app.get("/api/jobs/{job_id}/person-analysis/attributes")
+def get_attributes(job_id: str):
+    job = sm.get_job(job_id)
+    if not job:
+        raise HTTPException(404, ERR_UNKNOWN_JOB)
+    try:
+        return attribute_state.snapshot(job['job_dir'])
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({'error': str(exc)}, status_code=exc.status)
+
+
+@app.patch("/api/jobs/{job_id}/person-analysis/attribute-review")
+def save_attribute_review(job_id: str, body: dict = Body(...)):
+    if not sm.get_job(job_id):
+        return JSONResponse({'error': ERR_UNKNOWN_JOB}, status_code=404)
+    try:
+        result = sm.mutate_attribute_review(job_id, body)
+        _push(job_id, 'attributes_updated', {'version': result['version']})
+        return result
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({'error': str(exc)}, status_code=exc.status)
+
+
+@app.get("/api/jobs/{job_id}/person-analysis/attributes/{run_id}/images/{crop_id}")
+def get_attribute_image(job_id: str, run_id: str, crop_id: int):
+    job = sm.get_job(job_id)
+    if not job:
+        raise HTTPException(404, ERR_UNKNOWN_JOB)
+    try:
+        return FileResponse(attribute_state.image_file(job['job_dir'], run_id, crop_id), media_type='image/jpeg')
+    except review_artifacts.ReviewError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+
+
 # ── Person Analysis ─────────────────────────────────────────────────────────────
 
 def _start_person_stage(job_id: str, phase: str):
@@ -2400,6 +2464,7 @@ def get_job(job_id: str, request: Request):
         "images_count": len(job["scene_images"]) if job.get("scene_images") else 0,
         "persons_count": len(job["persons_df"]) if job.get("persons_df") is not None else 0,
         "persons_analyzed": bool((job.get("person_review") or {}).get("review_available")) and not job.get("person_review_error") and not job.get("persons_analysis_running"),
+        "attribute_stage": attribute_state.status(job["job_dir"]),
         "persons_version": (job.get("person_review") or {}).get("version"),
         "unassigned_tracks_count": len((job.get("person_review") or {}).get("unassigned_tracks", [])),
         "person_stages": stage_state.status(job["job_dir"]) if not job.get("person_review_error") else {"error": job["person_review_error"]},

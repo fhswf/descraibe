@@ -148,7 +148,7 @@ class TestWriteOutputsBroadcast:
     def test_broadcast_creates_gesamt_txt(self, tmp_path, records):
         paths = write_outputs(tmp_path / "run", records, "broadcast")
 
-        gesamt = (tmp_path / "run" / "AD_GESAMT_Broadcast.txt").read_text()
+        gesamt = (tmp_path / "run" / "AD_GESAMT_Broadcast.txt").read_text(encoding="utf-8")
         assert "Eine Person betritt den Raum." in gesamt
         assert "Die Tür schließt sich." in gesamt
         assert "00:00:00,000 --> 00:00:02,000" in gesamt

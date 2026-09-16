@@ -181,6 +181,17 @@ def begin_person_stage(job_id, phase):
         _persist_job(job)
 
 
+def mutate_attribute_review(job_id, body):
+    from backend.pipeline.persons import attribute_state
+    with _LOCK:
+        job = _STORE.get(job_id)
+        if not job:
+            raise review_artifacts.ReviewError('Job nicht gefunden.', 404)
+        if job.get('status') == 'running':
+            raise review_artifacts.ReviewError('Bitte laufenden Schritt abwarten.', 409)
+        return attribute_state.save_review(job['job_dir'], body)
+
+
 def mutate_person_review(job_id: str, expected_version: str | None, operation: str, body: dict) -> dict:
     with _LOCK:
         job = _STORE.get(job_id)
