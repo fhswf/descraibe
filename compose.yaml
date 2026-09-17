@@ -1,0 +1,33 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HF_HOME: /root/.cache/huggingface
+    volumes:
+      - jobs:/app/jobs
+      - models:/app/models
+      - model-cache:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./frontend/nginx.local.conf:/etc/nginx/conf.d/frontend.conf:ro
+    depends_on:
+      - backend
+volumes:
+  jobs:
+  models:
+  model-cache:

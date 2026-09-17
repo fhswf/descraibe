@@ -10,7 +10,6 @@ import { StepVAD } from './components/features/StepVAD';
 import { StepTranscribe } from './components/features/StepTranscribe';
 import { StepSlots } from './components/features/StepSlots';
 import { StepImages } from './components/features/StepImages';
-import { WORKFLOW } from './workflow';
 import { StepTracking } from './components/features/StepTracking';
 import { StepAttributes } from './components/features/StepAttributes';
 import { StepPersons } from './components/features/StepPersons';
@@ -629,9 +628,19 @@ interface StepNavigationProps {
 function StepNavigation({ currentStep, setCurrentStep, doneSteps }: StepNavigationProps): React.ReactElement {
   const { jobData, progressData, handleRunVAD, handleRunTranscribe, handleRunSlots, handleRunImages, handleRunTracking, handleRunPersons, handleRunAttributes, handleRunGPT, handleRunTTS } = useJob();
 
-  const actions: Record<string, () => Promise<void>> = { vad: handleRunVAD, transcribe: handleRunTranscribe, slots: handleRunSlots,
-    images: handleRunImages, tracking: handleRunTracking, identities: handleRunPersons, attributes: handleRunAttributes, gpt: handleRunGPT, tts: handleRunTTS };
-  const steps = WORKFLOW.map((step, index) => ({ ...step, num: index + 1, action: actions[step.key] }));
+  const steps: Array<{ num: number; key?: string; label: string; action?: () => Promise<void> }> = [
+    { num: 1, label: 'Video hochladen' },
+    { num: 2, key: 'vad', label: 'Sprechpausen (VAD)', action: handleRunVAD },
+    { num: 3, key: 'transcribe', label: 'Transkription', action: handleRunTranscribe },
+    { num: 4, key: 'slots', label: 'AD-Slots', action: handleRunSlots },
+    { num: 5, key: 'images', label: 'Bilder extrahieren', action: handleRunImages },
+    { num: 6, key: 'tracking', label: 'Tracking & Gesichter', action: handleRunTracking },
+    { num: 7, key: 'identities', label: 'Personen & Cluster', action: handleRunPersons },
+    { num: 8, key: 'attributes', label: 'Attribute', action: handleRunAttributes },
+    { num: 9, key: 'gpt', label: 'Generieren', action: handleRunGPT },
+    { num: 10, key: 'tts', label: 'Vertonung (TTS)', action: handleRunTTS },
+    { num: 11, label: 'Ergebnisse & Download' },
+  ];
   const runningStep = jobData?.status === 'running'
     ? jobData?.latest_progress?.step || Object.entries(progressData || {}).find(([, data]) => data !== null)?.[0]
     : null;

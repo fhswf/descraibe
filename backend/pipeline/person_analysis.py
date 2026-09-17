@@ -1,17 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
-from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
-
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODEL_ROOT = PROJECT_ROOT / "models"
 
 
 def assign_faces_to_tracks(faces: list[dict], tracked_persons: list[dict]) -> dict[int, dict]:
@@ -70,113 +63,16 @@ def _analyze_video(video_path, job_dir=None, progress_cb=None) -> dict:
             "review_snapshot": snapshot}
 
 
-def _parse_bool(value: object) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "ja"}
-
-
 def _build_web_result(result: dict) -> tuple[pd.DataFrame, list[dict]]:
-    """
-    Wandelt das neue Personenergebnis in das Format um,
-    das die bestehende descraibe-Web-App aktuell erwartet.
-    """
-    if "review_snapshot" in result:
-        snapshot = result["review_snapshot"]
-        rows = []
-        for person in snapshot["persons"]:
-            row = dict(person)
-            for field in ("track_ids", "segments", "appearances", "attributes", "face_ids", "valid_identity_crop_ids", "fallback_crop_ids"):
-                row[field] = json.dumps(row[field], ensure_ascii=False)
-            rows.append(row)
-        return pd.DataFrame(rows), snapshot["faces"]
-    persons = result["persons"]
-    track_to_person = result["track_to_person"]
-    analysis_output_dir = Path(result["output_dir"])
-    face_manifest_path = analysis_output_dir / "face_observations.csv"
-
-    faces: list[dict] = []
-
-    if face_manifest_path.is_file():
-        with face_manifest_path.open("r", encoding="utf-8-sig", newline="") as file:
-            reader = csv.DictReader(file, delimiter=";")
-
-            for row in reader:
-                if not row.get("person_crop_path"):
-                    continue
-                face_id = int(row["face_id"])
-                track_id = int(row["track_id"])
-                person_id = track_to_person.get(track_id)
-
-                relative_crop = str(row.get("person_crop_path", "")).replace("\\", "/")
-                crop_path = (Path("person_analysis") / relative_crop).as_posix()
-
-                face_bbox = [
-                    int(float(row["face_x1"])),
-                    int(float(row["face_y1"])),
-                    int(float(row["face_x2"])),
-                    int(float(row["face_y2"])),
-                ]
-
-                faces.append(
-                    {
-                        "face_id": face_id,
-                        "track_id": track_id,
-                        "person_id": int(person_id) if person_id is not None else None,
-                        "scene_id": int(row["scene_id"]),
-                        "frame_number": int(row["frame_number"]),
-                        "timestamp_s": float(row["timestamp_s"]),
-                        "crop_path": crop_path,
-                        "person_crop_path": crop_path,
-                        "bbox": face_bbox,
-                        "face_bbox": face_bbox,
-                        "confidence": float(row["face_confidence"]),
-                        "usable": _parse_bool(row["face_usable"]),
-                        "alignment_ok": _parse_bool(row["alignment_ok"]),
-                        "embedding_created": _parse_bool(row.get("embedding_created", False)),
-                    }
-                )
-
-    face_ids_by_person: dict[int, list[int]] = defaultdict(list)
-    faces_by_person: dict[int, list[dict]] = defaultdict(list)
-
-    for face in faces:
-        person_id = face.get("person_id")
-        if person_id is None:
-            continue
-        face_ids_by_person[int(person_id)].append(int(face["face_id"]))
-        faces_by_person[int(person_id)].append(face)
-
+    """Wandelt den aktuellen Review-Stand in das bestehende Web-App-Format um."""
+    snapshot = result["review_snapshot"]
     rows = []
-
-    for person in persons:
-        person_id = int(person["person_id"])
-        person_faces = faces_by_person.get(person_id, [])
-        representative_crop = person_faces[0]["crop_path"] if person_faces else None
-
-        rows.append(
-            {
-                "person_id": person_id,
-                "name": person.get("name", f"Person {person_id}"),
-                "function": person.get("function", ""),
-                "first_seen_ts": float(person["first_seen_ts"]),
-                "last_seen_ts": float(person["last_seen_ts"]),
-                "appearances_count": len(person.get("appearances", [])),
-                "face_ids": json.dumps(face_ids_by_person.get(person_id, [])),
-                "attributes": json.dumps(person.get("attributes", {}), ensure_ascii=False),
-                "description": "",
-                "representative_image": None,
-                "representative_crop": representative_crop,
-                "track_ids": json.dumps(person.get("track_ids", [])),
-                "segments": json.dumps(person.get("segments", [])),
-                "appearances": json.dumps(person.get("appearances", [])),
-            }
-        )
-
-    persons_df = pd.DataFrame(rows)
-
-    if not persons_df.empty:
-        persons_df = persons_df.sort_values("first_seen_ts").reset_index(drop=True)
-
-    return persons_df, faces
+    for person in snapshot["persons"]:
+        row = dict(person)
+        for field in ("track_ids", "segments", "appearances", "attributes", "face_ids", "valid_identity_crop_ids", "fallback_crop_ids"):
+            row[field] = json.dumps(row[field], ensure_ascii=False)
+        rows.append(row)
+    return pd.DataFrame(rows), snapshot["faces"]
 
 
 def analyze_persons(

@@ -5,7 +5,7 @@
 #   2. nginx:alpine   – serves the static dist/ with SPA fallback
 #
 # Build:
-#   docker build -f Dockerfile.frontend -t audiodeskription-frontend .
+#   docker build -f frontend/Dockerfile -t audiodeskription-frontend .
 #
 # All /api/* traffic is routed directly to the backend by Traefik.
 # This image only ever serves /, /assets/*, and the index.html SPA fallback.

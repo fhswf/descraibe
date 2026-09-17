@@ -16,20 +16,22 @@ from backend.pipeline.persons.identity_stage import run_identities
 
 @pytest.fixture
 def staged_job(tmp_path, monkeypatch):
-    calls = {"tracking": 0, "detection": 0, "face_frames": [], "alignment": [], "recognition": [], "pixels": {}, "clusters": []}
+    calls = {"tracking": 0, "detection": 0, "detected_frames": [], "resets": [], "face_frames": [], "alignment": [], "recognition": [], "pixels": {}, "clusters": []}
     class Detector:
         def detect(self, frame):
             calls["detection"] += 1
+            calls["detected_frames"].append(int(frame[0, 0, 0]) + 1)
             return [{"track_id": tid, "scene_id": 1, "bbox": (40*(tid-1), 0, 40*tid, 100), "confidence": .95} for tid in range(1, 6)]
     class Tracker:
-        def __init__(self, **kwargs): pass
-        def update(self, persons, scene_change):
+        def __init__(self, **kwargs): calls["tracker_fps"] = kwargs["frame_rate"]
+        def start_new_scene(self): calls["resets"].append(calls["tracking"])
+        def update(self, persons, scene_change=False):
             calls["tracking"] += 1
             return persons
     class Faces:
         def __init__(self, **kwargs): pass
         def detect(self, frame):
-            number = calls["detection"]
+            number = int(frame[0, 0, 0]) + 1
             calls["face_frames"].append(number)
             result = []
             for tid in range(1, 5):
@@ -52,7 +54,7 @@ def staged_job(tmp_path, monkeypatch):
         def extract_embedding(self, aligned):
             tid, frame = map(int, aligned)
             calls["recognition"].append((tid, frame))
-            if tid == 4 or frame == 31:
+            if tid == 4 or frame == 29:
                 raise RuntimeError("controlled failure")
             value = np.zeros(512, np.float32)
             value[0] = 1
@@ -97,8 +99,8 @@ def hash_outputs(path):
 def test_stage1_has_no_alignment_recognition_or_clusters(staged_job):
     job, video, calls = staged_job
     result = run_tracking(video, job)
-    assert calls["detection"] == calls["tracking"] == 61
-    assert calls["face_frames"] == [1, 16, 31, 46, 61]
+    assert calls["detection"] == calls["tracking"] == 9
+    assert calls["face_frames"] == [1, 15, 29, 43, 57]
     assert calls["alignment"] == calls["recognition"] == calls["clusters"] == []
     assert len(result["tracks"]) == 5 and sum(t["quality_face_count"] for t in result["tracks"]) == 15
     assert result["identities_ready"] is False
@@ -117,13 +119,13 @@ def test_face_review_preserves_times_and_removes_dependent_results(staged_job):
     first_id = first["tracks"][0]["observations"][0]["face_id"]
     changed = stage_state.save_faces(job, {"version": first["version"], "face_exclusions": [{"face_id": first_id, "excluded": True}]})
     assert changed["tracks"][0]["start_s"] == first["tracks"][0]["start_s"] == 0
-    assert changed["tracks"][0]["end_s"] == first["tracks"][0]["end_s"] == 2
+    assert changed["tracks"][0]["end_s"] == first["tracks"][0]["end_s"] == 56/30
     clustered = run_identities(video, job)
     assert (1, 1) not in calls["recognition"]
-    assert calls["clusters"][-1]["frame_numbers"].tolist() == [16, 46, 61]
+    assert calls["clusters"][-1]["frame_numbers"].tolist() == [15, 43, 57]
     assert len(calls["clusters"][-1]["rejected_track_ids"]) == 17
     assert clustered["persons"][0]["track_ids"] == [1]
-    assert clustered["persons"][0]["first_seen_ts"] == 0 and clustered["persons"][0]["last_seen_ts"] == 2
+    assert clustered["persons"][0]["first_seen_ts"] == 0 and clustered["persons"][0]["last_seen_ts"] == 56/30
     assert not clustered["identities_stale"]
     original = hash_outputs(stage_state.root(job) / 'person_crops')
     # Undo invalidates downstream results; raw crops and track times remain.
@@ -134,8 +136,8 @@ def test_face_review_preserves_times_and_removes_dependent_results(staged_job):
     assert hash_outputs(stage_state.root(job) / 'person_crops') == original
     again = run_identities(video, job)
     assert not again["identities_stale"]
-    assert calls["clusters"][-1]["frame_numbers"].tolist() == [1, 16, 46, 61]
-    assert calls["detection"] == calls["tracking"] == 61  # no redetection in step 2
+    assert calls["clusters"][-1]["frame_numbers"].tolist() == [1, 15, 43, 57]
+    assert calls["detection"] == calls["tracking"] == 9  # no redetection in step 2
 
 
 def test_all_faces_excluded_get_body_fallbacks_and_keep_whole_track_actions(staged_job):
@@ -185,7 +187,7 @@ def test_combined_compatibility_entry_runs_both_without_review(staged_job):
     from backend.pipeline.person_analysis import analyze_persons
     df, faces = analyze_persons(video, str(job))
     assert len(df) == 1 and faces
-    assert calls["detection"] == calls["tracking"] == 61
+    assert calls["detection"] == calls["tracking"] == 9
     assert len(calls["clusters"]) == 1
     assert stage_state.status(job)["identities_ready"] is True
     assert not (stage_state.root(job) / "review_state.json").exists()
@@ -272,13 +274,57 @@ def test_new_tracking_replaces_current_files_and_cached_timeline(staged_job, mon
     tracker = sys.modules['backend.pipeline.persons.tracking'].BytePersonTracker
     original = tracker.update
     offset = calls['detection']
-    def shorter(self, persons, scene_change):
+    def shorter(self, persons, scene_change=False):
         return [p for p in original(self, persons, scene_change)
-                if p['track_id'] != 5 or calls['detection'] - offset <= 10]
+                if p['track_id'] != 5 or calls['detection'] - offset <= 2]
     monkeypatch.setattr(tracker, 'update', shorter)
     second = run_tracking(video, job)
     assert second['version'] > first['version']
-    assert next(t for t in second['tracks'] if t['track_id'] == 5)['end_frame'] == 10
+    assert next(t for t in second['tracks'] if t['track_id'] == 5)['end_frame'] == 8
     assert not (root / 'persons.json').exists() and not (root / 'attributes.json').exists()
     assert {p.name for p in root.iterdir()} == {
         'tracks.json', 'tracking_frames.csv', 'face_observations.csv', 'person_crops.csv', 'person_crops'}
+
+@pytest.mark.parametrize('fps,stride', [(2, 1), (15, 3), (25, 6), (30, 7), (60, 14)])
+def test_sampling_uses_original_frames_and_every_second_face_call(staged_job, fps, stride):
+    job, video, calls = staged_job
+    writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*'MJPG'), fps, (200, 100))
+    assert writer.isOpened()
+    for number in range(61):
+        writer.write(np.full((100, 200, 3), number, np.uint8))
+    writer.release()
+    progress = []
+    result = run_tracking(video, job, lambda *args: progress.append(args))
+    expected = list(range(1, 62, stride))
+    assert calls['detected_frames'] == expected
+    assert calls['tracking'] == len(expected)
+    assert calls['tracker_fps'] == pytest.approx(fps / stride)
+    assert calls['face_frames'] == expected[::2]
+    root = stage_state.root(job)
+    rows, _ = stage_state.read_csv(root / 'tracking_frames.csv')
+    assert [int(r['frame_number']) for r in rows if r['source_track_id'] == '1'] == expected
+    assert result['tracks'][0]['end_s'] == pytest.approx((expected[-1] - 1) / fps)
+    crops, _ = stage_state.read_csv(root / 'person_crops.csv')
+    assert all(int(c['frame_number']) in expected for c in crops)
+    assert all(float(c['timestamp_s']) == pytest.approx((int(c['frame_number']) - 1) / fps) for c in crops)
+    assert any(current == total == 61 for _, current, total in progress)
+
+
+def test_cuts_on_skipped_and_selected_frames_reset_before_next_observation(staged_job, monkeypatch):
+    job, video, calls = staged_job
+    module = sys.modules['backend.pipeline.persons.tracking']
+    monkeypatch.setattr(module, 'detect_scene_change_frames', lambda path: {3, 5, 15})
+    class SceneTracker:
+        def __init__(self, frame_rate):
+            self.scene = 1
+        def start_new_scene(self):
+            self.scene += 1
+            calls['resets'].append(len(calls['detected_frames']))
+        def update(self, persons):
+            return [dict(p, track_id=p['track_id'] + 5*(self.scene-1), scene_id=self.scene) for p in persons]
+    monkeypatch.setattr(module, 'BytePersonTracker', SceneTracker)
+    result = run_tracking(video, job)
+    assert calls['resets'] == [1, 1, 2]  # Both skipped cuts applied before frame 8; frame 15 cut before detection.
+    assert {t['scene_id'] for t in result['tracks']} == {1, 3, 4}
+    assert [(t['start_frame'], t['end_frame']) for t in result['tracks'] if t['track_id'] in (1, 11, 16)] == [(1, 1), (8, 8), (15, 57)]
+    assert calls['face_frames'] == [1, 15, 29, 43, 57]

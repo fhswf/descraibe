@@ -34,3 +34,11 @@ tests/
 
 # Job data (mounted as a volume at runtime)
 jobs/
+
+# Local models, generated frontend and environment secrets
+models/
+frontend/dist/
+.env
+.env.*
+**/.env
+**/.env.*

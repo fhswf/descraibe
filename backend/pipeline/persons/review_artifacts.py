@@ -174,7 +174,9 @@ class Artifacts:
         excluded_crop_ids = set() if include_excluded else {row["crop_id"] for row in all_evidence if row["excluded"]}
         fallback = [{**crop, "face_id": None, "excluded": False, "evidence_status": "fallback"}
                     for crop in self.by_track[track_id] if crop["crop_id"] not in excluded_crop_ids]
-        return self._sample(fallback, limit)
+        # Tracking and Identity may contain a fallback crop of the same frame.
+        unique_frames = {crop["frame_number"]: crop for crop in fallback}
+        return self._sample(list(unique_frames.values()), limit)
 
     def tracking_crops(self, track_id: int) -> list[dict]:
         """All quality-usable faces, including exclusions, independent of Identity."""

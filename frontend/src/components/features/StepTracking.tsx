@@ -1,7 +1,6 @@
 import { ReviewImageSizeControl } from './ReviewImageSizeControl';
 import { useEffect, useState } from 'react';
 import { useJob } from '../../hooks/useJob';
-import { STEP } from '../../workflow';
 import type { FaceReview, PersonCrop, TrackingChange } from '../../types';
 import { TrackRow } from './FaceMergeDialog';
 import { CropDetailDialog } from './CropDetailDialog';
@@ -108,6 +107,6 @@ function TrackingPanel({ jobId }: { jobId: string }) {
 
 export function StepTracking() {
     const { currentStep, jobData } = useJob();
-    if (currentStep !== STEP.tracking) return null;
+    if (currentStep !== 5) return null;
     return jobData?.job_id ? <TrackingPanel key={jobData.job_id} jobId={jobData.job_id} /> : <p>Bitte zuerst ein Video hochladen.</p>;
 }

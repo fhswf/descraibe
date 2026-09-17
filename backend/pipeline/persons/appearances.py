@@ -60,8 +60,8 @@ class TrackIntervalAccumulator:
         """
         Gibt die kompakten Track-Metadaten zurück.
 
-        Frame-Grenzen stammen vom vollständigen Tracking und nicht
-        von der reduzierten Auswahl gespeicherter Review-Crops.
+        Frame-Grenzen stammen von den tatsächlich ausgewerteten Trackingframes,
+        nicht von der Crop-Auswahl. Übersprungene Frames werden nicht ergänzt.
         """
 
         results = []

@@ -1,11 +1,10 @@
-import { STEP } from '../../workflow';
 import React from 'react';
 import { useJob } from '../../hooks/useJob';
 
 export function StepGenerate(): React.ReactElement | null {
     const { currentStep, gptParams } = useJob();
 
-    if (currentStep !== STEP.gpt) return null;
+    if (currentStep !== 8) return null;
 
     return (
         <div className="flex flex-col gap-5">

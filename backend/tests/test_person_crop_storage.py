@@ -36,7 +36,7 @@ def test_only_selected_full_person_crops_are_encoded(staged_job, monkeypatch):
     monkeypatch.setattr(cv2, "imencode", encode)
     run_tracking(video, job)
     run_identities(video, job)
-    assert calls["detection"] == calls["tracking"] == 61
+    assert calls["detection"] == calls["tracking"] == 9
     assert len(list((job / "person_analysis").rglob("*.jpg"))) == len(writes) == 25
     assert all(shape == (100, 40, 3) for shape in writes)
     data = review_artifacts.load(job)
@@ -51,7 +51,7 @@ def test_no_faces_keeps_all_tracks_and_fallbacks(staged_job, monkeypatch):
     run_tracking(video, job)
     result = run_identities(video, job)
     assert result["persons"] == [] and len(result["unassigned_tracks"]) == 5
-    assert calls["detection"] == calls["tracking"] == 61
+    assert calls["detection"] == calls["tracking"] == 9
     assert calls["recognition"] == []
     assert len(list((job / "person_analysis").rglob("*.jpg"))) == 25
     data = review_artifacts.load(job)

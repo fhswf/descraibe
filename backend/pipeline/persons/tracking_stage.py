@@ -28,7 +28,7 @@ def run_tracking(video_path, job_dir, progress_cb=None):
 
     from ..person_analysis import assign_faces_to_tracks
     from .appearances import TrackIntervalAccumulator
-    from .config import ANALYSIS_INTERVAL_SECONDS
+    from .config import TRACKING_INTERVAL_SECONDS
     from .detection import RFDETRPersonDetector
     from .face_detection import RetinaFaceDetector
     from .face_observations import FaceObservationWriter
@@ -50,30 +50,42 @@ def run_tracking(video_path, job_dir, progress_cb=None):
         fps, total = float(capture.get(cv2.CAP_PROP_FPS)), int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
         if fps <= 0:
             raise RuntimeError("Ungültige Framerate.")
-        interval = max(1, int(round(fps * ANALYSIS_INTERVAL_SECONDS)))
+        stride = max(1, round(fps * TRACKING_INTERVAL_SECONDS))
         if progress_cb:
             progress_cb("Szenenwechsel werden erkannt ...", 0, total)
 
-        cuts = detect_scene_change_frames(video_path)
-        detector, tracker = RFDETRPersonDetector(), BytePersonTracker(frame_rate=fps)
+        cuts = iter(sorted(detect_scene_change_frames(video_path)))
+        next_cut = next(cuts, None)
+        detector, tracker = RFDETRPersonDetector(), BytePersonTracker(frame_rate=fps / stride)
         faces = RetinaFaceDetector(model_cache_dir=Path(__file__).resolve().parents[3] / "models" / "retinaface")
         accumulator, fallback = TrackIntervalAccumulator(fps), FallbackCropCollector()
         crop_writer, face_writer, timeline_writer = PersonCropWriter(staged, fps), FaceObservationWriter(staged, fps), TimelineWriter(staged)
-        counts = {"frames": 0, "faces_detected": 0, "faces_assigned": 0, "faces_usable": 0}
+        counts = {"frames": 0, "tracking_frames": 0, "tracking_stride": stride, "faces_detected": 0, "faces_assigned": 0, "faces_usable": 0}
 
         while True:
-            ok, frame = capture.read()
-            if not ok:
+            if not capture.grab():
                 break
             counts["frames"] += 1
             number = counts["frames"]
-            tracked = tracker.update(detector.detect(frame), scene_change=number in cuts)
+            if progress_cb and (number % max(1, round(fps)) == 0 or number == total):
+                progress_cb(f"Tracking & Gesichter: Frame {number}/{total}", number, total)
+            if (number - 1) % stride != 0:
+                continue
+            ok, frame = capture.retrieve()
+            if not ok:
+                raise RuntimeError(f"Tracking-Frame {number} konnte nicht gelesen werden.")
+            # Apply every crossed cut, including cuts on skipped frames.
+            while next_cut is not None and next_cut <= number:
+                tracker.start_new_scene()
+                next_cut = next(cuts, None)
+            tracked = tracker.update(detector.detect(frame))
+            counts["tracking_frames"] += 1
             for person in tracked:
                 timeline_writer.observe(person, number, frame.shape[1], frame.shape[0])
                 accumulator.observe(person["track_id"], person["scene_id"], number)
                 fallback.observe(person, number)
 
-            if (number - 1) % interval == 0 and tracked:
+            if (counts["tracking_frames"] - 1) % 2 == 0 and tracked:
                 detected = faces.detect(frame)
                 counts["faces_detected"] += len(detected)
                 for index, person in assign_faces_to_tracks(detected, tracked).items():
@@ -95,8 +107,6 @@ def run_tracking(video_path, job_dir, progress_cb=None):
                         face_usable=usable, blur_score=quality.get("blur_score"), landmarks=face["landmarks"],
                         face_crop_box=face["face_crop_box"],
                     )
-            if progress_cb and (number % max(1, round(fps)) == 0 or number == total):
-                progress_cb(f"Tracking & Gesichter: Frame {number}/{total}", number, total)
 
         fallback_count = fallback.save(video_path, crop_writer, progress_cb)
         stats = {**counts, "person_crops": crop_writer.crop_count, "fallback_crops": fallback_count}

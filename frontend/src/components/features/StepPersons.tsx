@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useJob } from '../../hooks/useJob';
 import { FaceMergeDialog, PersonExample, PersonPicker } from './FaceMergeDialog';
 import type { PersonData, PersonReview } from '../../types';
-import { STEP } from '../../workflow';
 export type { PersonData } from '../../types';
 
 function timestamp(seconds: number | undefined): string {
@@ -139,7 +138,7 @@ function PersonsPanel({ jobId }: { jobId: string }) {
 
 export function StepPersons() {
     const { currentStep, jobData } = useJob();
-    if (currentStep !== STEP.identities) return null;
+    if (currentStep !== 6) return null;
     if (!jobData?.job_id) return <p className="text-text-muted">Bitte zuerst ein Video hochladen.</p>;
     return <PersonsPanel key={jobData.job_id} jobId={jobData.job_id} />;
 }

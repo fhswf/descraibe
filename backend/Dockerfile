@@ -3,7 +3,7 @@
 # FastAPI/PyTorch backend. Static frontend is served separately by nginx.
 #
 # Build:
-#   docker build -t audiodeskription-backend .
+#   docker build -f backend/Dockerfile -t audiodeskription-backend .
 #
 # Run (GPU image, pass your OpenAI API key at runtime):
 #   docker run --gpus all -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-backend

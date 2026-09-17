@@ -144,7 +144,7 @@ def test_split_segments_are_separate_candidates_and_recluster_removes_attributes
     attribute_stage.run_attributes(video, job)
     faces = stage_state.face_snapshot(job)
     stage_state.save_faces(job, {'version': faces['version'], 'track_changes': [
-        {'action': 'split', 'track_id': 1, 'before_frame': 31}]})
+        {'action': 'split', 'track_id': 1, 'before_frame': 29}]})
     assert not attribute_state.status(job)['ready']
     run_identities(video, job)
     assert not attribute_state.status(job)['ready']
