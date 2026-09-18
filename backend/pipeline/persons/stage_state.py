@@ -62,6 +62,15 @@ def root(job_dir):
     return Path(job_dir) / "person_analysis"
 
 
+def scene_cuts(job_dir):
+    """Read the full-video, one-based cuts produced by image extraction."""
+    path = Path(job_dir) / "job.json"
+    cuts = read_json(path).get("scene_cut_frames") if path.is_file() else None
+    if not isinstance(cuts, list) or any(type(c) is not int or c < 2 for c in cuts) or cuts != sorted(set(cuts)):
+        raise ReviewError("Bitte zuerst Bilder extrahieren ausführen. Einstellungsgrenzen fehlen oder sind ungültig.", 409)
+    return cuts
+
+
 def status(job_dir):
     base = root(job_dir)
     tracks = read_json(base / "tracks.json") if (base / "tracks.json").is_file() else None

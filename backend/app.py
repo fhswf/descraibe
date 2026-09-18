@@ -1233,6 +1233,11 @@ def run_images(job_id: str, body: dict = Body(default={})):
     if job.get("slots_df") is None:
         return JSONResponse({"error": "Slots not available. Run slot generation first."}, status_code=400)
 
+    try:
+        sm.begin_image_stage(job_id)
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
     def run():
         sm.job_id_var.set(job_id)
         try:
@@ -1298,6 +1303,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
 
             sm.update_job(job_id,
                           scene_images=all_images,
+                          scene_cut_frames=extractor.scene_cut_frames,
                           slot_map_df=slot_map_df,
                           gpt_records_broadcast=None,
                           gpt_records_directors=None,

@@ -336,12 +336,13 @@ The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICEN
 ### How It Works
 
 1. After scene images are extracted, RF-DETR and ByteTrack process video frames at a stride of `max(1, round(fps * 0.233))`.
-2. RetinaFace runs on every second sampled frame; face metadata and person crops are saved.
-3. Optional review supports face/track exclusions and logical track splits.
-4. FaceMoE creates embeddings in RAM; clustering assigns tracks to persons. Assignments and names can be reviewed.
-5. Qwen extracts attributes from up to five selected existing crops per person; attributes can be edited manually.
-6. Current data is stored under `person_analysis/` in the job directory, without run history. Earlier changes invalidate dependent results.
-7. GPT prompts continue to receive the existing person context with Erstnennung/Folgebenennung flags; new Qwen attributes are not additionally included.
+2. Tracking reuses the full-video shot boundaries saved by the image extraction step and restarts tracks at each cut. Run image extraction first (also for older jobs without saved boundaries). Changed boundaries invalidate tracking, identities and attributes; unchanged boundaries preserve them.
+3. RetinaFace runs on every second sampled frame; face metadata and person crops are saved.
+4. Optional review supports face/track exclusions and logical track splits.
+5. FaceMoE creates embeddings in RAM; clustering assigns tracks to persons. Assignments and names can be reviewed.
+6. Qwen extracts attributes from up to five selected existing crops per person; attributes can be edited manually.
+7. Current data is stored under `person_analysis/` in the job directory, without run history. Earlier changes invalidate dependent results.
+8. GPT prompts continue to receive the existing person context with Erstnennung/Folgebenennung flags; new Qwen attributes are not additionally included.
 
 ### AD Naming Conventions
 

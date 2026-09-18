@@ -24,6 +24,7 @@ def _publish(staged: Path, target: Path) -> None:
 
 
 def run_tracking(video_path, job_dir, progress_cb=None):
+    cuts_from_images = stage_state.scene_cuts(job_dir)
     import cv2
 
     from ..person_analysis import assign_faces_to_tracks
@@ -35,7 +36,7 @@ def run_tracking(video_path, job_dir, progress_cb=None):
     from .face_quality import check_face_quality
     from .person_crops import FallbackCropCollector, PersonCropWriter
     from .track_segments import TimelineWriter, initial_state, timeline
-    from .tracking import BytePersonTracker, detect_scene_change_frames
+    from .tracking import BytePersonTracker
 
     video_path, job_dir = Path(video_path), Path(job_dir)
     target = stage_state.root(job_dir)
@@ -52,9 +53,9 @@ def run_tracking(video_path, job_dir, progress_cb=None):
             raise RuntimeError("Ungültige Framerate.")
         stride = max(1, round(fps * TRACKING_INTERVAL_SECONDS))
         if progress_cb:
-            progress_cb("Szenenwechsel werden erkannt ...", 0, total)
+            progress_cb("Gespeicherte Einstellungsgrenzen werden verwendet ...", 0, total)
 
-        cuts = iter(sorted(detect_scene_change_frames(video_path)))
+        cuts = iter(cuts_from_images)
         next_cut = next(cuts, None)
         detector, tracker = RFDETRPersonDetector(), BytePersonTracker(frame_rate=fps / stride)
         faces = RetinaFaceDetector(model_cache_dir=Path(__file__).resolve().parents[3] / "models" / "retinaface")

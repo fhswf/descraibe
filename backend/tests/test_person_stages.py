@@ -62,7 +62,7 @@ def staged_job(tmp_path, monkeypatch):
         def close(self): pass
     for name, attrs in {
         "detection": {"RFDETRPersonDetector": Detector},
-        "tracking": {"BytePersonTracker": Tracker, "detect_scene_change_frames": lambda path: {31}},
+        "tracking": {"BytePersonTracker": Tracker},
         "face_detection": {"RetinaFaceDetector": Faces, "align_face": align},
         "face_quality": {"check_face_quality": lambda crop, confidence: (confidence > .5, {"blur_score": 10})},
         "face_recognition": {"FaceMoERecognizer": Recognizer},
@@ -84,7 +84,7 @@ def staged_job(tmp_path, monkeypatch):
     for number in range(61):
         writer.write(np.full((100, 200, 3), number, np.uint8))
     writer.release()
-    (job / "job.json").write_text(json.dumps({"job_id": "job", "status": "idle", "video_path": str(video)}))
+    (job / "job.json").write_text(json.dumps({"job_id": "job", "status": "idle", "video_path": str(video), "scene_cut_frames": [31]}))
     return job, video, calls
 
 
@@ -313,7 +313,9 @@ def test_sampling_uses_original_frames_and_every_second_face_call(staged_job, fp
 def test_cuts_on_skipped_and_selected_frames_reset_before_next_observation(staged_job, monkeypatch):
     job, video, calls = staged_job
     module = sys.modules['backend.pipeline.persons.tracking']
-    monkeypatch.setattr(module, 'detect_scene_change_frames', lambda path: {3, 5, 15})
+    payload = json.loads((job / 'job.json').read_text())
+    payload['scene_cut_frames'] = [3, 5, 15]
+    (job / 'job.json').write_text(json.dumps(payload))
     class SceneTracker:
         def __init__(self, frame_rate):
             self.scene = 1

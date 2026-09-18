@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import supervision as sv
-from scenedetect import AdaptiveDetector, detect
 from trackers import ByteTrackTracker
 
 from .config import (
@@ -15,19 +12,6 @@ from .config import (
     PERSON_CLASS_ID,
     TRACK_ACTIVATION_THRESHOLD,
 )
-
-
-def detect_scene_change_frames(video_path: Path) -> set[int]:
-    scenes = detect(
-        str(video_path),
-        AdaptiveDetector(),
-        start_in_scene=True,
-    )
-
-    return {
-        scene_start.frame_num + 1
-        for scene_start, _ in scenes[1:]
-    }
 
 
 class BytePersonTracker:

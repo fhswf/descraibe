@@ -322,7 +322,7 @@ export function JobProvider({ children }: JobProviderProps) {
                         newP.few_shots = data.default_prompts.few_shots || p.few_shots;
                     }
                     if (data.available_models && data.available_models.length > 0) {
-                        setAvailableModels(data.available_models);
+                        setAvailableModels(data.available_models.map((item: { model: string }) => item.model));
                         const firstModel = data.available_models[0];
                         if (!newP.model) {
                             newP.model = firstModel.model;

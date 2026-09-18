@@ -115,6 +115,7 @@ _JSON_FIELDS: List[str] = [
     "status",
     "progress",
     "scene_images",
+    "scene_cut_frames",
     "gpt_records_broadcast",
     "gpt_records_directors",
     "final_mp4_path",
@@ -177,7 +178,19 @@ def begin_person_stage(job_id, phase):
         job = _STORE.get(job_id)
         if not job or job.get("status") == "running":
             raise review_artifacts.ReviewError("Ein Verarbeitungsschritt läuft bereits.", 409)
+        if phase in ("tracking", "persons"):
+            stage_state.scene_cuts(job["job_dir"])
         job.update(status="running", persons_analysis_running=True, persons_phase=phase)
+        _persist_job(job)
+
+
+def begin_image_stage(job_id):
+    # Reserve the job under the same lock as person-stage starts/reviews.
+    with _LOCK:
+        job = _STORE.get(job_id)
+        if not job or job.get("status") == "running" or job.get("persons_analysis_running"):
+            raise review_artifacts.ReviewError("Bitte laufenden Schritt abwarten.", 409)
+        job["status"] = "running"
         _persist_job(job)
 
 
@@ -364,7 +377,19 @@ def update_job(job_id: str, **kwargs) -> None:
     with _LOCK:
         if job_id not in _STORE:
             return
-        _STORE[job_id].update(kwargs)
+        job = _STORE[job_id]
+        if "scene_cut_frames" in kwargs and kwargs["scene_cut_frames"] != job.get("scene_cut_frames"):
+            if job.get("persons_analysis_running"):
+                raise review_artifacts.ReviewError("Bitte laufende Personenanalyse abwarten.", 409)
+            # Only current person artifacts depend on these cuts; no run history.
+            person_root = stage_state.root(job["job_dir"])
+            if person_root.exists():
+                shutil.rmtree(person_root)
+            (Path(job["job_dir"]) / "persons_df.parquet").unlink(missing_ok=True)
+            job.update(persons_df=None, faces=[], persons_phase=None)
+            for key in ("person_review", "person_review_error", "_person_review_signature"):
+                job.pop(key, None)
+        job.update(kwargs)
         _apply_person_review(_STORE[job_id], force=bool({"persons_df", "faces"} & kwargs.keys()))
         _persist_job(_STORE[job_id])
 
