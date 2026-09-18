@@ -1,43 +1,32 @@
 # Audiodeskription Webapp
 
-A FastAPI-based web application with a React frontend that runs the Audiodeskription pipeline: VAD pause detection, Whisper transcription, scene image extraction, and GPT-powered audio description generation.
+A Flask-based web application that runs the Audiodeskription pipeline: VAD pause detection, Whisper transcription, scene image extraction, and GPT-powered audio description generation.
 
 ## Quick Start (Docker)
 
-Requires Docker Compose, Linux containers and NVIDIA GPU support. Run from the repository root:
-
 ```bash
-docker compose up --build -d
+docker build -f webapp/Dockerfile -t audiodeskription-webapp .
+
+docker run \
+  -p 5000:5000 \
+  -e OPENAI_API_KEY=sk-... \
+  -v /my/local/jobs:/app/jobs \
+  audiodeskription-webapp
 ```
 
-Then open [http://localhost:8080](http://localhost:8080).
-For GPT generation, set `OPENAI_API_KEY` before starting; person analysis does not require it.
-Models are downloaded on first use. Stop with `docker compose down`; saved jobs remain in volumes.
-
-If Silero requests repository trust on first use, run the following and confirm with `y` if you trust the source:
-
-```bash
-docker compose exec backend python -c "import torch; torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=False, onnx=False)"
-```
-
-To build individual images from the repository root:
-
-```bash
-docker build -f backend/Dockerfile -t audiodeskription-backend .
-docker build -f frontend/Dockerfile -t audiodeskription-frontend .
-```
+Then open [http://localhost:5000](http://localhost:5000).
 
 ---
 
 ## Kubernetes / ArgoCD Deployment
 
-All Kubernetes manifests live in [`k8s/`](k8s/) and are managed by Kustomize.
-Point the root ArgoCD **Application** at `k8s/argocd/apps` — ArgoCD will create every resource
+All Kubernetes manifests live in [`k8s/`](../k8s/) and are managed by Kustomize.
+Point an ArgoCD **Application** at that directory — ArgoCD will create every resource
 (Namespace, ConfigMaps, Secret, PVC, Deployment, Service, Ingress) automatically.
 
 ### ArgoCD Application manifest
 
-Configure `k8s/argocd/root/application.yaml` (already included) using this example and apply it **once** into the
+Save this as `k8s/argocd-app.yaml` (already included) and apply it **once** into the
 `argocd` namespace. It is **not** part of the Kustomize root so ArgoCD doesn't try to
 manage itself.
 
@@ -52,10 +41,10 @@ spec:
   source:
     repoURL: https://github.com/YOUR_ORG/Audiodeskriptionen_SS25   # ← replace
     targetRevision: main
-    path: k8s/argocd/apps
+    path: k8s
   destination:
     server: https://kubernetes.default.svc
-    namespace: argocd
+    namespace: audiodeskription
   syncPolicy:
     automated:
       prune: true
@@ -75,11 +64,11 @@ kubectl apply -k k8s/argocd/root -n argocd
 > [!IMPORTANT]
 > Complete these steps **before** applying the Application manifest:
 >
-> 1. **Image** — set your real image reference in `k8s/base/deployment-backend.yaml` / `deployment-frontend.yaml` and the relevant `k8s/overlays/*/kustomization.yaml`:
->    `ghcr.io/YOUR_ORG/audiodeskription-backend:latest` and `ghcr.io/YOUR_ORG/audiodeskription-frontend:latest`
-> 2. **Domain** — check the host in `k8s/base/ingress.yaml` and the staging overlay.
-> 3. **OpenAI API key** — provide the real key through the overlay SealedSecrets described below;
->    do not commit plaintext keys.
+> 1. **Image** — set your real image reference in `k8s/base/deployment.yaml` and the relevant `k8s/overlays/*/kustomization.yaml`:
+>    `ghcr.io/YOUR_ORG/audiodeskription-webapp:latest`
+> 2. **Domain** — replace `audiodeskription.example.com` in `k8s/base/ingress.yaml`.
+> 3. **OpenAI API key** — inject the real key via External Secrets Operator or ArgoCD Vault Plugin
+>    instead of committing it in `k8s/secret.yaml`.
 > 4. **Storage class** — update `storageClassName` in `k8s/base/pvc.yaml` to match your cluster
 >    (e.g. `gp2`, `longhorn`, `ceph-rbd`).
 
@@ -95,7 +84,7 @@ The recommended setup uses the App of Apps pattern:
 | `k8s/overlays/release` | Release deployment in `audiodeskription`, pinned by release-please to a version tag. |
 
 If you manage the root ArgoCD Application outside this repository, point it to
-`k8s/argocd/apps` and deploy it into the `argocd` namespace. The child
+`webapp/k8s/argocd/apps` and deploy it into the `argocd` namespace. The child
 Applications then deploy staging and release into their own target namespaces.
 
 | File | Resource | Purpose |
@@ -105,9 +94,9 @@ Applications then deploy staging and release into their own target namespaces.
 | `base/configmap-prompts.yaml` | ConfigMap `prompts-config` | Prompt `.txt` files → `/app/config/prompts/` |
 | `overlays/*/openai-sealedsecret.yaml` | SealedSecret | OpenAI API key for staging/release |
 | `base/pvc.yaml` | PVC `audiodeskription-jobs` | 50 Gi scratch space for `/app/jobs` |
-| `base/deployment-backend.yaml`, `base/deployment-frontend.yaml` | Deployments | Single-replica FastAPI backend and nginx frontend |
-| `base/service-backend.yaml`, `base/service-frontend.yaml` | Services | ClusterIP, backend 80 → 5000 and frontend 80 → 80 |
-| `base/ingress.yaml` | Ingress | Traefik, HTTPS, `/api` → backend and `/` → frontend |
+| `base/deployment.yaml` | Deployment | Single-replica Flask/Gunicorn app |
+| `base/service.yaml` | Service | ClusterIP, port 80 → 5000 |
+| `base/ingress.yaml` | Ingress | Nginx, 4 GB body limit, cert-manager TLS |
 
 ### Sealed OpenAI secrets
 
@@ -175,14 +164,14 @@ git push
 
 | Variable | Default | Required | Description |
 |---|---|---|---|
-| `OPENAI_API_KEY` | *(empty)* | **Yes** | OpenAI API key for GPT scene-description calls. The app will reject `/api/jobs/{job_id}/gpt` if not set. Can also be supplied per-request in the JSON body as `api_key`. |
+| `OPENAI_API_KEY` | *(empty)* | **Yes** | OpenAI API key for GPT scene-description calls. The app will reject `/api/run/gpt` if not set. Can also be supplied per-request in the JSON body as `api_key`. |
 | `AD_JOBS_DIR` | `/app/jobs` | No | Directory where per-job temp files (uploaded video, extracted audio, frames) are written. **Mount a Docker volume here** to persist data across container restarts. |
-| `MAX_UPLOAD_MB` | `2048` | No | Maximum video upload size in megabytes. |
-| `UVICORN_WORKERS` | `1` | No | Number of Uvicorn worker processes in Docker. **Keep at 1** — the pipeline stores large in-memory state (DataFrames, image lists) per job; multiple workers do not share this state. |
-| `UVICORN_GRACEFUL_TIMEOUT` | `30` (Docker) | No | Graceful shutdown timeout in seconds. |
-| `UVICORN_TIMEOUT` | `600` (Docker) | No | Keep-alive timeout in seconds. |
-| `GPT_CONFIG_PATH` | *(unset; configured in Kubernetes)* | No | Path to the GPT preset YAML (see section below). |
-| `GPT_PROMPTS_DIR` | *(unset)* | No | Directory containing the four prompt `.txt` files. When set, `/api/jobs/{job_id}/gpt` reads and assembles prompts automatically if none are supplied in the request body (see *GPT Prompt Files* section below). |
+| `MAX_UPLOAD_MB` | `2048` | No | Maximum video upload size in megabytes. Maps to Flask's `MAX_CONTENT_LENGTH`. Increase for very large video files. |
+| `GUNICORN_WORKERS` | `1` | No | Number of gunicorn worker processes. **Keep at 1** — the pipeline stores large in-memory state (DataFrames, image lists) per job; multiple workers do not share this state. |
+| `GUNICORN_THREADS` | `4` | No | Threads per worker. Increase to handle more concurrent SSE progress streams. |
+| `GUNICORN_TIMEOUT` | `600` | No | Request timeout in seconds. Pipeline steps (Whisper transcription, GPT calls) can take several minutes. |
+| `GPT_CONFIG_PATH` | `/app/config/gpt_config.yaml` | No | Path to the GPT preset YAML (see section below). |
+| `GPT_PROMPTS_DIR` | *(unset)* | No | Directory containing the four prompt `.txt` files. When set, `/api/run/gpt` reads and assembles prompts automatically if none are supplied in the request body (see *GPT Prompt Files* section below). |
 | `OIDC_ISSUER_URL` | *(unset)* | No | OpenID Connect issuer base URL (e.g. `https://id.example.com/realms/main`). Set together with client ID/secret to enable optional login. |
 | `OIDC_CLIENT_ID` | *(unset)* | No | OIDC client ID for the web app. |
 | `OIDC_CLIENT_SECRET` | *(unset)* | No | OIDC client secret for the web app. |
@@ -198,13 +187,13 @@ git push
 | `TESSERACT_LANG` | `deu+eng` | No | Legacy setting; not used by the current person pipeline. |
 
 > [!IMPORTANT]
-> `OPENAI_API_KEY` is required for GPT generation, not for the person stages. The container will start without it, but calls to `/api/jobs/{job_id}/gpt` will return a `400` error until it is provided.
+> `OPENAI_API_KEY` is the only **required** environment variable. The container will start without it, but calls to `/api/run/gpt` will return a `400` error until it is provided.
 
 ---
 
 ## GPT Config YAML
 
-The app expects a YAML file that defines **presets** – named configurations for the GPT description step. The file path is set via the `GPT_CONFIG_PATH` env var (set to `/app/config/gpt_config.yaml` in Kubernetes).
+The app expects a YAML file that defines **presets** – named configurations for the GPT description step. The file path is set via the `GPT_CONFIG_PATH` env var (default: `/app/config/gpt_config.yaml`).
 
 ### File format
 
@@ -217,7 +206,7 @@ presets:
     detail: high               # Image detail level: "low" | "high" | "auto"
 ```
 
-All keys inside a preset are optional — missing values fall back to the defaults used by `/api/jobs/{job_id}/gpt`.
+All keys inside a preset are optional — missing values fall back to the defaults used by `/api/run/gpt`.
 
 ### Included presets (K8s ConfigMap default)
 
@@ -237,7 +226,7 @@ docker run \
   -e OPENAI_API_KEY=sk-... \
   -e GPT_CONFIG_PATH=/app/config/gpt_config.yaml \
   -v /path/to/my/gpt_config.yaml:/app/config/gpt_config.yaml:ro \
-  audiodeskription-backend
+  audiodeskription-webapp
 ```
 
 ### Kubernetes / ArgoCD
@@ -248,7 +237,7 @@ In K8s, the file is stored as the `gpt-config` ConfigMap and mounted read-only a
 
 ## GPT Prompt Files
 
-The notebook (step **05a**) loads the GPT prompts from **plain `.txt` files** rather than hard-coding them. The webapp's `/api/jobs/{job_id}/gpt` endpoint accepts the same content as request-body strings. Understanding the file structure helps you author prompts that match the notebook's behaviour.
+The notebook (step **05a**) loads the GPT prompts from **plain `.txt` files** rather than hard-coding them. The webapp's `/api/run/gpt` endpoint accepts the same content as request-body strings. Understanding the file structure helps you author prompts that match the notebook's behaviour.
 
 ### The four prompt files
 
@@ -275,7 +264,7 @@ USER_BASE     =  user_instruction
 
 ### Using prompt files with the webapp
 
-Pass the assembled text directly in the POST body of `/api/jobs/{job_id}/gpt`:
+Pass the assembled text directly in the POST body of `/api/run/gpt`:
 
 ```json
 {
@@ -308,7 +297,7 @@ docker run \
   -e OPENAI_API_KEY=sk-... \
   -e GPT_PROMPTS_DIR=/app/config/prompts \
   -v $(pwd)/my_prompts:/app/config/prompts:ro \
-  audiodeskription-backend
+  audiodeskription-webapp
 ```
 
 #### Kubernetes / ArgoCD
@@ -316,7 +305,7 @@ docker run \
 The prompts are stored in [`k8s/base/configmap-prompts.yaml`](k8s/base/configmap-prompts.yaml) and
 mounted read-only at `/app/config/prompts/`. Edit the file and push — ArgoCD will sync and
 restart the pod. The `GPT_PROMPTS_DIR=/app/config/prompts` env var is already set in
-[`k8s/base/deployment-backend.yaml`](k8s/base/deployment-backend.yaml).
+[`k8s/base/deployment.yaml`](k8s/base/deployment.yaml).
 
 ---
 
@@ -331,6 +320,18 @@ The Person Analysis stages (Tracking & Gesichter, Personen & Cluster, Attribute)
 - **Visual Attributes**: Extracts twelve attributes with Qwen3.5-4B from selected person crops
 - **Person Tracking**: Uses RF-DETR and ByteTrack; FaceMoE and clustering assign tracks to persons
 - **Prompt Integration**: Existing person context with Erstnennung/Folgebenennung flags remains; new Qwen attributes are not additionally included
+
+### Models, Sources and Licenses
+
+| Model / implementation | Source | License |
+| --- | --- | --- |
+| RF-DETR Nano | [Roboflow RF-DETR](https://github.com/roboflow/rf-detr) | Apache-2.0 |
+| ByteTrack via Roboflow Trackers | [Roboflow Trackers](https://github.com/roboflow/trackers) | Apache-2.0 (implementation) |
+| RetinaFace MobileNetV2 via UniFace | [UniFace](https://github.com/yakhyo/uniface), [RetinaFace implementation](https://github.com/yakhyo/retinaface-pytorch) | MIT according to the [UniFace license overview](https://yakhyo.github.io/uniface/license-attribution/#model-credits) |
+| FaceMoE | [Source code](https://github.com/Kartik-3004/FaceMoE), [model weights](https://huggingface.co/kartiknarayan/FaceMoE) | MIT (code); Apache-2.0 for weights according to the model card |
+| Qwen3.5-4B | [Qwen model card](https://huggingface.co/Qwen/Qwen3.5-4B) | Apache-2.0 |
+
+The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICENSE) and [upstream commit](backend/vendor/facemoe/UPSTREAM_COMMIT.txt). Model weights are downloaded separately and are not included in this repository. This overview does not replace the upstream license texts or applicable redistribution requirements.
 
 ### How It Works
 
@@ -407,15 +408,14 @@ RUN apt-get install -y tesseract-ocr tesseract-ocr-deu
 ### Install & Run
 
 ```bash
+cd webapp
 uv sync                          # installs all deps from uv.lock
 
 export OPENAI_API_KEY=sk-...
-uv run python -m backend.app
+uv run python -m backend.app     # or: flask --app backend.app run --debug
 ```
 
-The backend starts on [http://localhost:5000](http://localhost:5000).
-Start the frontend in a second terminal with `cd frontend`, `npm ci`, `npm run dev`,
-then open [http://localhost:5001](http://localhost:5001).
+The dev server starts on [http://localhost:5000](http://localhost:5000).
 For local reloads, the backend uses a short graceful-shutdown timeout so open
 SSE connections do not block code updates for long. Override it if needed:
 
@@ -479,7 +479,7 @@ provide the node driver, device plugin and NVIDIA container runtime hooks.
 Run locally with:
 
 ```bash
-docker run --gpus all -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-backend
+docker run --gpus all -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-webapp
 ```
 
 When changing the PyTorch version, keep the Docker base image tag aligned with
@@ -492,23 +492,28 @@ the `torch`/`torchaudio` versions in `uv.lock`.
 Backend unit and integration tests use [pytest](https://pytest.org/):
 
 ```bash
+cd webapp
 uv run pytest backend/tests/ -v           # Run all backend tests
 uv run pytest backend/tests/test_person_stages.py -v  # Person analysis tests
 uv run pytest backend/tests/test_attribute_pipeline.py -v   # Pipeline integration tests
 ```
 
-Frontend checks:
+End-to-end UI tests use [Playwright](https://playwright.dev/):
+
+```bash
+cd webapp
+npm install          # install Playwright
+npm run test         # or: npx playwright test
+```
+
+The backend must be running on `http://localhost:5000` before executing UI tests.
+
+Additional person-review tests (from the repository root):
 
 ```bash
 cd frontend
-npm ci
-npm run type-check
-npm run lint
-npm run build
 node --test --test-concurrency=1 tests/*.test.mjs
 ```
 
-End-to-end UI tests use [Playwright](https://playwright.dev/).
-`backend/tests/person_stages_browser.cjs` requires the isolated server
-`backend/tests/person_review_server.py` and its loopback URL; see the test files
-for setup.
+The person-stage browser test `backend/tests/person_stages_browser.cjs` uses
+`backend/tests/person_review_server.py`; see those files for setup.

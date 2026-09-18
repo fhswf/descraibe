@@ -3,10 +3,10 @@
 # FastAPI/PyTorch backend. Static frontend is served separately by nginx.
 #
 # Build:
-#   docker build -f backend/Dockerfile -t audiodeskription-backend .
+#   docker build -t audiodeskription-backend .
 #
 # Run (GPU image, pass your OpenAI API key at runtime):
-#   docker run --gpus all -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-backend
+#   docker run -p 5000:5000 -e OPENAI_API_KEY=sk-... audiodeskription-backend
 #
 # The runtime image already includes PyTorch, CUDA and cuDNN. The Kubernetes
 # GPU Operator still provides the host driver, device plugin and runtime hooks.
