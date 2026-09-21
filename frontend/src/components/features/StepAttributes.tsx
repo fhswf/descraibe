@@ -3,7 +3,7 @@ import type { ChangeEvent } from 'react';
 import { useJob } from '../../hooks/useJob';
 
 interface AttributePerson {
-    person_id: number; name: string; status: string; error: string | null;
+    person_id: number; name: string; function: string; status: string; error: string | null;
     attributes: Record<string, string>;
     images: { crop_id: number; frame_number: number; track_id: number; timestamp_s: number }[];
 }
@@ -25,7 +25,7 @@ function AttributesPanel({ jobId }: { jobId: string }) {
     const { jobData, handleRunAttributes, progressData, fetchJobData } = useJob();
     const [snapshot, setSnapshot] = useState<AttributeReview | null>(null);
     const [pending, setPending] = useState<Record<string, { person_id: number; field: string; value: string }>>({});
-    const [pendingNames, setPendingNames] = useState<Record<number, string>>({});
+    const [pendingMetadata, setPendingMetadata] = useState<Record<number, Partial<Pick<AttributePerson, 'name' | 'function'>>>>({});
     const [personsVersion, setPersonsVersion] = useState('');
     const [error, setError] = useState('');
     const [saving, setSaving] = useState(false);
@@ -33,7 +33,7 @@ function AttributesPanel({ jobId }: { jobId: string }) {
     const [open, setOpen] = useState(false);
     const [enlarged, setEnlarged] = useState<string | null>(null);
     const running = jobData?.status === 'running';
-    const dirty = Object.keys(pending).length + Object.keys(pendingNames).length > 0;
+    const dirty = Object.keys(pending).length + Object.keys(pendingMetadata).length > 0;
     useEffect(() => {
         if (running || dirty || saving) return;
         const controller = new AbortController();
@@ -60,8 +60,8 @@ function AttributesPanel({ jobId }: { jobId: string }) {
         return () => { document.body.style.overflow = previous; };
     }, [open]);
     const close = () => {
-        if (saving || (dirty && !window.confirm('Ungespeicherte Attributänderungen verwerfen?'))) return;
-        setPending({}); setPendingNames({}); setOpen(false); setEnlarged(null);
+        if (saving || (dirty && !window.confirm('Ungespeicherte Änderungen verwerfen?'))) return;
+        setPending({}); setPendingMetadata({}); setOpen(false); setEnlarged(null);
         if (dirty) setRefresh(n => n + 1);
     };
     const stale = snapshot?.stale || jobData?.attribute_stage?.stale || Boolean(snapshot?.ready && jobData?.attribute_stage && (!jobData.attribute_stage.ready || snapshot.version !== jobData.attribute_stage.version) && dirty);
@@ -69,15 +69,15 @@ function AttributesPanel({ jobId }: { jobId: string }) {
         setSaving(true); setError('');
         try {
             let version = personsVersion;
-            for (const [id, name] of Object.entries(pendingNames)) {
-                const response = await fetch(`/api/jobs/${jobId}/persons/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version, name }) });
+            for (const [id, metadata] of Object.entries(pendingMetadata)) {
+                const response = await fetch(`/api/jobs/${jobId}/persons/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version, ...metadata }) });
                 const data = await response.json();
-                if (!response.ok) throw new Error(data.error || data.detail || 'Name konnte nicht gespeichert werden.');
+                if (!response.ok) throw new Error(data.error || data.detail || 'Personendaten konnten nicht gespeichert werden.');
                 version = data.version;
                 setPersonsVersion(version);
-                const savedName = data.persons.find((person: { person_id: number }) => person.person_id === Number(id)).name;
-                setSnapshot(prev => prev && ({ ...prev, persons: prev.persons.map(person => person.person_id === Number(id) ? { ...person, name: savedName } : person) }));
-                setPendingNames(prev => { const next = { ...prev }; delete next[Number(id)]; return next; });
+                const savedPerson = data.persons.find((person: { person_id: number }) => person.person_id === Number(id));
+                setSnapshot(prev => prev && ({ ...prev, persons: prev.persons.map(person => person.person_id === Number(id) ? { ...person, name: savedPerson.name, function: savedPerson.function } : person) }));
+                setPendingMetadata(prev => { const next = { ...prev }; delete next[Number(id)]; return next; });
             }
             if (Object.keys(pending).length) {
                 const response = await fetch(`/api/jobs/${jobId}/person-analysis/attribute-review`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: snapshot?.version, changes: Object.values(pending) }) });
@@ -116,20 +116,35 @@ function AttributesPanel({ jobId }: { jobId: string }) {
                     {stale && <p role="status" className="text-amber-600">Veraltet: Personenstand geändert. Bitte Attribute nach aktuellem Clustering erneut ausführen.</p>}
                     {snapshot.persons.map(person => <section key={person.person_id} aria-label={`Attribute Person ${person.person_id}`} className="p-4 border border-border-subtle rounded-lg space-y-3">
                     <div>
-                        <label htmlFor={`person-name-${person.person_id}`} className="block text-sm mb-1">Name</label>
-                        <div className="flex items-center gap-3">
-                            <input id={`person-name-${person.person_id}`} aria-label={`Name Person ${person.person_id}`} disabled={disabled} maxLength={10000}
-                                value={pendingNames[person.person_id] ?? person.name ?? ''}
-                                onChange={e => setPendingNames(prev => { const next = { ...prev }; if (e.target.value === person.name) delete next[person.person_id]; else next[person.person_id] = e.target.value; return next; })}
-                                className="w-full max-w-md px-2 py-1.5 bg-bg-card border border-border-subtle rounded text-lg font-semibold" />
-                            <span className="text-sm whitespace-nowrap">ID {person.person_id}</span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-3xl">
+                            {(['name', 'function'] as const).map(field => {
+                                const label = field === 'name' ? 'Name' : 'Funktion';
+                                const edited = pendingMetadata[person.person_id]?.[field] !== undefined;
+                                const update = (value: string | undefined) => setPendingMetadata(prev => {
+                                    const next = { ...prev };
+                                    const metadata = { ...next[person.person_id] };
+                                    if (value === undefined || value === (person[field] || '')) delete metadata[field];
+                                    else metadata[field] = value;
+                                    if (Object.keys(metadata).length) next[person.person_id] = metadata;
+                                    else delete next[person.person_id];
+                                    return next;
+                                });
+                                return <div key={field}>
+                                    <label htmlFor={`person-${field}-${person.person_id}`} className="block text-sm mb-1">{label}</label>
+                                    <input id={`person-${field}-${person.person_id}`} aria-label={`${label} Person ${person.person_id}`} disabled={disabled} maxLength={10000}
+                                        value={pendingMetadata[person.person_id]?.[field] ?? person[field] ?? ''}
+                                        onChange={e => update(e.target.value)}
+                                        className="w-full px-2 py-1.5 bg-bg-card border border-border-subtle rounded text-lg font-semibold" />
+                                    <div className="flex flex-wrap gap-x-2 text-xs text-text-muted mt-1">
+                                        <span>Gespeichert: {person[field] || '—'}</span>
+                                        <button disabled={disabled || !edited} aria-label={`Eingabe verwerfen: ${label} Person ${person.person_id}`}
+                                            onClick={() => update(undefined)} className="underline">Eingabe verwerfen</button>
+                                        {edited && <span className="text-violet-500">vorgemerkt</span>}
+                                    </div>
+                                </div>;
+                            })}
                         </div>
-                        <div className="flex flex-wrap gap-x-2 text-xs text-text-muted mt-1">
-                            <span>Gespeichert: {person.name || '—'}</span>
-                            <button disabled={disabled || !(person.person_id in pendingNames)} aria-label={`Eingabe verwerfen: Name Person ${person.person_id}`}
-                                onClick={() => setPendingNames(prev => { const next = { ...prev }; delete next[person.person_id]; return next; })} className="underline">Eingabe verwerfen</button>
-                            {person.person_id in pendingNames && <span className="text-violet-500">vorgemerkt</span>}
-                        </div>
+                        <span className="text-xs text-text-muted">ID {person.person_id}</span>
                         <p className="text-xs text-text-secondary mt-1">{statuses[person.status] || person.status}</p>
                     </div>
                     {person.error && <p className="text-sm text-red-400">{person.error}</p>}
@@ -168,8 +183,8 @@ function AttributesPanel({ jobId }: { jobId: string }) {
                     {error && <p role="alert" className="text-red-400 mb-2">{error}</p>}
                     <div className="flex flex-wrap gap-3 items-center justify-between">
                         <div className="flex flex-wrap gap-3 items-center">
-                            <span className="text-xs text-text-secondary" aria-live="polite">{Object.keys(pending).length} Attributänderungen · {Object.keys(pendingNames).length} Namensänderungen vorgemerkt</span>
-                            <button disabled={saving || !dirty} onClick={() => { if (window.confirm('Ungespeicherte Attributänderungen verwerfen?')) { setPending({}); setPendingNames({}); setRefresh(n => n+1); } }} className="text-xs underline">Verwerfen / Neu laden</button>
+                            <span className="text-xs text-text-secondary" aria-live="polite">{Object.keys(pending).length} Attributänderungen · {Object.keys(pendingMetadata).length} Personen mit Namens-/Funktionsänderungen vorgemerkt</span>
+                            <button disabled={saving || !dirty} onClick={() => { if (window.confirm('Ungespeicherte Änderungen verwerfen?')) { setPending({}); setPendingMetadata({}); setRefresh(n => n+1); } }} className="text-xs underline">Verwerfen / Neu laden</button>
                             <button disabled={disabled || !dirty} onClick={() => void save()} className="px-4 py-2 bg-violet-600 text-white rounded-lg disabled:opacity-50">{saving ? 'Wird gespeichert …' : 'Änderungen speichern'}</button>
                         </div>
                     </div>

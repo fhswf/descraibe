@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from . import stage_state
+from .config import TRACKING_INTERVAL_SECONDS, validate_parameter
 
 
 def _publish(staged: Path, target: Path) -> None:
@@ -23,13 +24,13 @@ def _publish(staged: Path, target: Path) -> None:
     shutil.rmtree(backup, ignore_errors=True)
 
 
-def run_tracking(video_path, job_dir, progress_cb=None):
+def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_seconds=TRACKING_INTERVAL_SECONDS):
+    validate_parameter("tracking_interval_seconds", tracking_interval_seconds)
     cuts_from_images = stage_state.scene_cuts(job_dir)
     import cv2
 
     from ..person_analysis import assign_faces_to_tracks
     from .appearances import TrackIntervalAccumulator
-    from .config import TRACKING_INTERVAL_SECONDS
     from .detection import RFDETRPersonDetector
     from .face_detection import RetinaFaceDetector
     from .face_observations import FaceObservationWriter
@@ -51,7 +52,7 @@ def run_tracking(video_path, job_dir, progress_cb=None):
         fps, total = float(capture.get(cv2.CAP_PROP_FPS)), int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
         if fps <= 0:
             raise RuntimeError("Ungültige Framerate.")
-        stride = max(1, round(fps * TRACKING_INTERVAL_SECONDS))
+        stride = max(1, round(fps * tracking_interval_seconds))
         if progress_cb:
             progress_cb("Gespeicherte Einstellungsgrenzen werden verwendet ...", 0, total)
 
@@ -113,6 +114,7 @@ def run_tracking(video_path, job_dir, progress_cb=None):
         stats = {**counts, "person_crops": crop_writer.crop_count, "fallback_crops": fallback_count}
         state = initial_state(accumulator.result(), fps, stage_state.video_digest(video_path), stats)
         state["revision"] = next_revision
+        state["tracking_interval_seconds"] = tracking_interval_seconds
         stage_state.atomic_write(staged / "tracks.json", state)
         crop_writer.close(); face_writer.close(); timeline_writer.close()
         crop_writer = face_writer = timeline_writer = None

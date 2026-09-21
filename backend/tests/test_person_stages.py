@@ -73,7 +73,7 @@ def staged_job(tmp_path, monkeypatch):
     from backend.pipeline.persons import clustering
     original = clustering.run_clustering
     def cluster(**kwargs):
-        calls["clusters"].append({k: v.copy() for k, v in kwargs.items()})
+        calls["clusters"].append({k: v.copy() if hasattr(v, "copy") else v for k, v in kwargs.items()})
         return original(**kwargs)
     monkeypatch.setattr(clustering, "run_clustering", cluster)
     job = tmp_path / "job"
@@ -330,3 +330,29 @@ def test_cuts_on_skipped_and_selected_frames_reset_before_next_observation(stage
     assert {t['scene_id'] for t in result['tracks']} == {1, 3, 4}
     assert [(t['start_frame'], t['end_frame']) for t in result['tracks'] if t['track_id'] in (1, 11, 16)] == [(1, 1), (8, 8), (15, 57)]
     assert calls['face_frames'] == [1, 15, 29, 43, 57]
+
+
+def test_configurable_tracking_interval_and_identity_threshold(staged_job):
+    job, video, calls = staged_job
+    tracking = run_tracking(video, job, tracking_interval_seconds=0.1)
+    assert calls["detected_frames"] == list(range(1, 62, 3))
+    assert calls["face_frames"] == list(range(1, 62, 6))
+    assert calls["tracker_fps"] == 10
+    assert tracking["tracking_interval_seconds"] == 0.1
+    result = run_identities(video, job, similarity_threshold=0.4)
+    assert calls["clusters"][-1]["similarity_threshold"] == 0.4
+    assert result["similarity_threshold"] == 0.4
+    current = review_state.mutate(job, result["version"], "metadata", {"person_id": 1, "name": "Test"})
+    assert current["similarity_threshold"] == 0.4
+    assert stage_state.read_json(stage_state.root(job) / "persons.json")["similarity_threshold"] == 0.4
+
+
+def test_similarity_threshold_is_stricter_when_increased():
+    from backend.pipeline.persons.clustering import cluster_tracks
+    distance = np.array([[0, 0.7], [0.7, 0]])
+    tracks = np.array([1, 2])
+    assert len(set(cluster_tracks(distance, tracks, set(), similarity_threshold=0.2))) == 1
+    assert len(set(cluster_tracks(distance, tracks, set(), similarity_threshold=0.4))) == 2
+    assert len(set(cluster_tracks(distance, tracks, {frozenset({1, 2})}, similarity_threshold=0.2))) == 2
+    np.testing.assert_array_equal(cluster_tracks(distance, tracks, set()),
+                                  cluster_tracks(distance, tracks, set(), similarity_threshold=0.214))

@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from event_bus import BusEvent, event_bus
 from backend import session_manager as sm
 from backend.pipeline.persons import review_artifacts, stage_state, attribute_state
+from backend.pipeline.persons.config import TRACKING_INTERVAL_SECONDS, SIMILARITY_THRESHOLD, MAX_IMAGES_PER_PERSON, validate_parameter
 from db.store import DataStore
 
 # Pipeline modules are imported lazily inside route handlers to avoid
@@ -1327,7 +1328,11 @@ def run_images(job_id: str, body: dict = Body(default={})):
 
 # Attribute extraction is independent of the existing AD input and prompts.
 @app.post("/api/jobs/{job_id}/person-analysis/attributes")
-def run_attribute_stage(job_id: str):
+def run_attribute_stage(job_id: str, body: dict = Body(default={})):
+    try:
+        max_images = validate_parameter("max_images", body.get("max_images", MAX_IMAGES_PER_PERSON))
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
@@ -1342,7 +1347,7 @@ def run_attribute_stage(job_id: str):
         try:
             from backend.pipeline.persons.attribute_stage import run_attributes
             result = run_attributes(job['video_path'], job['job_dir'],
-                lambda msg, cur, total: _push_progress(job_id, 'attributes', msg, cur, total))
+                lambda msg, cur, total: _push_progress(job_id, 'attributes', msg, cur, total), max_images=max_images)
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, 'idle')
             _push(job_id, 'attributes_done', {'stage_version': result['version']})
@@ -1391,7 +1396,14 @@ def get_attribute_image(job_id: str, version: str, crop_id: int):
 
 # ── Person Analysis ─────────────────────────────────────────────────────────────
 
-def _start_person_stage(job_id: str, phase: str):
+def _start_person_stage(job_id: str, phase: str, body: dict | None = None):
+    body = body or {}
+    parameter = "tracking_interval_seconds" if phase == "tracking" else "similarity_threshold"
+    default = TRACKING_INTERVAL_SECONDS if phase == "tracking" else SIMILARITY_THRESHOLD
+    try:
+        value = validate_parameter(parameter, body.get(parameter, default))
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
@@ -1411,7 +1423,7 @@ def _start_person_stage(job_id: str, phase: str):
             from backend.pipeline.persons.identity_stage import run_identities
             def progress(message, current=None, total=None):
                 _push_progress(job_id, phase, message, current or 0, total or 100)
-            (run_tracking if phase == "tracking" else run_identities)(job["video_path"], job["job_dir"], progress)
+            (run_tracking if phase == "tracking" else run_identities)(job["video_path"], job["job_dir"], progress, **{parameter: value})
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, "idle")
             _push(job_id, f"{phase}_done", {"stage_version": stage_state.status(job["job_dir"])["tracking_revision" if phase == "tracking" else "identity_revision"]})
@@ -1425,13 +1437,13 @@ def _start_person_stage(job_id: str, phase: str):
 
 
 @app.post("/api/jobs/{job_id}/person-analysis/tracking")
-def run_tracking_stage(job_id: str):
-    return _start_person_stage(job_id, "tracking")
+def run_tracking_stage(job_id: str, body: dict = Body(default={})):
+    return _start_person_stage(job_id, "tracking", body)
 
 
 @app.post("/api/jobs/{job_id}/person-analysis/identities")
-def run_identity_stage(job_id: str):
-    return _start_person_stage(job_id, "identities")
+def run_identity_stage(job_id: str, body: dict = Body(default={})):
+    return _start_person_stage(job_id, "identities", body)
 
 
 @app.get("/api/jobs/{job_id}/person-analysis/tracking")

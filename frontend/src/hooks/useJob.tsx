@@ -8,6 +8,7 @@ import type {
   SlotsParams,
   TTSParams,
   ImagesParams,
+  PersonParams,
   SavedJobMeta,
   AuthState,
   JobData,
@@ -61,6 +62,12 @@ const DEFAULT_TTS_PARAMS = {
     duckingVolume: '0.4'
 };
 
+export const DEFAULT_PERSON_PARAMS: PersonParams = {
+    tracking_interval_seconds: 0.233,
+    similarity_threshold: 0.214,
+    max_images: 5,
+};
+
 const DEFAULT_IMAGES_PARAMS = {
     threshold: 24,
     blur_threshold: 80,
@@ -106,7 +113,7 @@ function writeSavedJobMeta(meta: Record<string, SavedJobMeta>): void {
     }
 }
 
-function readUserSettings(): { gptParams?: Partial<GPTParams>; vadParams?: Partial<VADParams>; transcribeParams?: Partial<TranscribeParams>; slotsParams?: Partial<SlotsParams>; ttsParams?: Partial<TTSParams>; imagesParams?: Partial<ImagesParams> } {
+function readUserSettings(): { gptParams?: Partial<GPTParams>; vadParams?: Partial<VADParams>; transcribeParams?: Partial<TranscribeParams>; slotsParams?: Partial<SlotsParams>; ttsParams?: Partial<TTSParams>; imagesParams?: Partial<ImagesParams>; personParams?: Partial<PersonParams> } {
     try {
         const raw = window.localStorage.getItem(USER_SETTINGS_STORAGE_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
@@ -190,6 +197,7 @@ export function JobProvider({ children }: JobProviderProps) {
     const [transcribeParams, setTranscribeParams] = useState<TranscribeParams>(() => ({ ...DEFAULT_TRANSCRIBE_PARAMS, ...(initialSettings.transcribeParams || {}) }));
     const [slotsParams, setSlotsParams] = useState<SlotsParams>(() => ({ ...DEFAULT_SLOTS_PARAMS, ...(initialSettings.slotsParams || {}) }));
     const [ttsParams, setTtsParams] = useState<TTSParams>(() => ({ ...DEFAULT_TTS_PARAMS, ...(initialSettings.ttsParams || {}) }));
+    const [personParams, setPersonParams] = useState<PersonParams>(() => ({ ...DEFAULT_PERSON_PARAMS, ...(initialSettings.personParams || {}) }));
     const [imagesParams, setImagesParams] = useState<ImagesParams>(() => ({ ...DEFAULT_IMAGES_PARAMS, ...(initialSettings.imagesParams || {}) }));
     const [authState, setAuthState] = useState<AuthState>({
         loading: true,
@@ -354,9 +362,10 @@ export function JobProvider({ children }: JobProviderProps) {
             transcribeParams,
             slotsParams,
             ttsParams,
-            imagesParams
+            imagesParams,
+            personParams
         });
-    }, [gptParams, vadParams, transcribeParams, slotsParams, ttsParams, imagesParams]);
+    }, [gptParams, vadParams, transcribeParams, slotsParams, ttsParams, imagesParams, personParams]);
 
     useEffect(() => {
         if (!authState.authenticated) {
@@ -406,6 +415,7 @@ export function JobProvider({ children }: JobProviderProps) {
                 if (remoteSettings.transcribeParams) setTranscribeParams(prev => ({ ...prev, ...remoteSettings.transcribeParams }));
                 if (remoteSettings.slotsParams) setSlotsParams(prev => ({ ...prev, ...remoteSettings.slotsParams }));
                 if (remoteSettings.ttsParams) setTtsParams(prev => ({ ...prev, ...remoteSettings.ttsParams }));
+                if (remoteSettings.personParams) setPersonParams(prev => ({ ...prev, ...remoteSettings.personParams }));
                 if (remoteSettings.imagesParams) setImagesParams(prev => ({ ...prev, ...remoteSettings.imagesParams }));
             } catch (err) {
                 console.warn("Could not load remote user config:", err);
@@ -439,7 +449,8 @@ export function JobProvider({ children }: JobProviderProps) {
                                 transcribeParams,
                                 slotsParams,
                                 ttsParams,
-                                imagesParams
+                                imagesParams,
+                                personParams
                             }
                         }
                     })
@@ -465,7 +476,8 @@ export function JobProvider({ children }: JobProviderProps) {
         transcribeParams,
         slotsParams,
         ttsParams,
-        imagesParams
+        imagesParams,
+        personParams
     ]);
 
     useEffect(() => {
@@ -788,28 +800,28 @@ export function JobProvider({ children }: JobProviderProps) {
         if (!jobId) return;
         try {
             markJobStarted('tracking', 'Tracking & Gesichter starten …');
-            const res = await fetch(`/api/jobs/${jobId}/person-analysis/tracking`, { method: 'POST' });
+            const res = await fetch(`/api/jobs/${jobId}/person-analysis/tracking`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tracking_interval_seconds: personParams.tracking_interval_seconds }) });
             if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Tracking konnte nicht gestartet werden.'); }
         } catch (err) { setIsRunAllActive(false); void fetchJobData(jobId, true); alert((err as Error).message); }
-    }, [jobId, markJobStarted, fetchJobData]);
+    }, [jobId, markJobStarted, fetchJobData, personParams]);
 
     const handleRunPersons = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         try {
             markJobStarted('identities', 'Personen & Cluster starten …');
-            const res = await fetch(`/api/jobs/${jobId}/person-analysis/identities`, { method: 'POST' });
+            const res = await fetch(`/api/jobs/${jobId}/person-analysis/identities`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ similarity_threshold: personParams.similarity_threshold }) });
             if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Personen & Cluster konnte nicht gestartet werden.'); }
         } catch (err) { setIsRunAllActive(false); void fetchJobData(jobId, true); alert((err as Error).message); }
-    }, [jobId, markJobStarted, fetchJobData]);
+    }, [jobId, markJobStarted, fetchJobData, personParams]);
 
     const handleRunAttributes = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         try {
             markJobStarted('attributes', 'Attribute starten …');
-            const res = await fetch(`/api/jobs/${jobId}/person-analysis/attributes`, { method: 'POST' });
+            const res = await fetch(`/api/jobs/${jobId}/person-analysis/attributes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ max_images: personParams.max_images }) });
             if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Attribute konnte nicht gestartet werden.'); }
         } catch (err) { setIsRunAllActive(false); void fetchJobData(jobId, true); alert((err as Error).message); }
-    }, [jobId, markJobStarted, fetchJobData]);
+    }, [jobId, markJobStarted, fetchJobData, personParams]);
 
     const handleRunGPT = useCallback(async (): Promise<void> => {
         if (!jobId) return;
@@ -1083,6 +1095,8 @@ export function JobProvider({ children }: JobProviderProps) {
         setTtsParams,
         imagesParams,
         setImagesParams,
+        personParams,
+        setPersonParams,
         handleRunVAD,
         handleRunTranscribe,
         handleRunSlots,
@@ -1105,7 +1119,7 @@ export function JobProvider({ children }: JobProviderProps) {
         fetchJobData, srtTexts, setSrtTexts, isSavingSrt, handleSaveSrtTexts, handleUpdateSlotTiming,
         isConfigModalOpen, setIsConfigModalOpen, gptParams, setGptParams, availableModels, setAvailableModels,
         vadParams, setVadParams, transcribeParams, setTranscribeParams, slotsParams, setSlotsParams,
-        ttsParams, setTtsParams, imagesParams, setImagesParams, handleRunVAD, handleRunTranscribe,
+        ttsParams, setTtsParams, imagesParams, setImagesParams, personParams, setPersonParams, handleRunVAD, handleRunTranscribe,
         handleRunSlots, handleRunImages, handleRunTracking, handleRunPersons, handleRunAttributes, handleRunGPT, handleUpdateGPTRecord, handleRunTTS, runAllSteps,
         isRunAllActive, stopRunAll, authState, login, logout, refreshAuthState
     ]);

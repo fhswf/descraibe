@@ -10,23 +10,26 @@ function timestamp(seconds: number | undefined): string {
 }
 
 function EditPersonDialog({ person, onSave, onClose }: {
-    person: PersonData; onSave: (_updates: { name: string; description: string }) => Promise<void>; onClose: () => void;
+    person: PersonData; onSave: (_updates: { name: string; function: string; description: string }) => Promise<void>; onClose: () => void;
 }) {
     const [name, setName] = useState(person.name || '');
+    const [personFunction, setPersonFunction] = useState(person.function || '');
     const [description, setDescription] = useState(person.description || '');
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
     const save = async () => {
         setSaving(true); setError('');
-        try { await onSave({ name, description }); onClose(); }
+        try { await onSave({ name, function: personFunction, description }); onClose(); }
         catch (err) { setError(err instanceof Error ? err.message : 'Speichern fehlgeschlagen.'); }
         finally { setSaving(false); }
     };
     return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-label="Person bearbeiten">
         <form onSubmit={e => { e.preventDefault(); void save(); }} className="bg-bg-surface border border-border-subtle rounded-xl shadow-2xl w-full max-w-md">
             <div className="p-4 border-b border-border-subtle flex justify-between"><h3 className="font-semibold">Person bearbeiten · ID {person.person_id}</h3><button type="button" disabled={saving} onClick={onClose} aria-label="Bearbeiten schließen">✕</button></div>
-            <div className="p-4 space-y-4"><label className="block text-sm">Name<input autoFocus value={name} onChange={e => setName(e.target.value)} maxLength={10000}
+            <div className="p-4 space-y-4"><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><label className="block text-sm">Name<input autoFocus value={name} onChange={e => setName(e.target.value)} maxLength={10000}
                 className="mt-1 w-full px-3 py-2 bg-bg-card border border-border-subtle rounded-lg" /></label>
+                <label className="block text-sm">Funktion<input value={personFunction} onChange={e => setPersonFunction(e.target.value)} maxLength={10000}
+                    className="mt-1 w-full px-3 py-2 bg-bg-card border border-border-subtle rounded-lg" /></label></div>
                 <label className="block text-sm">Beschreibung<textarea value={description} onChange={e => setDescription(e.target.value)} maxLength={10000} rows={4}
                     className="mt-1 w-full px-3 py-2 bg-bg-card border border-border-subtle rounded-lg" /></label>
                 {error && <p role="alert" className="text-red-400">{error}</p>}
@@ -113,7 +116,7 @@ function PersonsPanel({ jobId }: { jobId: string }) {
                     className="flex flex-col gap-2 p-3 bg-bg-card border border-border-subtle rounded-lg">
                     <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3">
                         <PersonExample compact key={`${snapshot.analysis_id}:${person.representative_crop_id}`} person={person} jobId={jobId} analysisId={snapshot.analysis_id} />
-                        <div><div className="font-medium text-sm">{person.name || `Person ${person.person_id}`}</div><div className="text-xs text-text-muted">Person {person.person_id}</div></div></div>
+                        <div><div className="font-medium text-sm">{person.name || `Person ${person.person_id}`}</div>{person.function && <div className="text-xs text-text-secondary">{person.function}</div>}<div className="text-xs text-text-muted">Person {person.person_id}</div></div></div>
                         <div className="flex items-center flex-wrap gap-1"><div className="text-xs text-text-muted mr-2 text-right"><div>{person.appearances_count} Auftritte</div>
                             <div>{timestamp(person.first_seen_ts)}–{timestamp(person.last_seen_ts)}</div></div>
                             <button disabled={disabled} onClick={() => setEditing({ person, version: snapshot.version })} title="Bearbeiten" aria-label={`Person ${person.person_id} bearbeiten`} className="p-1.5 rounded-lg hover:bg-bg-surface"><span className="material-icons-round text-sm">edit</span></button>

@@ -82,6 +82,9 @@ def status(job_dir):
     attributes_ready = bool(attributes and persons and attributes.get("tracking_revision") == tracking_revision
                             and attributes.get("assignment_revision") == persons.get("assignment_revision"))
     return {
+        "tracking_interval_seconds": tracks.get("tracking_interval_seconds") if tracks else None,
+        "similarity_threshold": persons.get("similarity_threshold") if persons else None,
+        "max_images": attributes.get("max_images") if attributes else None,
         "tracking_ready": tracks is not None, "identities_ready": identity_revision is not None,
         "attributes_ready": attributes_ready, "identities_stale": identities_stale,
         "tracking_revision": tracking_revision, "identity_revision": identity_revision, "legacy": False,

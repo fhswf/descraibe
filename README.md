@@ -335,7 +335,7 @@ The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICEN
 
 ### How It Works
 
-1. After scene images are extracted, RF-DETR and ByteTrack process video frames at a stride of `max(1, round(fps * 0.233))`.
+1. After scene images are extracted, RF-DETR and ByteTrack process video frames at a default stride of `max(1, round(fps * 0.233))`.
 2. Tracking reuses the full-video shot boundaries saved by the image extraction step and restarts tracks at each cut. Run image extraction first (also for older jobs without saved boundaries). Changed boundaries invalidate tracking, identities and attributes; unchanged boundaries preserve them.
 3. RetinaFace runs on every second sampled frame; face metadata and person crops are saved.
 4. Optional review supports face/track exclusions and logical track splits.
@@ -343,6 +343,8 @@ The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICEN
 6. Qwen extracts attributes from up to five selected existing crops per person; attributes can be edited manually.
 7. Current data is stored under `person_analysis/` in the job directory, without run history. Earlier changes invalidate dependent results.
 8. GPT prompts continue to receive the existing person context with Erstnennung/Folgebenennung flags; new Qwen attributes are not additionally included.
+
+The existing settings dialog now includes **Personen**: tracking interval (default `0.233` seconds), clustering similarity threshold (default `0.214`; higher is stricter), and maximum attribute images per person (`1–5`, default `5`). Changes apply on the next execution of the respective stage; the dialog also shows the settings used for the current results.
 
 ### AD Naming Conventions
 

@@ -2,8 +2,7 @@
 import cv2
 import numpy as np
 from .review_artifacts import ReviewError
-
-MAX_IMAGES_PER_PERSON = 5
+from .config import MAX_IMAGES_PER_PERSON, validate_parameter
 
 MIN_PERSON_HEIGHT_RATIO = 0.15
 
@@ -282,8 +281,9 @@ def select_images(
     )
 
 
-def select_existing(data, frame_width, frame_height):
+def select_existing(data, frame_width, frame_height, max_images=MAX_IMAGES_PER_PERSON):
     """Wählt die vorhandenen aktuellen Personencrops ohne neue Bilder zu erzeugen."""
+    validate_parameter("max_images", max_images)
     if frame_width <= 0 or frame_height <= 0:
         raise ReviewError("Frameabmessungen fehlen.", 409)
     people = {person_id: {} for person_id in data.persons}
@@ -313,4 +313,4 @@ def select_existing(data, frame_width, frame_height):
         candidates = groups[0] or groups[1]
         if candidates:
             people[person_id][track_id] = candidates
-    return {person_id: select_images(tracks, MAX_IMAGES_PER_PERSON) for person_id, tracks in sorted(people.items())}
+    return {person_id: select_images(tracks, max_images) for person_id, tracks in sorted(people.items())}

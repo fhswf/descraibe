@@ -56,6 +56,7 @@ class Artifacts:
             self._tracks_by_source.setdefault(track["source_track_id"], []).append(track)
         self.persons, self.assignments = {}, {track_id: None for track_id in self.tracks}
         self.identity_revision = self.assignment_revision = None
+        self.similarity_threshold = None
         if include_persons and (self.root / "persons.json").is_file():
             self._load_persons(stage_state.read_json(self.root / "persons.json"))
         self.analysis_id = f"tracking-{self.tracking_revision}"
@@ -68,6 +69,7 @@ class Artifacts:
     def _load_persons(self, payload: dict) -> None:
         if payload.get("tracking_revision") != self.tracking_revision or not isinstance(payload.get("persons"), list):
             raise ReviewError("Personenzuordnungen passen nicht zum aktuellen Tracking.", 409)
+        self.similarity_threshold = payload.get("similarity_threshold")
         self.identity_revision = int(payload.get("revision", 0))
         self.assignment_revision = int(payload.get("assignment_revision", self.identity_revision))
         used = set()

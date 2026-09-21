@@ -151,6 +151,7 @@ def _payload(data: artifacts.Artifacts, persons: dict[int, dict], revision: int,
     return {
         "schema_version": 1, "revision": revision, "assignment_revision": assignment_revision,
         "tracking_revision": data.tracking_revision,
+        "similarity_threshold": data.similarity_threshold,
         "persons": [{"person_id": person_id, **_metadata(person), "track_ids": sorted(set(person["track_ids"])),
                      "profile_crop_id": person.get("profile_crop_id") if profile_crop(data, person.get("profile_crop_id"), person["track_ids"]) else None}
                     for person_id, person in sorted(persons.items()) if person["track_ids"]],

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from .config import SIMILARITY_THRESHOLD, validate_parameter
+
 
 TRACK_REFERENCE_SIZE = 5
-SIMILARITY_THRESHOLD = 0.214
 LINKAGE_METHOD = "average"
 
 
@@ -395,6 +396,7 @@ def cluster_tracks(
     cannot_link_pairs: set[
         frozenset[int]
     ],
+    similarity_threshold: float = SIMILARITY_THRESHOLD,
 ) -> np.ndarray:
     """
     Hierarchisches agglomeratives Clustering
@@ -417,9 +419,10 @@ def cluster_tracks(
             dtype=np.int32,
         )
 
+    validate_parameter("similarity_threshold", similarity_threshold)
     distance_threshold = (
         1.0
-        - SIMILARITY_THRESHOLD
+        - similarity_threshold
     )
 
     track_id_to_index = {
@@ -620,6 +623,7 @@ def run_clustering(
     track_ids: np.ndarray,
     rejected_track_ids: np.ndarray,
     rejected_frame_numbers: np.ndarray,
+    similarity_threshold: float = SIMILARITY_THRESHOLD,
 ) -> dict[int, int]:
     """
     Führt das getestete FaceMoE-
@@ -635,6 +639,7 @@ def run_clustering(
     Es werden keine Embeddings gespeichert.
     """
 
+    validate_parameter("similarity_threshold", similarity_threshold)
     if not (
         len(embeddings)
         == len(frame_numbers)
@@ -716,6 +721,7 @@ def run_clustering(
             cannot_link_pairs=(
                 cannot_link_pairs
             ),
+            similarity_threshold=similarity_threshold,
         )
     )
 
@@ -788,7 +794,7 @@ def run_clustering(
 
     print(
         "Similarity-Threshold: "
-        f"{SIMILARITY_THRESHOLD:.3f}"
+        f"{similarity_threshold:.3f}"
     )
 
     print(

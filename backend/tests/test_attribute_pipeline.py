@@ -66,7 +66,7 @@ def test_current_values_batch_reload_and_replacement(attribute_job):
 def test_no_eligible_images_does_not_load_model(attribute_job, monkeypatch):
     job, video, calls = attribute_job
     original = attribute_selection.select_existing
-    monkeypatch.setattr(attribute_stage, 'select_existing', lambda data, w, h: original(data, w, h*10))
+    monkeypatch.setattr(attribute_stage, 'select_existing', lambda data, w, h, **kwargs: original(data, w, h*10, **kwargs))
     result = attribute_stage.run_attributes(video, job)
     assert calls == []
     assert result['persons'][0]['status'] == 'no_eligible_images'
@@ -124,6 +124,19 @@ def test_api_restart_current_values_and_versioned_images(attribute_job, monkeypa
     monkeypatch.setattr(app, '_DATASTORE', SimpleNamespace(enabled=False))
     client = TestClient(app.app)
     url = '/api/jobs/job/person-analysis/'
+    original_attributes = (stage_state.root(job) / 'attributes.json').read_bytes()
+    for function in ('Förster', ''):
+        persons = client.get('/api/jobs/job/persons').json()
+        updated = client.post('/api/jobs/job/persons/1', json={
+            'version': persons['version'], 'name': 'Anna', 'function': function})
+        assert updated.status_code == 200
+        sm._STORE.clear()
+        for endpoint in ('/api/jobs/job/persons', url + 'attributes'):
+            person = client.get(endpoint).json()['persons'][0]
+            assert person['name'] == 'Anna'
+            assert person['function'] == function
+        assert (stage_state.root(job) / 'attributes.json').read_bytes() == original_attributes
+        assert attribute_state.status(job)['ready']
     response = client.patch(url + 'attribute-review', json={'version': result['version'], 'changes': [
         {'person_id': 1, 'field': FIELDS[0], 'value': 'Restart'}]})
     assert response.status_code == 200
@@ -180,3 +193,20 @@ def test_model_load_failure_preserves_previous_run(attribute_job, monkeypatch):
     with pytest.raises(RuntimeError, match='load failed'):
         attribute_stage.run_attributes(video, job)
     assert attribute_state.snapshot(job) == previous
+
+
+def test_configurable_image_limit_preserves_selection_and_current_setting(attribute_job):
+    job, video, _ = attribute_job
+    current = review_state.current(job)
+    review_state.mutate(job, current['version'], 'assign', {'changes': [
+        {'track_id': 2, 'action': 'assign', 'person_id': 1}]})
+    result = attribute_stage.run_attributes(video, job, max_images=1)
+    assert len(result['persons'][0]['images']) == 1
+    assert stage_state.status(job)['max_images'] == 1
+    saved = attribute_state.save_review(job, {'version': result['version'], 'changes': [
+        {'person_id': 1, 'field': FIELDS[0], 'value': 'manual'}]})
+    assert stage_state.status(job)['max_images'] == 1
+    assert saved['persons'][0]['attributes'][FIELDS[0]] == 'manual'
+    result = attribute_stage.run_attributes(video, job)
+    assert len(result['persons'][0]['images']) == 2
+    assert stage_state.status(job)['max_images'] == 5

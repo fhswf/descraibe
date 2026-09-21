@@ -9,9 +9,11 @@ from . import attribute_state, review_artifacts, stage_state
 from .attribute_selection import select_existing
 from .qwen_attributes import FIELDS, GENERATION, MODEL_ID, PROMPT, QwenAttributes, parse_json
 from .review_artifacts import ReviewError
+from .config import MAX_IMAGES_PER_PERSON, validate_parameter
 
 
-def run_attributes(video_path, job_dir, progress_cb=None):
+def run_attributes(video_path, job_dir, progress_cb=None, *, max_images=MAX_IMAGES_PER_PERSON):
+    validate_parameter("max_images", max_images)
     from ..video_utils import get_video_stats
 
     data = attribute_state.source(job_dir)
@@ -21,7 +23,7 @@ def run_attributes(video_path, job_dir, progress_cb=None):
     dimensions = get_video_stats(str(video_path))
     if progress_cb:
         progress_cb("Attributbilder werden ausgewählt …", 0, 100)
-    selections = select_existing(data, dimensions["width"], dimensions["height"])
+    selections = select_existing(data, dimensions["width"], dimensions["height"], max_images=max_images)
     persons = {}
     context = QwenAttributes() if any(selections.values()) else nullcontext(None)
     with context as model:
@@ -51,6 +53,7 @@ def run_attributes(video_path, job_dir, progress_cb=None):
     stage_state.atomic_write(path, {
         "schema_version": 1, "revision": revision, "tracking_revision": data.tracking_revision, "assignment_revision": data.assignment_revision,
         "model_id": MODEL_ID, "prompt_sha256": hashlib.sha256(PROMPT.encode()).hexdigest(),
+        "max_images": max_images,
         "generation": GENERATION, "selection_policy": "existing-crops-v1-reference-50-30-20", "persons": persons,
     })
     return attribute_state.snapshot(job_dir)

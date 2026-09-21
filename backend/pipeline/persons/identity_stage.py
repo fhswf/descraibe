@@ -6,6 +6,7 @@ from pathlib import Path
 
 from . import stage_state, track_segments
 from .review_artifacts import ReviewError
+from .config import SIMILARITY_THRESHOLD, validate_parameter
 
 
 def _true(value) -> bool:
@@ -34,7 +35,8 @@ def _persons(mapping: dict[int, int], tracking_revision: int, revision: int, ass
     }
 
 
-def run_identities(video_path, job_dir, progress_cb=None):
+def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshold=SIMILARITY_THRESHOLD):
+    validate_parameter("similarity_threshold", similarity_threshold)
     import cv2
     import numpy as np
 
@@ -126,6 +128,7 @@ def run_identities(video_path, job_dir, progress_cb=None):
             track_ids=np.asarray([row[1] for row in records], np.int32),
             rejected_track_ids=np.asarray(rejected_tracks, np.int32),
             rejected_frame_numbers=np.asarray(rejected_frames, np.int32),
+            similarity_threshold=similarity_threshold,
         )
     finally:
         records.clear()
@@ -146,7 +149,10 @@ def run_identities(video_path, job_dir, progress_cb=None):
     refresh_identity_fallbacks(video_path, base, tracks, needs_fallback, float(metadata["fps"]), progress_cb)
     stage_state.write_csv(base / "face_observations.csv", face_rows, face_fields)
     revision, assignment_revision = _next_revisions(base)
-    stage_state.atomic_write(base / "persons.json", _persons(mapping, tracking_revision, revision, assignment_revision))
+    stage_state.atomic_write(base / "persons.json", {
+        **_persons(mapping, tracking_revision, revision, assignment_revision),
+        "similarity_threshold": similarity_threshold,
+    })
     (base / "attributes.json").unlink(missing_ok=True)
 
     from .review_state import current as current_review

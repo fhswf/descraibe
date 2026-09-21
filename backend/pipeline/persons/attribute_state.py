@@ -40,7 +40,7 @@ def snapshot(job_dir):
         if row is None:
             continue
         attributes = row.get("attributes", {})
-        persons.append({**row, "name": person["name"], "attributes": attributes})
+        persons.append({**row, "name": person["name"], "function": person.get("function", ""), "attributes": attributes})
     version = f"{data.tracking_revision}:{data.assignment_revision}:{payload['revision']}"
     return {**info, "persons": persons, "fields": FIELDS, "labels": LABELS, "version": version,
             "assignment_revision": data.assignment_revision}

@@ -39,7 +39,7 @@ export interface JobData {
   persons_analyzed?: boolean;
   persons_version?: string;
   attribute_stage?: { ready: boolean; stale: boolean; version: string | null; error?: string };
-  person_stages?: { tracking_ready: boolean; identities_ready: boolean; identities_stale: boolean; legacy: boolean; tracking_revision?: number | null; identity_revision?: number | null };
+  person_stages?: { tracking_interval_seconds?: number | null; similarity_threshold?: number | null; max_images?: number | null; tracking_ready: boolean; identities_ready: boolean; identities_stale: boolean; legacy: boolean; tracking_revision?: number | null; identity_revision?: number | null };
   unassigned_tracks_count?: number;
   gpt_records_broadcast?: unknown;
   gpt_records_directors?: unknown;
@@ -267,6 +267,12 @@ export interface CachedVideoResult {
 // Theme
 export type ThemeMode = 'system' | 'light' | 'dark';
 
+export interface PersonParams {
+  tracking_interval_seconds: number;
+  similarity_threshold: number;
+  max_images: number;
+}
+
 // Job Context Value
 export interface JobContextValue {
   jobId: string | null;
@@ -309,6 +315,8 @@ export interface JobContextValue {
   setSlotsParams: React.Dispatch<React.SetStateAction<SlotsParams>>;
   ttsParams: TTSParams;
   setTtsParams: React.Dispatch<React.SetStateAction<TTSParams>>;
+  personParams: PersonParams;
+  setPersonParams: React.Dispatch<React.SetStateAction<PersonParams>>;
   imagesParams: ImagesParams;
   setImagesParams: React.Dispatch<React.SetStateAction<ImagesParams>>;
   handleRunVAD: () => Promise<void>;
