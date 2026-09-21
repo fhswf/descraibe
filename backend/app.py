@@ -1497,62 +1497,6 @@ def tracking_frame_preview(job_id: str, source_track_id: int, frame_number: int,
     except review_artifacts.ReviewError as exc:
         return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
-@app.post("/api/jobs/{job_id}/persons")
-def run_persons(job_id: str, body: dict = Body(default={})):
-    from pipeline import person_analysis as persons_mod
-    job = sm.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-    if not job.get("video_path"):
-        return JSONResponse({"error": "Video not available."}, status_code=400)
-    try:
-        sm.begin_person_stage(job_id, "persons")
-    except review_artifacts.ReviewError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=exc.status)
-
-    def run():
-        sm.job_id_var.set(job_id)
-        try:
-            _mark_step_running(job_id, "persons", "Analyzing persons in video…")
-
-            def cb_persons(msg: str, current: int | None = None, total: int | None = None):
-                if total:
-                    percent = round((max(0, min(current or 0, total)) / total) * 100)
-                else:
-                    percent = 50
-                _push_progress(job_id, "persons", msg, percent, 100)
-
-            job_dir = sm.job_dir(job_id)
-            persons_df, faces = persons_mod.analyze_persons(
-                job["video_path"],
-                job_dir=str(job_dir),
-                progress_cb=cb_persons,
-            )
-
-            # Store faces list in job state
-            sm.update_job(job_id, persons_df=persons_df, faces=faces, persons_analysis_running=False)
-
-            # Persist persons to PostgreSQL if enabled
-            if _DATASTORE.enabled and persons_df is not None and not persons_df.empty:
-                persons_list = persons_df.to_dict(orient="records")
-                _DATASTORE.store_persons(job_id, persons_list)
-
-            sm.set_status(job_id, "idle")
-            _push_progress(job_id, "persons", "Person analysis complete.", 100, 100)
-            _push(job_id, "persons_done", {
-                "persons_count": len(persons_df),
-                "faces_count": len(faces),
-            })
-        except Exception as exc:
-            sm.update_job(job_id, persons_analysis_running=False)
-            sm.set_status(job_id, "error", str(exc))
-            _push(job_id, "error", {"step": "persons", "message": str(exc)})
-
-    _mark_step_running(job_id, "persons", "Person analysis queued…")
-    _start_worker(job_id, "persons", run)
-    return {"status": "started"}
-
-
 @app.get("/api/jobs/{job_id}/persons")
 def get_persons(job_id: str):
     """Return the persons DataFrame for a job."""
@@ -1572,7 +1516,7 @@ def get_persons(job_id: str):
         return {"persons": []}
 
     # Replace NaN with None and convert to dict
-    persons_clean = persons_df.replace({float('nan'): None})
+    persons_clean = persons_df.drop(columns=['description'], errors='ignore').replace({float('nan'): None})
     persons_list = persons_clean.to_dict(orient="records")
 
     # Parse face_ids from JSON string
@@ -1688,94 +1632,6 @@ def get_person_crop(job_id: str, crop_id: int, analysis_id: str | None = None):
         return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
 
-@app.get("/api/jobs/{job_id}/persons/merge-suggestions")
-def get_merge_suggestions(job_id: str, threshold: float = 0.6):
-    """Find persons with similar face embeddings who might actually be the same person."""
-    job = sm.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-
-    persons_df = job.get("persons_df")
-    if persons_df is None or persons_df.empty:
-        return {"suggestions": []}
-
-    faces = job.get("faces") or []
-    if not faces:
-        return {"suggestions": []}
-
-    # Map face ID to its embedding
-    face_embeddings = {}
-    for face in faces:
-        fid = face.get("face_id")
-        emb = face.get("embedding")
-        if fid is not None and emb:
-            face_embeddings[fid] = emb
-
-    # Calculate mean embedding for each person
-    person_mean_embeddings = {}
-    persons_clean = persons_df.replace({float('nan'): None})
-    persons_list = persons_clean.to_dict(orient="records")
-
-    for person in persons_list:
-        person_id = person.get("person_id")
-        face_ids_str = person.get("face_ids", "[]")
-        if isinstance(face_ids_str, str):
-            try:
-                face_ids = json.loads(face_ids_str) or []
-            except:
-                face_ids = []
-        else:
-            face_ids = face_ids_str or []
-
-        embs = [face_embeddings[fid] for fid in face_ids if fid in face_embeddings]
-        if embs:
-            mean_emb = [sum(x) / len(embs) for x in zip(*embs)]
-            person_mean_embeddings[person_id] = mean_emb
-
-    suggestions = []
-    # Compare all pairs of persons
-    for i in range(len(persons_list)):
-        for j in range(i + 1, len(persons_list)):
-            p_a = persons_list[i]
-            p_b = persons_list[j]
-            id_a = p_a.get("person_id")
-            id_b = p_b.get("person_id")
-
-            if id_a in person_mean_embeddings and id_b in person_mean_embeddings:
-                sim = _cosine_similarity(person_mean_embeddings[id_a], person_mean_embeddings[id_b])
-                if sim >= threshold:
-                    scene_images = job.get("scene_images") or []
-                    for p in [p_a, p_b]:
-                        if "representative_image" not in p or not p["representative_image"]:
-                            ts = p.get("first_seen_ts", 0)
-                            if ts and scene_images:
-                                def extract_ts(path):
-                                    m = re.search(r'(\d{2})-(\d{2})-(\d{2})-(\d{3})', path)
-                                    if m:
-                                        h, mn, s, ms = map(int, m.groups())
-                                        return h * 3600 + mn * 60 + s + ms / 1000
-                                    return 0
-                                closest = min(scene_images, key=lambda path: abs(extract_ts(path) - ts), default=None)
-                                p["representative_image"] = closest
-                        p_face_ids = p.get("face_ids")
-                        if isinstance(p_face_ids, str):
-                            try:
-                                p["face_ids"] = json.loads(p_face_ids) if p_face_ids else []
-                            except:
-                                p["face_ids"] = []
-                        elif p_face_ids is None:
-                            p["face_ids"] = []
-
-                    suggestions.append({
-                        "person_a": p_a,
-                        "person_b": p_b,
-                        "similarity": round(sim, 3)
-                    })
-
-    suggestions.sort(key=lambda x: x["similarity"], reverse=True)
-    return {"suggestions": suggestions}
-
-
 @app.post("/api/jobs/{job_id}/persons/merge")
 def merge_persons(job_id: str, body: dict = Body(...)):
     """Merge source_person_id into target_person_id."""
@@ -1843,7 +1699,6 @@ def merge_persons(job_id: str, body: dict = Body(...)):
 
     # Update target row
     df.loc[target_idx, "name"] = target_row.get("name") or source_row.get("name")
-    df.loc[target_idx, "description"] = target_row.get("description") or source_row.get("description")
     df.loc[target_idx, "first_seen_ts"] = first_seen
     df.loc[target_idx, "last_seen_ts"] = last_seen
     df.loc[target_idx, "appearances_count"] = count
@@ -1868,7 +1723,7 @@ def merge_persons(job_id: str, body: dict = Body(...)):
 
 @app.post("/api/jobs/{job_id}/persons/{person_id}")
 def update_person(job_id: str, person_id: int, body: dict = Body(...)):
-    """Update a person's name and description."""
+    """Update a person's name and function."""
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
@@ -1883,12 +1738,13 @@ def update_person(job_id: str, person_id: int, body: dict = Body(...)):
     if person_id not in persons_df["person_id"].values:
         return JSONResponse({"error": "Person not found"}, status_code=404)
 
-    name = body.get("name")
-    description = body.get("description")
-
-    df = persons_df.copy()
-    df.loc[df["person_id"] == person_id, "name"] = name
-    df.loc[df["person_id"] == person_id, "description"] = description
+    df = persons_df.drop(columns=["description"], errors="ignore").copy()
+    for field in ("name", "function"):
+        if field in body:
+            value = body[field]
+            if not isinstance(value, str) or len(value) > 10000:
+                return JSONResponse({"error": "Ungültige Personenmetadaten."}, status_code=400)
+            df.loc[df["person_id"] == person_id, field] = value.strip()
 
     # Save job
     sm.update_job(job_id, persons_df=df)
@@ -1898,7 +1754,8 @@ def update_person(job_id: str, person_id: int, body: dict = Body(...)):
         persons_list = df.replace({float('nan'): None}).to_dict(orient="records")
         _DATASTORE.store_persons(job_id, persons_list)
 
-    return {"status": "ok", "person_id": person_id, "name": name, "description": description}
+    person = df.loc[df["person_id"] == person_id].iloc[0]
+    return {"status": "ok", "person_id": person_id, "name": person.get("name"), "function": person.get("function")}
 
 
 @app.delete("/api/jobs/{job_id}/persons/{person_id}")
@@ -1931,48 +1788,6 @@ def delete_person(job_id: str, person_id: int, body: dict = Body(default={})):
         _DATASTORE.store_persons(job_id, persons_list)
 
     return {"status": "ok", "deleted_person_id": person_id}
-
-
-@app.get("/api/jobs/{job_id}/faces")
-def get_faces(job_id: str):
-    """Return all detected faces for a job."""
-    job = sm.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-
-    faces = job.get("faces")
-    if faces is None:
-        return {"faces": []}
-
-    return {"faces": faces}
-
-
-# ── Face Image Endpoint ─────────────────────────────────────────────────────────
-
-@app.get("/api/jobs/{job_id}/faces/{face_id}")
-def get_face_image(job_id: str, face_id: int):
-    """Return the face crop image for a face."""
-    job = sm.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-
-    faces = job.get("faces") or []
-    for face in faces:
-        if face.get("face_id") == face_id and face.get("crop_path"):
-            job_path = sm.job_dir(job_id)
-            crop_path = job_path / face["crop_path"]
-            if crop_path.exists():
-                return FileResponse(crop_path, media_type="image/jpeg")
-
-    # Fallback for old runs where faces list was not persisted in job.json:
-    # check if the face crop exists on disk at standard location faces/face_{face_id}.jpg
-    job_path = sm.job_dir(job_id)
-    if job_path:
-        crop_path = job_path / "faces" / f"face_{face_id}.jpg"
-        if crop_path.exists():
-            return FileResponse(crop_path, media_type="image/jpeg")
-
-    return JSONResponse({"error": "Face not found"}, status_code=404)
 
 
 # ── GPT Description ────────────────────────────────────────────────────────────
@@ -2528,7 +2343,6 @@ def build_hateoas_links(job: dict, base_url: str):
         links.append({"rel": "run-images", "href": f"{base}/api/jobs/{jid}/images", "method": "POST"})
 
     if job.get("scene_images") is not None and len(job.get("scene_images", [])) > 0:
-        links.append({"rel": "run-persons", "href": f"{base}/api/jobs/{jid}/persons", "method": "POST"})
         links.append({"rel": "run-gpt", "href": f"{base}/api/jobs/{jid}/gpt", "method": "POST"})
         
     return links
@@ -2616,234 +2430,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# ── Similar Faces Endpoint ─────────────────────────────────────────────────────
-
-_SIMILARITY_CACHE: dict[tuple[str, int, int], float] = {}
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Compute cosine similarity between two vectors."""
-    import math
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
-
-
-def _get_cached_face_similarity(job_id: str, id1: int, id2: int, emb1: list[float], emb2: list[float]) -> float:
-    """Compute cosine similarity between two face embeddings, caching results."""
-    key = (job_id, min(id1, id2), max(id1, id2))
-    if key in _SIMILARITY_CACHE:
-        return _SIMILARITY_CACHE[key]
-    sim = _cosine_similarity(emb1, emb2)
-    _SIMILARITY_CACHE[key] = sim
-    return sim
-
-
-@app.get("/api/jobs/{job_id}/persons/{person_id}/similar-faces")
-def get_similar_faces(job_id: str, person_id: int, threshold: float = 0.5):
-    """Find faces similar to a person's faces that might belong to the same person."""
-    job = sm.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-
-    faces = job.get("faces") or []
-    if not faces:
-        return {"similar_faces": [], "unassigned_faces": []}
-
-    # Get person's face IDs
-    persons_df = job.get("persons_df")
-    if persons_df is None or persons_df.empty:
-        return {"similar_faces": [], "unassigned_faces": []}
-
-    # Find the person
-    person_row = persons_df[persons_df["person_id"] == person_id]
-    if person_row.empty:
-        return JSONResponse({"error": "Person not found"}, status_code=404)
-
-    # Parse face_ids
-    face_ids_str = person_row.iloc[0].get("face_ids", "[]")
-    if isinstance(face_ids_str, str):
-        try:
-            person_face_ids = set(json.loads(face_ids_str) or [])
-        except:
-            person_face_ids = set()
-    else:
-        person_face_ids = set(face_ids_str or [])
-
-    # Get all face embeddings
-    faces_with_embeddings = [f for f in faces if f.get("embedding")]
-    if not faces_with_embeddings:
-        return {"similar_faces": [], "unassigned_faces": []}
-
-    # Collect person's embeddings
-    person_embeddings = []
-    for fid in person_face_ids:
-        for f in faces_with_embeddings:
-            if f.get("face_id") == fid:
-                person_embeddings.append(f)
-                break
-
-    if not person_embeddings:
-        return {"similar_faces": [], "unassigned_faces": []}
-
-    # Find faces similar to any of person's faces
-    similar = []
-    unassigned = []
-
-    for face in faces_with_embeddings:
-        if face.get("face_id") in person_face_ids:
-            continue  # Skip own faces
-
-        # Check similarity to any of person's faces
-        max_sim = 0.0
-        best_match = None
-        for person_face in person_embeddings:
-            sim = _get_cached_face_similarity(
-                job_id,
-                face.get("face_id"),
-                person_face.get("face_id"),
-                face.get("embedding", []),
-                person_face.get("embedding", [])
-            )
-            if sim > max_sim:
-                max_sim = sim
-                best_match = person_face.get("face_id")
-
-        if max_sim >= threshold:
-            similar.append({
-                "face": face,
-                "similarity": round(max_sim, 3),
-                "matches_face_id": best_match,
-            })
-        else:
-            # Check if unassigned (not in any person's face_ids)
-            is_assigned = False
-            for _, p_row in persons_df.iterrows():
-                p_face_ids_str = p_row.get("face_ids", "[]")
-                if isinstance(p_face_ids_str, str):
-                    try:
-                        p_face_ids = set(json.loads(p_face_ids_str) or [])
-                    except:
-                        p_face_ids = set()
-                else:
-                    p_face_ids = set(p_face_ids_str or [])
-                if face.get("face_id") in p_face_ids:
-                    is_assigned = True
-                    break
-            if not is_assigned:
-                unassigned.append(face)
-
-    # Sort similar faces by similarity (highest first)
-    similar.sort(key=lambda x: x["similarity"], reverse=True)
-
-    return {
-        "similar_faces": similar[:20],  # Top 20 similar
-        "unassigned_faces": unassigned[:20],  # Top 20 unassigned
-    }
-
-
-@app.post("/api/jobs/{job_id}/faces/merge")
-def merge_faces(job_id: str, body: dict = Body(...)):
-    """Move faces between persons or merge two persons."""
-    job = sm.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-    if review_artifacts.available(job["job_dir"]):
-        return JSONResponse({"error": "Dieser Job verwendet ganze Tracks. Bitte die Track-Verwaltung verwenden."}, status_code=409)
-
-    action = body.get("action")  # "merge_to_person" or "split_from_person"
-    face_ids = body.get("face_ids", [])  # List of face IDs to move
-    target_person_id = body.get("target_person_id")  # Target person ID (for merge)
-    source_person_id = body.get("source_person_id")  # Source person ID (for split)
-
-    if not face_ids:
-        return JSONResponse({"error": "No face_ids provided"}, status_code=400)
-
-    persons_df = job.get("persons_df")
-    if persons_df is None or persons_df.empty:
-        return JSONResponse({"error": "No persons found"}, status_code=400)
-
-    faces = job.get("faces") or []
-    face_id_set = set(face_ids)
-
-    # Validate faces exist
-    valid_face_ids = set()
-    for f in faces:
-        if f.get("face_id") in face_id_set:
-            valid_face_ids.add(f.get("face_id"))
-
-    if not valid_face_ids:
-        return JSONResponse({"error": "No valid faces found"}, status_code=400)
-
-    # Map face ID to its timestamp for updating person timeline range
-    face_timestamps = {}
-    for f in faces:
-        fid = f.get("face_id")
-        ts = f.get("timestamp_s")
-        if fid is not None and ts is not None:
-            face_timestamps[fid] = ts
-
-    # Update persons_df
-    df_list = persons_df.to_dict(orient="records")
-    modified = False
-
-    for person in df_list:
-        face_ids_str = person.get("face_ids", "[]")
-        if isinstance(face_ids_str, str):
-            try:
-                p_face_ids = json.loads(face_ids_str) if face_ids_str else []
-            except:
-                p_face_ids = []
-        else:
-            p_face_ids = face_ids_str or []
-
-        p_face_ids_set = set(p_face_ids)
-
-        if action == "merge_to_person":
-            # Add faces TO target person
-            if person["person_id"] == target_person_id:
-                new_face_ids = list(p_face_ids_set | valid_face_ids)
-                person["face_ids"] = json.dumps(new_face_ids)
-                person["appearances_count"] = len(new_face_ids)
-                
-                person_ts = [face_timestamps[fid] for fid in new_face_ids if fid in face_timestamps]
-                if person_ts:
-                    person["first_seen_ts"] = min(person_ts)
-                    person["last_seen_ts"] = max(person_ts)
-                modified = True
-            # Remove faces FROM any other person who might have them
-            elif p_face_ids_set & valid_face_ids:
-                new_face_ids = list(p_face_ids_set - valid_face_ids)
-                person["face_ids"] = json.dumps(new_face_ids)
-                person["appearances_count"] = len(new_face_ids)
-                
-                person_ts = [face_timestamps[fid] for fid in new_face_ids if fid in face_timestamps]
-                if person_ts:
-                    person["first_seen_ts"] = min(person_ts)
-                    person["last_seen_ts"] = max(person_ts)
-                modified = True
-
-        elif action == "split_from_person":
-            # Remove faces FROM source person
-            if person["person_id"] == source_person_id:
-                new_face_ids = list(p_face_ids_set - valid_face_ids)
-                person["face_ids"] = json.dumps(new_face_ids)
-                person["appearances_count"] = len(new_face_ids)
-                
-                person_ts = [face_timestamps[fid] for fid in new_face_ids if fid in face_timestamps]
-                if person_ts:
-                    person["first_seen_ts"] = min(person_ts)
-                    person["last_seen_ts"] = max(person_ts)
-                modified = True
-
-    if modified:
-        # Reconstruct DataFrame
-        new_df = pd.DataFrame(df_list)
-        new_df = new_df.sort_values("first_seen_ts").reset_index(drop=True)
-        sm.update_job(job_id, persons_df=new_df)
-
-    return {"status": "ok", "modified": modified, "face_ids": list(valid_face_ids)}

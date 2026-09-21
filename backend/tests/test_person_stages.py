@@ -164,7 +164,7 @@ def test_restart_reads_current_files_and_rejects_changed_video(staged_job):
     first = run_tracking(video, job)
     stage_state.save_faces(job, {"version": first["version"], "face_exclusions": [{"face_id": 1, "excluded": True}]})
     result = run_identities(video, job)
-    result = review_state.mutate(job, result["version"], "metadata", {"person_id": 1, "name": "Anna", "description": "geprüft"})
+    result = review_state.mutate(job, result["version"], "metadata", {"person_id": 1, "name": "Anna", "function": "Moderatorin"})
     script = "import json,sys,os; from pathlib import Path; os.environ['AD_JOBS_DIR']=str(Path(sys.argv[1]).parent); from backend.session_manager import get_job; print(json.dumps(get_job('job')['person_review']))"
     process = subprocess.run([sys.executable, "-c", script, str(job)], capture_output=True, text=True, check=True)
     reloaded = json.loads(process.stdout)
@@ -182,11 +182,13 @@ def test_restart_reads_current_files_and_rejects_changed_video(staged_job):
     assert temporal(review_state.current(job)) == temporal(result)
 
 
-def test_combined_compatibility_entry_runs_both_without_review(staged_job):
+def test_tracking_then_identity_runs_without_manual_review(staged_job):
     job, video, calls = staged_job
-    from backend.pipeline.person_analysis import analyze_persons
-    df, faces = analyze_persons(video, str(job))
-    assert len(df) == 1 and faces
+    run_tracking(video, job)
+    result = run_identities(video, job)
+    assert len(result["persons"]) == 1 and result["faces"]
+    assert all("description" not in person for person in result["persons"])
+    assert all("description" not in person for person in stage_state.read_json(stage_state.root(job) / "persons.json")["persons"])
     assert calls["detection"] == calls["tracking"] == 9
     assert len(calls["clusters"]) == 1
     assert stage_state.status(job)["identities_ready"] is True
@@ -257,7 +259,7 @@ def test_stage_lock_rejects_overlapping_runs_and_reviews(staged_job, monkeypatch
     client = TestClient(app.app)
     assert client.post("/api/jobs/job/person-analysis/identities").status_code == 200
     assert len(queued) == 1
-    for route in ["person-analysis/tracking", "person-analysis/identities", "persons"]:
+    for route in ["person-analysis/tracking", "person-analysis/identities"]:
         assert client.post("/api/jobs/job/" + route).status_code == 409
     assert client.patch("/api/jobs/job/person-analysis/face-review", json={"version": first["version"], "face_exclusions": [{"face_id": 1, "excluded": True}]}).status_code == 409
     assert not (stage_state.root(job) / "review_state.json").exists()

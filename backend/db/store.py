@@ -419,14 +419,13 @@ class DataStore:
                             """
                             INSERT INTO job_persons (
                                 job_id, person_id, name, attributes,
-                                first_seen_ts, last_seen_ts, description, appearances
-                            ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb)
+                                first_seen_ts, last_seen_ts, appearances
+                            ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s::jsonb)
                             ON CONFLICT (job_id, person_id) DO UPDATE SET
                                 name = EXCLUDED.name,
                                 attributes = EXCLUDED.attributes,
                                 first_seen_ts = EXCLUDED.first_seen_ts,
                                 last_seen_ts = EXCLUDED.last_seen_ts,
-                                description = EXCLUDED.description,
                                 appearances = EXCLUDED.appearances
                             """,
                             (
@@ -436,7 +435,6 @@ class DataStore:
                                 attributes_json,
                                 float(person.get("first_seen_ts", 0.0)),
                                 float(person.get("last_seen_ts", 0.0)),
-                                person.get("description"),
                                 appearances_json,
                             ),
                         )
@@ -461,7 +459,7 @@ class DataStore:
                     cur.execute(
                         """
                         SELECT person_id, name, attributes, first_seen_ts, last_seen_ts,
-                               description, appearances
+                               appearances
                         FROM job_persons
                         WHERE job_id = %s
                         ORDER BY person_id
@@ -478,8 +476,7 @@ class DataStore:
                     "attributes": row[2] if isinstance(row[2], dict) else {},
                     "first_seen_ts": float(row[3]) if row[3] is not None else 0.0,
                     "last_seen_ts": float(row[4]) if row[4] is not None else 0.0,
-                    "description": row[5],
-                    "appearances": row[6] if isinstance(row[6], list) else [],
+                    "appearances": row[5] if isinstance(row[5], list) else [],
                 }
                 for row in rows
             ]

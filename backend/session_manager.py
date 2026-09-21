@@ -144,7 +144,7 @@ def _apply_person_review(job: Dict[str, Any], force: bool = False) -> None:
         job["persons_df"] = None
         job["faces"] = []
         return
-    columns = ["person_id", "name", "description", "function", "track_ids", "segments", "appearances",
+    columns = ["person_id", "name", "function", "track_ids", "segments", "appearances",
                "appearances_count", "first_seen_ts", "last_seen_ts", "representative_crop",
                "representative_crop_id", "attributes", "face_ids", "valid_identity_crop_ids", "fallback_crop_ids"]
     rows = []
@@ -178,7 +178,7 @@ def begin_person_stage(job_id, phase):
         job = _STORE.get(job_id)
         if not job or job.get("status") == "running":
             raise review_artifacts.ReviewError("Ein Verarbeitungsschritt läuft bereits.", 409)
-        if phase in ("tracking", "persons"):
+        if phase == "tracking":
             stage_state.scene_cuts(job["job_dir"])
         job.update(status="running", persons_analysis_running=True, persons_phase=phase)
         _persist_job(job)
@@ -231,6 +231,8 @@ def _persist_job(job: Dict[str, Any]) -> None:
         parquet_path = job_dir / f"{field}.parquet"
         if val is not None and isinstance(val, pd.DataFrame):
             try:
+                if field == "persons_df":
+                    val = val.drop(columns=["description"], errors="ignore")
                 val.to_parquet(str(parquet_path), index=True, engine="pyarrow")
             except Exception as exc:
                 log.warning("Could not save %s.parquet: %s", field, exc)
@@ -274,6 +276,8 @@ def _load_job_from_disk(job_dir: Path) -> Optional[Dict[str, Any]]:
         if parquet_path.exists():
             try:
                 job[field] = pd.read_parquet(str(parquet_path), engine="pyarrow")
+                if field == "persons_df":
+                    job[field] = job[field].drop(columns=["description"], errors="ignore")
             except Exception as exc:
                 log.warning("Could not load %s: %s", parquet_path, exc)
 

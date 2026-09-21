@@ -79,7 +79,7 @@ class Artifacts:
                 raise ReviewError("Ungültige Personenzuordnungen.", 409)
             person = {
                 "person_id": person_id, "name": str(raw.get("name") or f"Person {person_id}"),
-                "description": str(raw.get("description") or ""), "function": str(raw.get("function") or ""),
+                "function": str(raw.get("function") or ""),
                 "track_ids": [int(value) for value in raw.get("track_ids", [])],
                 "profile_crop_id": raw.get("profile_crop_id"),
             }

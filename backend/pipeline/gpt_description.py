@@ -230,7 +230,7 @@ def _build_persons_context(
     """Build a context block with person information for a specific slot.
 
     Identifies persons appearing in the given time window and provides
-    their names and visual descriptions. Also indicates first mentions
+    their names. Also indicates first mentions
     (Erstnennung) vs subsequent mentions (Folgebenennung).
 
     Args:
@@ -257,7 +257,6 @@ def _build_persons_context(
 
     for _, person in persons_in_slot.iterrows():
         name = str(person.get("name") or f"Person {person.get('person_id', '?')}")
-        description = str(person.get("description") or "")
 
         # Determine if this is a first mention (Erstnennung)
         # ERSTNENNUNG = person's first appearance falls WITHIN this slot
@@ -269,8 +268,6 @@ def _build_persons_context(
 
         # Build person entry
         entry = f"- **{name}** [{mention_type}]"
-        if description and description != name:
-            entry += f": {description}"
 
         parts.append(entry)
 

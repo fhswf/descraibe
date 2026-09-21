@@ -955,10 +955,6 @@ export function JobProvider({ children }: JobProviderProps) {
                 setDoneSteps(prev => new Set(prev).add(4));
                 setCurrentStep(5);
                 setProgressData(prev => ({ ...prev, images: null }));
-            } else if (event === 'persons_done') {
-                setDoneSteps(prev => new Set(prev).add(5).add(6));
-                setCurrentStep(7);
-                setProgressData(prev => ({ ...prev, persons: null }));
             } else if (event === 'gpt_done') {
                 setDoneSteps(prev => new Set(prev).add(8));
                 setCurrentStep(9);
@@ -988,8 +984,6 @@ export function JobProvider({ children }: JobProviderProps) {
                     handleRunImages();
                 } else if (event === 'images_done') {
                     handleRunTracking();
-                } else if (event === 'persons_done') {
-                    handleRunGPT();
                 } else if (event === 'gpt_done' && !(data.error_count || 0)) {
                     handleRunTTS();
                 }

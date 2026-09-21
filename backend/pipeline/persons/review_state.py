@@ -12,7 +12,7 @@ FILENAME = "persons.json"
 
 
 def _metadata(person: dict) -> dict:
-    return {key: str(person.get(key) or "") for key in ("name", "description", "function")}
+    return {key: str(person.get(key) or "") for key in ("name", "function")}
 
 
 def _version(data: artifacts.Artifacts) -> str:
@@ -193,7 +193,7 @@ def mutate(job_dir: str | Path, expected_version: str | None, operation: str, bo
                 target = None
             elif action == "create_person":
                 target = next_person_id; next_person_id += 1
-                persons[target] = {"name": f"Person {target}", "description": "", "function": "", "track_ids": []}
+                persons[target] = {"name": f"Person {target}", "function": "", "track_ids": []}
             else:
                 raise ReviewError("Unbekannte Trackaktion.")
             if old == target:
@@ -208,7 +208,7 @@ def mutate(job_dir: str | Path, expected_version: str | None, operation: str, bo
         source, target = existing(body.get("source_person_id")), existing(body.get("target_person_id"))
         if source == target:
             raise ReviewError("Eine Person kann nicht mit sich selbst zusammengeführt werden.")
-        for field in ("name", "description", "function"):
+        for field in ("name", "function"):
             if not persons[target][field]:
                 persons[target][field] = persons[source][field]
         persons[target]["track_ids"] = sorted(set(persons[target]["track_ids"] + persons[source]["track_ids"]))
@@ -220,7 +220,7 @@ def mutate(job_dir: str | Path, expected_version: str | None, operation: str, bo
     elif operation == "metadata":
         person = persons[existing(body.get("person_id"))]
         changed = False
-        for field in ("name", "description", "function"):
+        for field in ("name", "function"):
             if field in body:
                 value = body[field]
                 if not isinstance(value, str) or len(value) > 10000:

@@ -71,13 +71,13 @@ const path = require('node:path');
     await page.getByRole('button', { name: 'Alle Änderungen speichern' }).click();
     await page.getByRole('button', { name: 'Person 3 bearbeiten', exact: true }).click();
     await page.getByLabel('Name', { exact: true }).fill('Carla');
-    await page.getByLabel('Beschreibung', { exact: true }).fill('Manuell geprüft');
+    await page.getByLabel('Funktion', { exact: true }).fill('Moderatorin');
     await page.getByRole('button', { name: 'Speichern', exact: true }).click();
-    await expect(page.getByRole('article', { name: 'Person 3', exact: true })).toContainText('Manuell geprüft');
+    await expect(page.getByRole('article', { name: 'Person 3', exact: true })).toContainText('Moderatorin');
     await page.reload();
     await page.locator('#step-nav > button').nth(6).click();
     await expect(page.getByRole('article', { name: 'Person 3', exact: true })).toContainText('Carla');
-    console.log('PASS: unassigned/new person/leave unassigned, empty crops, name and description survive reload');
+    console.log('PASS: unassigned/new person/leave unassigned, empty crops, name and function survive reload');
 
     // Server conflict keeps the user's staged draft visible.
     await page.getByRole('button', { name: 'Tracks von Person 3 verwalten', exact: true }).click();

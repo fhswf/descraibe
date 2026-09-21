@@ -97,7 +97,7 @@ export interface Person {
 }
 
 export interface PersonData {
-  person_id: number; name?: string; description?: string; function?: string;
+  person_id: number; name?: string; function?: string;
   track_ids: number[];
   appearances: Array<{ start_s: number; end_s: number }>;
   appearances_count: number; first_seen_ts: number; last_seen_ts: number;

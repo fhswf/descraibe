@@ -25,6 +25,7 @@ class TestPersonsContext:
                 "first_seen_ts": 5.0,
                 "last_seen_ts": 15.0,
                 "description": "Maria trägt ein blaues Oberteil.",
+                "attributes": {"hair_color": "braun"},
             },
             {
                 "person_id": 2,
@@ -40,6 +41,9 @@ class TestPersonsContext:
         assert "Maria" in result
         assert "Hans" not in result
         assert "ERSTNENNUNG" in result
+        assert "blaues Oberteil" not in result
+        assert "hair_color" not in result and "braun" not in result
+        assert result == "\n### Personen im Slot\n- **Maria** [ERSTNENNUNG]"
 
     def test_persons_first_vs_subsequent_mention(self):
         from backend.pipeline.gpt_description import _build_persons_context

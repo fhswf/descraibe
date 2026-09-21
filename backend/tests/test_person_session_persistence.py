@@ -13,7 +13,7 @@ def test_current_job_rebuilds_persons_faces_and_attributes_after_restart(job_dir
     monkeypatch.setattr(sm, '_STORE', {})
     root = job_dir / 'person_analysis'
     review_state.mutate(job_dir, review_state.current(job_dir)['version'], 'metadata',
-                        {'person_id': 1, 'name': 'Anna korrigiert', 'description': 'Beschreibung'})
+                        {'person_id': 1, 'name': 'Anna korrigiert', 'function': 'Moderatorin'})
     stage_state.atomic_write(root / 'attributes.json', {
         'revision': 1, 'tracking_revision': 1, 'assignment_revision': 1,
         'persons': {'1': {'attributes': {'hair_color': 'schwarz'}}}})

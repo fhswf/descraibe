@@ -10,16 +10,15 @@ function timestamp(seconds: number | undefined): string {
 }
 
 function EditPersonDialog({ person, onSave, onClose }: {
-    person: PersonData; onSave: (_updates: { name: string; function: string; description: string }) => Promise<void>; onClose: () => void;
+    person: PersonData; onSave: (_updates: { name: string; function: string }) => Promise<void>; onClose: () => void;
 }) {
     const [name, setName] = useState(person.name || '');
     const [personFunction, setPersonFunction] = useState(person.function || '');
-    const [description, setDescription] = useState(person.description || '');
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
     const save = async () => {
         setSaving(true); setError('');
-        try { await onSave({ name, function: personFunction, description }); onClose(); }
+        try { await onSave({ name, function: personFunction }); onClose(); }
         catch (err) { setError(err instanceof Error ? err.message : 'Speichern fehlgeschlagen.'); }
         finally { setSaving(false); }
     };
@@ -30,8 +29,6 @@ function EditPersonDialog({ person, onSave, onClose }: {
                 className="mt-1 w-full px-3 py-2 bg-bg-card border border-border-subtle rounded-lg" /></label>
                 <label className="block text-sm">Funktion<input value={personFunction} onChange={e => setPersonFunction(e.target.value)} maxLength={10000}
                     className="mt-1 w-full px-3 py-2 bg-bg-card border border-border-subtle rounded-lg" /></label></div>
-                <label className="block text-sm">Beschreibung<textarea value={description} onChange={e => setDescription(e.target.value)} maxLength={10000} rows={4}
-                    className="mt-1 w-full px-3 py-2 bg-bg-card border border-border-subtle rounded-lg" /></label>
                 {error && <p role="alert" className="text-red-400">{error}</p>}
             </div>
             <div className="p-4 border-t border-border-subtle flex justify-end gap-3"><button type="button" disabled={saving} onClick={onClose}>Abbrechen</button><button disabled={saving}
@@ -124,11 +121,11 @@ function PersonsPanel({ jobId }: { jobId: string }) {
                             <button disabled={disabled || persons.length < 2} onClick={() => setMerging({ source: person, snapshot })} title="Person zusammenführen" aria-label={`Person ${person.person_id} zusammenführen`} className="p-1.5 rounded-lg hover:bg-bg-surface"><span className="material-icons-round text-sm">call_merge</span></button>
                             <button disabled={disabled} onClick={() => void remove(person)} title="Person löschen" aria-label={`Person ${person.person_id} löschen`} className="p-1.5 rounded-lg hover:bg-bg-surface"><span className="material-icons-round text-sm">delete</span></button>
                         </div>
-                    </div>{person.description && <p className="text-xs text-text-secondary pt-1 border-t border-border-subtle">{person.description}</p>}
+                    </div>
                 </article>)}
                 {!filtered.length && <p className="p-4 text-sm text-text-muted">Keine zugeordneten Personen. Nicht zugeordnete Tracks sind separat erreichbar.</p>}
             </div>
-            {!snapshot.review_available && persons.length > 0 && <p className="text-sm text-text-muted">Dieser ältere Job enthält keine Track-Artefakte. Namen und Beschreibungen bleiben bearbeitbar.</p>}
+            {!snapshot.review_available && persons.length > 0 && <p className="text-sm text-text-muted">Dieser ältere Job enthält keine Track-Artefakte. Name und Funktion bleiben bearbeitbar.</p>}
         </>}
         {!running && <button disabled={!jobData?.video_path || busy || !jobData?.person_stages?.tracking_ready} onClick={handleRunPersons} className="w-fit flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg disabled:opacity-50"><span className="material-icons-round">search</span>Personen &amp; Cluster ausführen</button>}
         <div className="p-4 bg-bg-card border border-border-subtle rounded-lg text-xs text-text-secondary">Ein Auftritt entspricht dem Zeitintervall eines Tracks. Die automatische Zuordnung ist sofort nutzbar; manuelle Korrekturen sind optional.</div>

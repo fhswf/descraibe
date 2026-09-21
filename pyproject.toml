@@ -12,7 +12,6 @@ dependencies = [
     # Pipeline dependencies (same as notebook)
     "moviepy>=2.2",
     "torch==2.11.0",
-    "facenet-pytorch",
     "torchaudio==2.11.0",
     "pyarrow",
     "soundfile",
@@ -31,7 +30,6 @@ dependencies = [
     "psycopg[binary]>=3.2.0",
 
     # Person analysis dependencies
-    "pytesseract>=0.3.10",
     "rfdetr==1.9.2",
     "trackers==2.5.0.post0",
     "uniface[gpu]==3.7.1",

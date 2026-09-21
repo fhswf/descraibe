@@ -98,11 +98,11 @@ def test_batch_create_unassign_and_cropless_track(job_dir):
 
 
 def test_metadata_merge_delete_and_current_ids(job_dir):
-    result = review.mutate(job_dir, review.current(job_dir)["version"], "metadata", {"person_id": 2, "name": "Berta", "description": "Beschreibung"})
+    result = review.mutate(job_dir, review.current(job_dir)["version"], "metadata", {"person_id": 2, "name": "Berta", "function": "Moderatorin"})
     result = review.mutate(job_dir, result["version"], "merge", {"source_person_id": 1, "target_person_id": 2})
     assert result["persons"][0]["track_ids"] == [1, 2, 3]
     assert result["persons"][0]["name"] == "Berta"
-    assert result["persons"][0]["description"] == "Beschreibung"
+    assert result["persons"][0]["function"] == "Moderatorin"
     result = review.mutate(job_dir, result["version"], "delete", {"source_person_id": 2})
     assert result["persons"] == [] and len(result["unassigned_tracks"]) == 5
     result = change(job_dir, [{"track_id": 5, "action": "create_person"}])
@@ -193,7 +193,7 @@ def test_api_batch_and_restart_ignore_stale_parquet(api, job_dir):
     assert json.loads(process.stdout)["version"] == restored["version"]
 
 
-def test_api_crop_routes_and_legacy_routes(api):
+def test_api_crop_routes(api):
     client, _, _ = api
     assert client.get("/api/jobs/job/persons/1/tracks").json()["tracks"][0]["track_id"] == 1
     assert len(client.get("/api/jobs/job/tracks/unassigned").json()["tracks"]) == 2
@@ -202,9 +202,6 @@ def test_api_crop_routes_and_legacy_routes(api):
     assert client.get("/api/jobs/job/person-crops/1").content == b"test-jpeg"
     assert client.get("/api/jobs/job/person-crops/1?analysis_id=old").status_code == 409
     assert client.get("/api/jobs/job/person-crops/999").status_code == 404
-    assert client.get("/api/jobs/job/persons/merge-suggestions").status_code == 200
-    assert client.get("/api/jobs/job/persons/1/similar-faces").status_code == 200
-    assert client.post("/api/jobs/job/faces/merge", json={"face_ids": [1], "target_person_id": 2}).status_code == 409
 
 
 def test_api_database_failure_does_not_lose_correction(api):
@@ -258,3 +255,63 @@ def test_corrupt_review_clears_cached_projection(api, job_dir):
     assert client.get("/api/jobs/job/persons").status_code == 409
     assert "person_review" not in sm.get_job("job")
     assert sm.get_job("job")["persons_df"] is None
+
+
+def test_retired_description_is_ignored_and_not_saved_after_metadata_edit(api, job_dir):
+    client, sm, _ = api
+    path = job_dir / "person_analysis" / "persons.json"
+    saved = json.loads(path.read_text())
+    for person in saved["persons"]:
+        person["description"] = "Alte freie Beschreibung"
+    path.write_text(json.dumps(saved))
+    first = client.get("/api/jobs/job/persons").json()
+    assert all("description" not in person for person in first["persons"])
+    response = client.post("/api/jobs/job/persons/1", json={
+        "version": first["version"], "name": "Anna neu", "function": "Moderatorin",
+        "description": "Nicht mehr speichern",
+    })
+    assert response.status_code == 200, response.text
+    updated = json.loads(path.read_text())
+    assert updated["assignment_revision"] == saved["assignment_revision"]
+    assert all("description" not in person for person in updated["persons"])
+    sm._STORE.clear()
+    restored = client.get("/api/jobs/job/persons").json()
+    person = next(p for p in restored["persons"] if p["person_id"] == 1)
+    assert person["name"] == "Anna neu" and person["function"] == "Moderatorin"
+    assert "description" not in person
+    assert "description" not in sm.get_job("job")["persons_df"].columns
+
+
+def test_database_person_projection_ignores_retired_description(tmp_path):
+    import logging
+    from unittest.mock import MagicMock
+    from backend.db.store import DataStore
+    store = DataStore("", tmp_path, logging.getLogger("review-test"))
+    driver = MagicMock()
+    store._psycopg = driver
+    store.database_url = "postgresql://test"
+    cursor = driver.connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+    assert store.store_persons("job", [{"person_id": 1, "name": "Anna", "description": "Alte Beschreibung"}])
+    sql, params = next(call.args for call in cursor.execute.call_args_list if "INSERT INTO job_persons" in call.args[0])
+    assert "description" not in sql and "Alte Beschreibung" not in params
+    cursor.fetchall.return_value = [(1, "Anna", {}, 10, 22, [{"start_s": 10, "end_s": 22}])]
+    assert store.get_persons("job") == [{"person_id": 1, "name": "Anna", "attributes": {},
+        "first_seen_ts": 10, "last_seen_ts": 22, "appearances": [{"start_s": 10, "end_s": 22}]}]
+
+
+@pytest.mark.parametrize("method,path,status", [
+    ("POST", "/persons", 405),
+    ("GET", "/persons/merge-suggestions", 405),
+    ("GET", "/persons/1/similar-faces", 404),
+    ("GET", "/faces", 404),
+    ("GET", "/faces/1", 404),
+    ("POST", "/faces/merge", 404),
+])
+def test_retired_routes_cannot_read_or_mutate_persons(api, job_dir, method, path, status):
+    client, _, app = api
+    before = review.current(job_dir)
+    operations = app.app.openapi()["paths"].get(f"/api/jobs/{{job_id}}{path}", {})
+    assert method.lower() not in operations
+    response = client.request(method, f"/api/jobs/job{path}", json={"face_ids": [1], "target_person_id": 2})
+    assert response.status_code == status, response.text
+    assert review.current(job_dir) == before

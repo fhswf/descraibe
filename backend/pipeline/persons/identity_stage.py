@@ -29,7 +29,7 @@ def _persons(mapping: dict[int, int], tracking_revision: int, revision: int, ass
         "schema_version": 1, "revision": revision, "assignment_revision": assignment_revision,
         "tracking_revision": tracking_revision,
         "persons": [{
-            "person_id": person_id, "name": f"Person {person_id}", "description": "", "function": "",
+            "person_id": person_id, "name": f"Person {person_id}", "function": "",
             "track_ids": sorted(track_ids),
         } for person_id, track_ids in sorted(grouped.items())],
     }

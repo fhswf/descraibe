@@ -182,9 +182,6 @@ git push
 | `OIDC_ID_TOKEN_COOKIE_NAME` | `oidc_id_token` | No | Cookie name used to store the OIDC ID token (JWT). |
 | `AD_DATABASE_URL` | *(unset)* | No | PostgreSQL DSN for relational metadata storage (users, user config, presets). Example: `postgresql://user:pass@host:5432/descraibe`. If unset, the app uses file-based fallback for user config/presets. |
 | `AD_USER_CONFIG_DIR` | `${AD_JOBS_DIR}/users` | No | Directory for per-user config storage (`jobs`, `saved metadata`, and pipeline settings) for logged-in users. |
-| `YU_NET_MODEL_PATH` | `/app/models/face_detection_yunet_2023mar.onnx` | No | Legacy setting; not used by the current person pipeline. |
-| `TESSERACT_CMD` | *(system PATH)* | No | Legacy setting; not used by the current person pipeline. |
-| `TESSERACT_LANG` | `deu+eng` | No | Legacy setting; not used by the current person pipeline. |
 
 > [!IMPORTANT]
 > `OPENAI_API_KEY` is the only **required** environment variable. The container will start without it, but calls to `/api/run/gpt` will return a `400` error until it is provided.
@@ -342,7 +339,7 @@ The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICEN
 5. FaceMoE creates embeddings in RAM; clustering assigns tracks to persons. Assignments and names can be reviewed.
 6. Qwen extracts attributes from up to five selected existing crops per person; attributes can be edited manually.
 7. Current data is stored under `person_analysis/` in the job directory, without run history. Earlier changes invalidate dependent results.
-8. GPT prompts continue to receive the existing person context with Erstnennung/Folgebenennung flags; new Qwen attributes are not additionally included.
+8. GPT prompts receive person names with Erstnennung/Folgebenennung flags. The free-text person description has been removed; Qwen attributes are not additionally included.
 
 The existing settings dialog now includes **Personen**: tracking interval (default `0.233` seconds), clustering similarity threshold (default `0.214`; higher is stricter), and maximum attribute images per person (`1–5`, default `5`). Changes apply on the next execution of the respective stage; the dialog also shows the settings used for the current results.
 
@@ -361,16 +358,7 @@ The system enforces German AD naming rules:
 | POST | `/api/jobs/{job_id}/person-analysis/tracking` | Run tracking and face detection |
 | POST | `/api/jobs/{job_id}/person-analysis/identities` | Run identity clustering |
 | POST | `/api/jobs/{job_id}/person-analysis/attributes` | Run attribute extraction |
-| POST | `/api/jobs/{job_id}/persons` | Compatibility route for person analysis |
 | GET | `/api/jobs/{job_id}/persons` | Get detected persons list |
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `YU_NET_MODEL_PATH` | Legacy setting; not used by the current person pipeline. |
-| `TESSERACT_CMD` | Legacy setting; not used by the current person pipeline. |
-| `TESSERACT_LANG` | Legacy setting; not used by the current person pipeline. |
 
 ### PostgreSQL Schema
 
@@ -389,14 +377,6 @@ CREATE TABLE job_persons (
     appearances     JSONB,
     created_at      TIMESTAMPTZ DEFAULT now()
 );
-```
-
-### Tesseract Installation
-
-The Dockerfile still installs Tesseract OCR with German language support. The current person pipeline does not use it:
-
-```dockerfile
-RUN apt-get install -y tesseract-ocr tesseract-ocr-deu
 ```
 
 ---

@@ -151,7 +151,6 @@ def test_api_missing_cuts_explains_prerequisite(staged_job, monkeypatch):
     monkeypatch.setattr(sm, '_STORE', {})
     monkeypatch.setattr(app, '_DATASTORE', SimpleNamespace(enabled=False))
     client = TestClient(app.app)
-    for route in ('person-analysis/tracking', 'persons'):
-        response = client.post('/api/jobs/job/' + route)
-        assert response.status_code == 409
-        assert 'Bilder extrahieren' in response.json()['error']
+    response = client.post('/api/jobs/job/person-analysis/tracking')
+    assert response.status_code == 409
+    assert 'Bilder extrahieren' in response.json()['error']
