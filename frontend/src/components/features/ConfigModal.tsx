@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { useJob } from '../../hooks/useJob.jsx';
+import { DEFAULT_PERSON_PARAMS, useJob } from '../../hooks/useJob.jsx';
 
-type TabId = 'gpt' | 'vad' | 'transcribe' | 'slots' | 'images' | 'tts';
+type TabId = 'gpt' | 'vad' | 'transcribe' | 'slots' | 'images' | 'persons' | 'tts';
 
 export function ConfigModal() {
   const { 
@@ -11,7 +11,8 @@ export function ConfigModal() {
     transcribeParams, setTranscribeParams,
     slotsParams, setSlotsParams,
     ttsParams, setTtsParams,
-    imagesParams, setImagesParams
+    imagesParams, setImagesParams,
+    personParams, setPersonParams, jobData
   } = useJob();
 
   const [activeTab, setActiveTab] = useState<TabId>('gpt');
@@ -65,6 +66,7 @@ export function ConfigModal() {
             { id: 'transcribe' as TabId, label: '📝 Transkription' },
             { id: 'slots' as TabId, label: '🕐 AD-Slots' },
             { id: 'images' as TabId, label: '🖼️ Bilder' },
+            { id: 'persons' as TabId, label: '👤 Personen' },
             { id: 'gpt' as TabId, label: '💬 Prompts & GPT' },
             { id: 'tts' as TabId, label: '🎙️ Vertonung (TTS)' },
           ] as {id: TabId; label: string}[]).map(tab => (
@@ -263,6 +265,37 @@ export function ConfigModal() {
                         />
                     </div>
                 </div>
+            </div>
+          )}
+
+          {activeTab === 'persons' && (
+            <div className="bg-bg-card border border-border-subtle rounded-xl p-5 space-y-4">
+              <p className="text-sm text-text-secondary">Änderungen gelten beim nächsten Ausführen des jeweiligen Schritts. Vorhandene Ergebnisse bleiben bis dahin unverändert.</p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {([
+                  { key: 'tracking_interval_seconds', label: 'Trackingabstand (Sekunden)', min: 0.001, max: 10, step: 0.001,
+                    help: 'Kleiner: mehr Beobachtungen und längere Laufzeit.' },
+                  { key: 'similarity_threshold', label: 'Clustering-Schwellenwert', min: -1, max: 1, step: 0.001,
+                    help: 'Höher: strenger, weniger Zusammenführungen. Niedriger: großzügiger, mehr Zusammenführungen.' },
+                  { key: 'max_images', label: 'Maximale Bilderzahl pro Person', min: 1, max: 5, step: 1,
+                    help: 'Maximal 5 Bilder pro Person.' },
+                ] as const).map(({ key, label, min, max, step, help }) => {
+                  const applied = jobData?.person_stages?.[key];
+                  return <div key={key} className="flex flex-col gap-1.5">
+                    <label htmlFor={`person-setting-${key}`} className="text-sm font-medium">{label}</label>
+                    <input id={`person-setting-${key}`} type="number" min={min} max={max} step={step}
+                      value={Number.isFinite(personParams[key]) ? personParams[key] : ''}
+                      onChange={e => setPersonParams({ ...personParams, [key]: e.target.valueAsNumber })} className={inputCls} />
+                    <p className="text-xs text-text-muted">{help}</p>
+                    {(!Number.isFinite(personParams[key]) || personParams[key] < min || personParams[key] > max || (key === 'max_images' && !Number.isInteger(personParams[key]))) &&
+                      <p role="alert" className="text-xs text-red-400">Bitte einen gültigen Wert zwischen {min} und {max} eingeben.</p>}
+                    <p className="text-xs text-text-muted">Standard: {DEFAULT_PERSON_PARAMS[key]}</p>
+                    <p className="text-xs text-text-secondary">Aktuelles Ergebnis: {applied == null ? 'Wert nicht hinterlegt / noch nicht berechnet' : applied}</p>
+                    {applied != null && applied !== personParams[key] && <p className="text-xs text-amber-600">Einstellung geändert – betreffenden Schritt erneut ausführen.</p>}
+                  </div>;
+                })}
+              </div>
+              <button onClick={() => setPersonParams({ ...DEFAULT_PERSON_PARAMS })} className="text-sm underline">Personen-Standardwerte wiederherstellen</button>
             </div>
           )}
 

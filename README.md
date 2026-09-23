@@ -182,9 +182,6 @@ git push
 | `OIDC_ID_TOKEN_COOKIE_NAME` | `oidc_id_token` | No | Cookie name used to store the OIDC ID token (JWT). |
 | `AD_DATABASE_URL` | *(unset)* | No | PostgreSQL DSN for relational metadata storage (users, user config, presets). Example: `postgresql://user:pass@host:5432/descraibe`. If unset, the app uses file-based fallback for user config/presets. |
 | `AD_USER_CONFIG_DIR` | `${AD_JOBS_DIR}/users` | No | Directory for per-user config storage (`jobs`, `saved metadata`, and pipeline settings) for logged-in users. |
-| `YU_NET_MODEL_PATH` | `/app/models/face_detection_yunet_2023mar.onnx` | No | Path to the YuNet ONNX face detection model. If the file is missing, face detection is skipped gracefully. |
-| `TESSERACT_CMD` | *(system PATH)* | No | Path to the Tesseract binary. If unset, uses `tesseract` from system PATH. |
-| `TESSERACT_LANG` | `deu+eng` | No | Tesseract language packs for OCR (German + English). |
 
 > [!IMPORTANT]
 > `OPENAI_API_KEY` is the only **required** environment variable. The container will start without it, but calls to `/api/run/gpt` will return a `400` error until it is provided.
@@ -311,25 +308,40 @@ restart the pod. The `GPT_PROMPTS_DIR=/app/config/prompts` env var is already se
 
 ## Person Analysis
 
-The Person Analysis step (Step 06) automatically detects and tracks persons in video frames using computer vision:
+The Person Analysis stages (Tracking & Gesichter, Personen & Cluster, Attribute) automatically detects and tracks persons in video frames using computer vision:
 
 ### Features
 
-- **Face Detection**: Uses OpenCV DNN YuNet face detector (MIT-licensed) to identify faces
-- **Name Recognition**: OCR-based detection of Bauchbinden/name overlays using Tesseract
-- **Visual Attributes**: Extracts clothing colors (top/bottom) via k-means clustering
-- **Person Tracking**: Matches detected persons across frames using IoU + color similarity
-- **Prompt Integration**: Injects person context into GPT prompts with Erstnennung/Folgebenennung flags
+- **Face Detection**: Uses RetinaFace and face-quality checks to identify usable face observations
+- **Person Names**: Names can be edited manually; OCR is not part of the current person pipeline
+- **Visual Attributes**: Extracts twelve attributes with Qwen3.5-4B from selected person crops
+- **Person Tracking**: Uses RF-DETR and ByteTrack; FaceMoE and clustering assign tracks to persons
+- **Prompt Integration**: Existing person context with Erstnennung/Folgebenennung flags remains; new Qwen attributes are not additionally included
+
+### Models, Sources and Licenses
+
+| Model / implementation | Source | License |
+| --- | --- | --- |
+| RF-DETR Nano | [Roboflow RF-DETR](https://github.com/roboflow/rf-detr) | Apache-2.0 |
+| ByteTrack via Roboflow Trackers | [Roboflow Trackers](https://github.com/roboflow/trackers) | Apache-2.0 (implementation) |
+| RetinaFace MobileNetV2 via UniFace | [UniFace](https://github.com/yakhyo/uniface), [RetinaFace implementation](https://github.com/yakhyo/retinaface-pytorch) | MIT according to the [UniFace license overview](https://yakhyo.github.io/uniface/license-attribution/#model-credits) |
+| FaceMoE | [Source code](https://github.com/Kartik-3004/FaceMoE), [model weights](https://huggingface.co/kartiknarayan/FaceMoE) | MIT (code); Apache-2.0 for weights according to the model card |
+| Qwen3.5-4B | [Qwen model card](https://huggingface.co/Qwen/Qwen3.5-4B) | Apache-2.0 |
+
+The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICENSE) and [upstream commit](backend/vendor/facemoe/UPSTREAM_COMMIT.txt). Model weights are downloaded separately and are not included in this repository. This overview does not replace the upstream license texts or applicable redistribution requirements.
 
 ### How It Works
 
-1. After scene images are extracted, the Person Analysis step processes each image
-2. YuNet detects faces in each frame
-3. Tesseract OCR looks for name overlays (Bauchbinden) near frame edges
-4. Persons are tracked across frames using face bounding box IoU and color matching
-5. Visual attributes (clothing colors) are extracted from person regions
-6. Person data is stored in `persons_df` and optionally persisted to PostgreSQL
-7. GPT prompts receive person context with Erstnennung (first mention) vs Folgebenennung (subsequent) flags
+1. After scene images are extracted, RF-DETR and ByteTrack process video frames at a default stride of `max(1, round(fps * 0.233))`.
+2. Tracking reuses the full-video shot boundaries saved by the image extraction step and restarts tracks at each cut. Run image extraction first (also for older jobs without saved boundaries). Changed boundaries invalidate tracking, identities and attributes; unchanged boundaries preserve them.
+3. RetinaFace runs on every second sampled frame; face metadata and person crops are saved.
+4. Optional review supports face/track exclusions and logical track splits.
+5. FaceMoE creates embeddings in RAM; clustering assigns tracks to persons. Assignments and names can be reviewed.
+6. Qwen extracts attributes from up to five selected existing crops per person; attributes can be edited manually.
+7. Current data is stored under `person_analysis/` in the job directory, without run history. Earlier changes invalidate dependent results.
+8. GPT prompts receive person names with Erstnennung/Folgebenennung flags. The free-text person description has been removed; Qwen attributes are not additionally included.
+
+The existing settings dialog now includes **Personen**: tracking interval (default `0.233` seconds), clustering similarity threshold (default `0.214`; higher is stricter), and maximum attribute images per person (`1–5`, default `5`). Changes apply on the next execution of the respective stage; the dialog also shows the settings used for the current results.
 
 ### AD Naming Conventions
 
@@ -343,20 +355,14 @@ The system enforces German AD naming rules:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/jobs/{job_id}/persons` | Trigger person analysis |
+| POST | `/api/jobs/{job_id}/person-analysis/tracking` | Run tracking and face detection |
+| POST | `/api/jobs/{job_id}/person-analysis/identities` | Run identity clustering |
+| POST | `/api/jobs/{job_id}/person-analysis/attributes` | Run attribute extraction |
 | GET | `/api/jobs/{job_id}/persons` | Get detected persons list |
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `YU_NET_MODEL_PATH` | Path to YuNet ONNX model (auto-downloaded if missing) |
-| `TESSERACT_CMD` | Tesseract binary path |
-| `TESSERACT_LANG` | Tesseract languages (default: `deu+eng`) |
 
 ### PostgreSQL Schema
 
-Person data is stored in the `job_persons` table (migration `0013_job_persons.sql`):
+The existing `job_persons` table remains in the database schema (migration `0013_job_persons.sql`). The current person pipeline uses job files (`tracks.json`, `persons.json`, `attributes.json` and observation/crop files) as its source of truth.
 
 ```sql
 CREATE TABLE job_persons (
@@ -371,14 +377,6 @@ CREATE TABLE job_persons (
     appearances     JSONB,
     created_at      TIMESTAMPTZ DEFAULT now()
 );
-```
-
-### Tesseract Installation
-
-The backend requires Tesseract OCR with German language support. This is automatically installed in Docker/Kubernetes:
-
-```dockerfile
-RUN apt-get install -y tesseract-ocr tesseract-ocr-deu
 ```
 
 ---
@@ -420,6 +418,7 @@ Each uploaded video creates a **job directory** under `$AD_JOBS_DIR/<uuid>/` con
 ├── audio.wav                 # extracted 16 kHz mono audio
 ├── frames/                   # scene mid-frames (JPEGs)
 ├── gapfill/                  # extra frames extracted for AD slots
+├── person_analysis/          # current tracks, faces, crops, persons and attributes
 └── output/
     ├── ad_broadcast.srt
     ├── ad_broadcast.json
@@ -428,7 +427,7 @@ Each uploaded video creates a **job directory** under `$AD_JOBS_DIR/<uuid>/` con
 ```
 
 > [!WARNING]
-> Large job artifacts are stored in `$AD_JOBS_DIR`. Runtime job state still resides in-memory and active runs are interrupted on restart.  
+> Large job artifacts are stored in `$AD_JOBS_DIR`. Active runs are interrupted on restart; saved person data and corrections remain in the job directory.
 > If `AD_DATABASE_URL` is configured, user config and presets are persisted in PostgreSQL; otherwise they are file-based under `AD_USER_CONFIG_DIR`.
 
 ### Relational Metadata (PostgreSQL)
@@ -478,8 +477,8 @@ Backend unit and integration tests use [pytest](https://pytest.org/):
 ```bash
 cd webapp
 uv run pytest backend/tests/ -v           # Run all backend tests
-uv run pytest backend/tests/test_person_analysis.py -v  # Person analysis tests
-uv run pytest backend/tests/test_person_pipeline.py -v   # Pipeline integration tests
+uv run pytest backend/tests/test_person_stages.py -v  # Person analysis tests
+uv run pytest backend/tests/test_attribute_pipeline.py -v   # Pipeline integration tests
 ```
 
 End-to-end UI tests use [Playwright](https://playwright.dev/):
@@ -491,3 +490,13 @@ npm run test         # or: npx playwright test
 ```
 
 The backend must be running on `http://localhost:5000` before executing UI tests.
+
+Additional person-review tests (from the repository root):
+
+```bash
+cd frontend
+node --test --test-concurrency=1 tests/*.test.mjs
+```
+
+The person-stage browser test `backend/tests/person_stages_browser.cjs` uses
+`backend/tests/person_review_server.py`; see those files for setup.

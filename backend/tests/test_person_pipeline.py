@@ -1,6 +1,5 @@
 """Integration tests for the person analysis pipeline endpoints."""
 import pytest
-from unittest.mock import patch, MagicMock
 import pandas as pd
 
 
@@ -45,88 +44,29 @@ class TestPersonsEndpoint:
         response = client.get("/api/jobs/unknown-job-id/persons")
         assert response.status_code == 404
 
-    @patch("backend.pipeline.person_analysis.analyze_persons")
-    def test_post_persons_success(self, mock_analyze, app_with_job):
-        """POST /api/jobs/{job_id}/persons triggers analysis."""
-        from backend import session_manager as sm
-
-        client, job_id = app_with_job
-
-        # Mock the analysis function to return a sample DataFrame
-        mock_df = pd.DataFrame([
-            {
-                "person_id": 1,
-                "name": "Test Person",
-                "first_seen_ts": 10.0,
-                "last_seen_ts": 20.0,
-                "appearances_count": 2,
-                "attributes": '{"top_color": "blau"}',
-                "description": "Test Person: blaues Oberteil",
-            }
-        ])
-        mock_analyze.return_value = mock_df
-
-        response = client.post(f"/api/jobs/{job_id}/persons")
-        assert response.status_code == 200
-        data = response.json()
-        assert data == {"status": "started"}
-
-    def test_post_persons_no_images(self, app_with_job):
-        """POST /api/jobs/{job_id}/persons returns 400 when no images."""
-        from backend import session_manager as sm
-
-        client, job_id = app_with_job
-
-        # Remove scene images
-        sm.update_job(job_id, scene_images=None)
-
-        response = client.post(f"/api/jobs/{job_id}/persons")
-        assert response.status_code == 400
-        assert "Scene images not available" in response.json()["error"]
-
 
 class TestPersonHateoasLinks:
-    """Tests for HATEOAS links including persons step."""
+    """The API advertises the separate tracking stage, not the retired shortcut."""
 
-    def test_hateoas_link_appears_after_images(self):
-        """run-persons link appears when scene_images are available."""
+    @pytest.mark.parametrize("has_video", [False, True])
+    def test_hateoas_tracking_link(self, has_video):
         from backend.app import build_hateoas_links
         from backend import session_manager as sm
 
         job_id = sm.create_job()
-        job = sm.get_job(job_id)
-        job["scene_images"] = ["/tmp/test.jpg"]
-        sm.update_job(job_id, scene_images=job["scene_images"])
-
-        links = build_hateoas_links(job, "http://localhost:5000")
-
-        run_persons_link = next(
-            (l for l in links if l["rel"] == "run-persons"), None
-        )
-        assert run_persons_link is not None
-        assert run_persons_link["method"] == "POST"
-        assert f"/api/jobs/{job_id}/persons" in run_persons_link["href"]
-
-        sm.cleanup_job(job_id)
-
-    def test_hateoas_link_missing_without_images(self):
-        """run-persons link does not appear when scene_images are missing."""
-        from backend.app import build_hateoas_links
-        from backend import session_manager as sm
-
-        job_id = sm.create_job()
-        job = sm.get_job(job_id)
-        job["scene_images"] = None
-        sm.update_job(job_id, scene_images=None)
-
-        links = build_hateoas_links(job, "http://localhost:5000")
-
-        run_persons_link = next(
-            (l for l in links if l["rel"] == "run-persons"), None
-        )
-        assert run_persons_link is None
-
-        sm.cleanup_job(job_id)
+        try:
+            sm.update_job(job_id, video_path="/tmp/video.mp4" if has_video else None,
+                          scene_images=["/tmp/test.jpg"])
+            links = build_hateoas_links(sm.get_job(job_id), "http://localhost:5000")
+            assert not any(link["rel"] == "run-persons" for link in links)
+            tracking = [link for link in links if link["rel"] == "run-tracking"]
+            if has_video:
+                assert tracking == [{"rel": "run-tracking", "method": "POST",
+                    "href": f"http://localhost:5000/api/jobs/{job_id}/person-analysis/tracking"}]
+            else:
+                assert tracking == []
+        finally:
+            sm.cleanup_job(job_id)
 
 
 class TestPersonJobResponse:
@@ -197,7 +137,7 @@ class TestPersonModifications:
     """Tests for the new person editing, merging, and suggestions endpoints."""
 
     def test_update_person_success(self):
-        """POST /api/jobs/{job_id}/persons/{person_id} updates name/description."""
+        """POST /api/jobs/{job_id}/persons/{person_id} updates name/function and ignores retired descriptions."""
         from fastapi.testclient import TestClient
         from backend.app import app
         from backend import session_manager as sm
@@ -211,12 +151,13 @@ class TestPersonModifications:
         client = TestClient(app)
         response = client.post(
             f"/api/jobs/{job_id}/persons/1",
-            json={"name": "New Name", "description": "New Desc"}
+            json={"name": "New Name", "function": "Moderatorin", "description": "Ignored"}
         )
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "New Name"
-        assert data["description"] == "New Desc"
+        assert data["function"] == "Moderatorin"
+        assert "description" not in data
 
         # Force clear test memory cache so it reads from disk
         sm._STORE.pop(job_id, None)
@@ -225,7 +166,8 @@ class TestPersonModifications:
         updated_job = sm.get_job(job_id)
         df = updated_job["persons_df"]
         assert df.iloc[0]["name"] == "New Name"
-        assert df.iloc[0]["description"] == "New Desc"
+        assert df.iloc[0]["function"] == "Moderatorin"
+        assert "description" not in df.columns
 
         sm.cleanup_job(job_id)
 
@@ -292,71 +234,6 @@ class TestPersonModifications:
         attrs = json.loads(merged["attributes"])
         assert attrs.get("top_color") == "rot"
         assert attrs.get("bottom_color") == "blau"
-
-        sm.cleanup_job(job_id)
-
-    def test_get_merge_suggestions(self):
-        """GET /api/jobs/{job_id}/persons/merge-suggestions returns suggestions based on face embedding similarity."""
-        from fastapi.testclient import TestClient
-        from backend.app import app
-        from backend import session_manager as sm
-
-        job_id = sm.create_job()
-        
-        # Setup persons with associated face IDs
-        persons_df = pd.DataFrame([
-            {"person_id": 1, "name": "Person 1", "face_ids": "[10]"},
-            {"person_id": 2, "name": "Person 2", "face_ids": "[20]"}
-        ])
-        
-        # Setup faces list with embeddings
-        faces = [
-            {"face_id": 10, "embedding": [1.0, 0.0, 0.0]},
-            {"face_id": 20, "embedding": [0.99, 0.1, 0.0]}
-        ]
-        
-        sm.update_job(job_id, persons_df=persons_df, faces=faces)
-
-        # Force clear test memory cache so it reads from disk
-        sm._STORE.pop(job_id, None)
-
-        client = TestClient(app)
-        response = client.get(f"/api/jobs/{job_id}/persons/merge-suggestions?threshold=0.9")
-        assert response.status_code == 200
-        data = response.json()
-        assert "suggestions" in data
-        assert len(data["suggestions"]) == 1
-        suggestion = data["suggestions"][0]
-        assert suggestion["person_a"]["person_id"] == 1
-        assert suggestion["person_b"]["person_id"] == 2
-        assert suggestion["similarity"] > 0.9
-
-        sm.cleanup_job(job_id)
-
-    def test_get_face_image_fallback(self):
-        """GET /api/jobs/{job_id}/faces/{face_id} falls back to checking disk directly if face is not in metadata."""
-        from pathlib import Path
-        from fastapi.testclient import TestClient
-        from backend.app import app
-        from backend import session_manager as sm
-
-        job_id = sm.create_job()
-        job_dir = Path(sm.job_dir(job_id))
-        
-        # Create standard location folder and dummy face image file
-        faces_dir = job_dir / "faces"
-        faces_dir.mkdir(parents=True, exist_ok=True)
-        face_file = faces_dir / "face_223.jpg"
-        face_file.write_bytes(b"dummy image data")
-
-        # Make sure faces list is empty/missing
-        sm.update_job(job_id, faces=None)
-        sm._STORE.pop(job_id, None)
-
-        client = TestClient(app)
-        response = client.get(f"/api/jobs/{job_id}/faces/223")
-        assert response.status_code == 200
-        assert response.content == b"dummy image data"
 
         sm.cleanup_job(job_id)
 

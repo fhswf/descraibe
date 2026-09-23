@@ -4,7 +4,7 @@ import { useJob } from '../../hooks/useJob';
 export function StepTTS(): React.ReactElement | null {
     const { currentStep, ttsParams } = useJob();
 
-    if (currentStep !== 6) return null;
+    if (currentStep !== 9) return null;
 
     return (
         <div className="flex flex-col gap-5">

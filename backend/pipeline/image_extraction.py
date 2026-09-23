@@ -188,6 +188,9 @@ class MidframeExtractor:
         ))
         sm.detect_scenes(video)
         scenes = sm.get_scene_list()
+        # Full-video cuts, before process_video optionally clips the image window.
+        # Tracking counts frames from 1; PySceneDetect counts from 0.
+        self.scene_cut_frames = [start.frame_num + 1 for start, _ in scenes[1:]]
         logger.info(f"Scene detection: found {len(scenes)} scenes.")
         if total_frames > 0:
             _emit_progress(

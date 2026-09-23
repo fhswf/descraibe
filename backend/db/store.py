@@ -378,18 +378,20 @@ class DataStore:
 
     # ── Person storage ─────────────────────────────────────────────────────────
 
-    def store_persons(self, job_id: str, persons_list: list[dict[str, Any]]) -> None:
+    def store_persons(self, job_id: str, persons_list: list[dict[str, Any]]) -> bool:
         """Store or update person records for a job."""
         if not job_id:
-            return
+            return False
 
         if not self.enabled:
             self.logger.debug("DB not enabled, persons stored in Parquet only")
-            return
+            return True
 
         try:
             with self._psycopg.connect(self.database_url) as conn:
                 with conn.cursor() as cur:
+                    # File-backed jobs do not otherwise create their optional DB parent.
+                    cur.execute("INSERT INTO jobs(id, status) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING", (job_id, "idle"))
                     if persons_list:
                         keep_ids = [int(p.get("person_id", 0)) for p in persons_list]
                         placeholders = ",".join(["%s"] * len(keep_ids))
@@ -404,19 +406,26 @@ class DataStore:
                         )
 
                     for person in persons_list:
-                        attributes_json = json.dumps(person.get("attributes") or {}, ensure_ascii=False)
-                        appearances_json = json.dumps(person.get("appearances") or [], ensure_ascii=False)
+                        def normalized(value, expected_type):
+                            if isinstance(value, str):
+                                try:
+                                    value = json.loads(value)
+                                except ValueError:
+                                    value = None
+                            return value if isinstance(value, expected_type) else expected_type()
+                        attributes_json = json.dumps(normalized(person.get("attributes"), dict), ensure_ascii=False)
+                        appearances_json = json.dumps(normalized(person.get("appearances"), list), ensure_ascii=False)
                         cur.execute(
                             """
                             INSERT INTO job_persons (
                                 job_id, person_id, name, attributes,
-                                first_seen_ts, last_seen_ts, description, appearances
-                            ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb)
+                                first_seen_ts, last_seen_ts, appearances
+                            ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s::jsonb)
                             ON CONFLICT (job_id, person_id) DO UPDATE SET
                                 name = EXCLUDED.name,
                                 attributes = EXCLUDED.attributes,
+                                first_seen_ts = EXCLUDED.first_seen_ts,
                                 last_seen_ts = EXCLUDED.last_seen_ts,
-                                description = EXCLUDED.description,
                                 appearances = EXCLUDED.appearances
                             """,
                             (
@@ -426,14 +435,15 @@ class DataStore:
                                 attributes_json,
                                 float(person.get("first_seen_ts", 0.0)),
                                 float(person.get("last_seen_ts", 0.0)),
-                                person.get("description"),
                                 appearances_json,
                             ),
                         )
                     conn.commit()
             self.logger.info("Stored %d persons for job %s", len(persons_list), job_id)
+            return True
         except Exception as exc:
             self.logger.warning("DB store_persons failed: %s", exc)
+            return False
 
     def get_persons(self, job_id: str) -> list[dict[str, Any]]:
         """Retrieve person records for a job."""
@@ -449,7 +459,7 @@ class DataStore:
                     cur.execute(
                         """
                         SELECT person_id, name, attributes, first_seen_ts, last_seen_ts,
-                               description, appearances
+                               appearances
                         FROM job_persons
                         WHERE job_id = %s
                         ORDER BY person_id
@@ -466,8 +476,7 @@ class DataStore:
                     "attributes": row[2] if isinstance(row[2], dict) else {},
                     "first_seen_ts": float(row[3]) if row[3] is not None else 0.0,
                     "last_seen_ts": float(row[4]) if row[4] is not None else 0.0,
-                    "description": row[5],
-                    "appearances": row[6] if isinstance(row[6], list) else [],
+                    "appearances": row[5] if isinstance(row[5], list) else [],
                 }
                 for row in rows
             ]

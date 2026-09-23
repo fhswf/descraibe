@@ -8,11 +8,11 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.30.0",
     "python-multipart>=0.0.31",
+
     # Pipeline dependencies (same as notebook)
     "moviepy>=2.2",
-    "torch==2.12.1",
-    "facenet-pytorch",
-    "torchaudio",
+    "torch==2.11.0",
+    "torchaudio==2.11.0",
     "pyarrow",
     "soundfile",
     "faster-whisper>=1.0",
@@ -28,8 +28,18 @@ dependencies = [
     "authlib>=1.4.0",
     "itsdangerous>=2.2.0",
     "psycopg[binary]>=3.2.0",
+
     # Person analysis dependencies
-    "pytesseract>=0.3.10",
+    "rfdetr==1.9.2",
+    "trackers==2.5.0.post0",
+    "uniface[gpu]==3.7.1",
+    "onnxruntime-gpu==1.26.0",
+    "torchvision==0.26.0",
+    "timm==0.4.12",
+
+    # Attribute analysis
+    "transformers==5.17.0",
+    "accelerate==1.12.0",
 ]
 
 [project.scripts]
@@ -44,9 +54,24 @@ dev = [
     "pytest>=9.0.3",
 ]
 
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv]
+exclude-dependencies = [
+    "onnxruntime",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+
 [tool.hatch.build.targets.wheel]
 packages = ["backend"]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]   # makes `import backend.session_manager` work
-testpaths  = ["tests"]
+pythonpath = ["."]
+testpaths = ["tests"]

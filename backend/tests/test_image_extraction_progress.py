@@ -5,6 +5,10 @@ class _FakeTimecode:
     def __init__(self, seconds):
         self._seconds = seconds
 
+    @property
+    def frame_num(self):
+        return round(self._seconds * 30)
+
     def get_seconds(self):
         return self._seconds
 

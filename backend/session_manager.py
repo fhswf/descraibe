@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from backend.pipeline.persons import review_artifacts, review_state, stage_state
+
 log = logging.getLogger(__name__)
 
 JOB_LOG_FILENAME = "job.log"
@@ -85,7 +87,7 @@ _LOCK = threading.Lock()
 
 # ── Field classification ───────────────────────────────────────────────────────
 
-# DataFrame fields – stored as CSV files in the job directory.
+# DataFrame fields – stored as Parquet, except derived persons for current jobs.
 _DF_FIELDS: List[str] = [
     "pauses_df",
     "speech_df",
@@ -113,31 +115,132 @@ _JSON_FIELDS: List[str] = [
     "status",
     "progress",
     "scene_images",
+    "scene_cut_frames",
     "gpt_records_broadcast",
     "gpt_records_directors",
     "final_mp4_path",
     "faces",
+    "persons_analysis_running",
+    "persons_phase",
 ]
 
 # ── Persistence helpers ────────────────────────────────────────────────────────
+
+def _apply_person_review(job: Dict[str, Any], force: bool = False) -> None:
+    """Refresh derived caches from the current person_analysis files."""
+    if job.get("persons_analysis_running") or not review_artifacts.available(job["job_dir"]):
+        return
+    root = Path(job["job_dir"]) / "person_analysis"
+    paths = [root / name for name in review_artifacts.FILES]
+    signature = tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.is_file() else None for p in paths)
+    if not force and job.get("_person_review_signature") == signature:
+        return
+    try:
+        result = review_state.current(job["job_dir"])
+    except review_artifacts.ReviewError as exc:
+        job["person_review_error"] = str(exc)
+        job.pop("person_review", None)
+        job.pop("_person_review_signature", None)
+        job["persons_df"] = None
+        job["faces"] = []
+        return
+    columns = ["person_id", "name", "function", "track_ids", "segments", "appearances",
+               "appearances_count", "first_seen_ts", "last_seen_ts", "representative_crop",
+               "representative_crop_id", "attributes", "face_ids", "valid_identity_crop_ids", "fallback_crop_ids"]
+    rows = []
+    for person in result["persons"]:
+        row = dict(person)
+        for field in ("track_ids", "segments", "appearances", "attributes", "face_ids", "valid_identity_crop_ids", "fallback_crop_ids"):
+            row[field] = json.dumps(row[field], ensure_ascii=False)
+        rows.append(row)
+    job["persons_df"] = pd.DataFrame(rows, columns=columns)
+    job["faces"] = result["faces"]
+    job["person_review"] = {k: v for k, v in result.items() if k != "faces"}
+    job.pop("person_review_error", None)
+    job["_person_review_signature"] = signature
+
+
+def mutate_face_review(job_id, body):
+    with _LOCK:
+        job = _STORE.get(job_id)
+        if not job:
+            raise review_artifacts.ReviewError("Job nicht gefunden.", 404)
+        if job.get("status") == "running":
+            raise review_artifacts.ReviewError("Bitte laufenden Schritt abwarten.", 409)
+        result = stage_state.save_faces(job["job_dir"], body)
+        _apply_person_review(job, force=True)
+        _persist_job(job)
+        return result
+
+
+def begin_person_stage(job_id, phase):
+    with _LOCK:
+        job = _STORE.get(job_id)
+        if not job or job.get("status") == "running":
+            raise review_artifacts.ReviewError("Ein Verarbeitungsschritt läuft bereits.", 409)
+        if phase == "tracking":
+            stage_state.scene_cuts(job["job_dir"])
+        job.update(status="running", persons_analysis_running=True, persons_phase=phase)
+        _persist_job(job)
+
+
+def begin_image_stage(job_id):
+    # Reserve the job under the same lock as person-stage starts/reviews.
+    with _LOCK:
+        job = _STORE.get(job_id)
+        if not job or job.get("status") == "running" or job.get("persons_analysis_running"):
+            raise review_artifacts.ReviewError("Bitte laufenden Schritt abwarten.", 409)
+        job["status"] = "running"
+        _persist_job(job)
+
+
+def mutate_attribute_review(job_id, body):
+    from backend.pipeline.persons import attribute_state
+    with _LOCK:
+        job = _STORE.get(job_id)
+        if not job:
+            raise review_artifacts.ReviewError('Job nicht gefunden.', 404)
+        if job.get('status') == 'running':
+            raise review_artifacts.ReviewError('Bitte laufenden Schritt abwarten.', 409)
+        return attribute_state.save_review(job['job_dir'], body)
+
+
+def mutate_person_review(job_id: str, expected_version: str | None, operation: str, body: dict) -> dict:
+    with _LOCK:
+        job = _STORE.get(job_id)
+        if not job:
+            raise review_artifacts.ReviewError("Job nicht gefunden.", 404)
+        if job.get("status") == "running":
+            raise review_artifacts.ReviewError("Bitte warten, bis die laufende Verarbeitung abgeschlossen ist.", 409)
+        result = review_state.mutate(job["job_dir"], expected_version, operation, body)
+        _apply_person_review(job, force=True)
+        _persist_job(job)
+        return {k: v for k, v in result.items() if k != "faces"}
 
 def _persist_job(job: Dict[str, Any]) -> None:
     """Write job state to disk (must be called while _LOCK is held or with a copy)."""
     job_dir = Path(job["job_dir"])
     job_dir.mkdir(parents=True, exist_ok=True)
+    current_persons = review_artifacts.available(job_dir)
 
     # Save DataFrames as Parquet
     for field in _DF_FIELDS:
+        if field == "persons_df" and current_persons:
+            continue  # Rebuilt from person_analysis/; legacy jobs keep their copy.
         val = job.get(field)
         parquet_path = job_dir / f"{field}.parquet"
         if val is not None and isinstance(val, pd.DataFrame):
             try:
+                if field == "persons_df":
+                    val = val.drop(columns=["description"], errors="ignore")
                 val.to_parquet(str(parquet_path), index=True, engine="pyarrow")
             except Exception as exc:
                 log.warning("Could not save %s.parquet: %s", field, exc)
 
     # Save scalar fields as JSON (atomic write via tmp file)
     sidecar: Dict[str, Any] = {field: job.get(field) for field in _JSON_FIELDS}
+    if current_persons:
+        sidecar.pop("faces", None)
     try:
         tmp = job_dir / "job.json.tmp"
         tmp.write_text(json.dumps(sidecar, ensure_ascii=False, default=str), encoding="utf-8")
@@ -160,19 +263,31 @@ def _load_job_from_disk(job_dir: Path) -> Optional[Dict[str, Any]]:
 
     job: Dict[str, Any] = {field: None for field in _JSON_FIELDS + _DF_FIELDS}
     job.update(sidecar)
+    current_persons = review_artifacts.available(job_dir)
+    if current_persons:
+        job["faces"] = None  # Ignore old copies; _apply_person_review rebuilds both.
+        job["persons_df"] = None
 
     # Reload DataFrames from Parquet
     for field in _DF_FIELDS:
+        if field == "persons_df" and current_persons:
+            continue
         parquet_path = job_dir / f"{field}.parquet"
         if parquet_path.exists():
             try:
                 job[field] = pd.read_parquet(str(parquet_path), engine="pyarrow")
+                if field == "persons_df":
+                    job[field] = job[field].drop(columns=["description"], errors="ignore")
             except Exception as exc:
                 log.warning("Could not load %s: %s", parquet_path, exc)
 
     # Never leave a job stuck in "running" after a restart
     if job.get("status") == "running":
         job["status"] = "interrupted"
+
+    job["job_dir"] = str(job_dir)
+    job["persons_analysis_running"] = False
+    _apply_person_review(job)
 
     return job
 
@@ -245,6 +360,7 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     with _LOCK:
         job = _STORE.get(job_id)
         if job:
+            _apply_person_review(job)
             return job
             
     # Fallback to disk if not in memory (e.g. populated externally)
@@ -265,7 +381,20 @@ def update_job(job_id: str, **kwargs) -> None:
     with _LOCK:
         if job_id not in _STORE:
             return
-        _STORE[job_id].update(kwargs)
+        job = _STORE[job_id]
+        if "scene_cut_frames" in kwargs and kwargs["scene_cut_frames"] != job.get("scene_cut_frames"):
+            if job.get("persons_analysis_running"):
+                raise review_artifacts.ReviewError("Bitte laufende Personenanalyse abwarten.", 409)
+            # Only current person artifacts depend on these cuts; no run history.
+            person_root = stage_state.root(job["job_dir"])
+            if person_root.exists():
+                shutil.rmtree(person_root)
+            (Path(job["job_dir"]) / "persons_df.parquet").unlink(missing_ok=True)
+            job.update(persons_df=None, faces=[], persons_phase=None)
+            for key in ("person_review", "person_review_error", "_person_review_signature"):
+                job.pop(key, None)
+        job.update(kwargs)
+        _apply_person_review(_STORE[job_id], force=bool({"persons_df", "faces"} & kwargs.keys()))
         _persist_job(_STORE[job_id])
 
 

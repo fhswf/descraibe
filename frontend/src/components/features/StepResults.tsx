@@ -92,7 +92,7 @@ function FileRow({ jobId, fileKey, filename }: FileRowProps): React.ReactElement
 export function StepResults(): React.ReactElement | null {
     const { jobId, currentStep, jobData } = useJob();
 
-    if (currentStep !== 7) return null;
+    if (currentStep !== 10) return null;
 
     const paths = jobData?.output_paths || {};
 

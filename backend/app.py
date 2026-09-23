@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException, Body
-from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse, Response
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -33,7 +33,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from event_bus import BusEvent, event_bus
-import session_manager as sm
+from backend import session_manager as sm
+from backend.pipeline.persons import review_artifacts, stage_state, attribute_state
+from backend.pipeline.persons.config import TRACKING_INTERVAL_SECONDS, SIMILARITY_THRESHOLD, MAX_IMAGES_PER_PERSON, validate_parameter
 from db.store import DataStore
 
 # Pipeline modules are imported lazily inside route handlers to avoid
@@ -1232,6 +1234,11 @@ def run_images(job_id: str, body: dict = Body(default={})):
     if job.get("slots_df") is None:
         return JSONResponse({"error": "Slots not available. Run slot generation first."}, status_code=400)
 
+    try:
+        sm.begin_image_stage(job_id)
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
     def run():
         sm.job_id_var.set(job_id)
         try:
@@ -1297,6 +1304,7 @@ def run_images(job_id: str, body: dict = Body(default={})):
 
             sm.update_job(job_id,
                           scene_images=all_images,
+                          scene_cut_frames=extractor.scene_cut_frames,
                           slot_map_df=slot_map_df,
                           gpt_records_broadcast=None,
                           gpt_records_directors=None,
@@ -1318,58 +1326,176 @@ def run_images(job_id: str, body: dict = Body(default={})):
     return {"status": "started"}
 
 
-# ── Person Analysis ─────────────────────────────────────────────────────────────
-
-@app.post("/api/jobs/{job_id}/persons")
-def run_persons(job_id: str, body: dict = Body(default={})):
-    from pipeline import person_analysis as persons_mod
+# Attribute extraction is independent of the existing AD input and prompts.
+@app.post("/api/jobs/{job_id}/person-analysis/attributes")
+def run_attribute_stage(job_id: str, body: dict = Body(default={})):
+    try:
+        max_images = validate_parameter("max_images", body.get("max_images", MAX_IMAGES_PER_PERSON))
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-    if job.get("scene_images") is None or len(job.get("scene_images", [])) == 0:
-        return JSONResponse({"error": "Scene images not available. Run image extraction first."}, status_code=400)
+    try:
+        attribute_state.source(job['job_dir'])
+        sm.begin_person_stage(job_id, 'attributes')
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({'error': str(exc)}, status_code=exc.status)
 
     def run():
         sm.job_id_var.set(job_id)
         try:
-            _mark_step_running(job_id, "persons", "Detecting persons in images…")
-
-            def cb_persons(msg: str, current: int | None = None, total: int | None = None):
-                if total:
-                    percent = round((max(0, min(current or 0, total)) / total) * 100)
-                else:
-                    percent = 50
-                _push_progress(job_id, "persons", msg, percent, 100)
-
-            job_dir = sm.job_dir(job_id)
-            persons_df, faces = persons_mod.analyze_persons(
-                job["scene_images"],
-                job_dir=str(job_dir),
-                progress_cb=cb_persons,
-            )
-
-            # Store faces list in job state
-            sm.update_job(job_id, persons_df=persons_df, faces=faces)
-
-            # Persist persons to PostgreSQL if enabled
-            if _DATASTORE.enabled and persons_df is not None and not persons_df.empty:
-                persons_list = persons_df.to_dict(orient="records")
-                _DATASTORE.store_persons(job_id, persons_list)
-
-            sm.set_status(job_id, "idle")
-            _push_progress(job_id, "persons", "Person analysis complete.", 100, 100)
-            _push(job_id, "persons_done", {
-                "persons_count": len(persons_df),
-                "faces_count": len(faces),
-            })
+            from backend.pipeline.persons.attribute_stage import run_attributes
+            result = run_attributes(job['video_path'], job['job_dir'],
+                lambda msg, cur, total: _push_progress(job_id, 'attributes', msg, cur, total), max_images=max_images)
+            sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
+            sm.set_status(job_id, 'idle')
+            _push(job_id, 'attributes_done', {'stage_version': result['version']})
         except Exception as exc:
-            sm.set_status(job_id, "error", str(exc))
-            _push(job_id, "error", {"step": "persons", "message": str(exc)})
+            sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
+            sm.set_status(job_id, 'error', str(exc))
+            _push(job_id, 'error', {'step': 'attributes', 'message': str(exc)})
+    _mark_step_running(job_id, 'attributes', 'Attribute starten …')
+    _start_worker(job_id, 'attributes', run)
+    return {'status': 'started'}
 
-    _mark_step_running(job_id, "persons", "Person analysis queued…")
-    _start_worker(job_id, "persons", run)
+
+@app.get("/api/jobs/{job_id}/person-analysis/attributes")
+def get_attributes(job_id: str):
+    job = sm.get_job(job_id)
+    if not job:
+        raise HTTPException(404, ERR_UNKNOWN_JOB)
+    try:
+        return attribute_state.snapshot(job['job_dir'])
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({'error': str(exc)}, status_code=exc.status)
+
+
+@app.patch("/api/jobs/{job_id}/person-analysis/attribute-review")
+def save_attribute_review(job_id: str, body: dict = Body(...)):
+    if not sm.get_job(job_id):
+        return JSONResponse({'error': ERR_UNKNOWN_JOB}, status_code=404)
+    try:
+        result = sm.mutate_attribute_review(job_id, body)
+        _push(job_id, 'attributes_updated', {'version': result['version']})
+        return result
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({'error': str(exc)}, status_code=exc.status)
+
+
+@app.get("/api/jobs/{job_id}/person-analysis/attributes/{version}/images/{crop_id}")
+def get_attribute_image(job_id: str, version: str, crop_id: int):
+    job = sm.get_job(job_id)
+    if not job:
+        raise HTTPException(404, ERR_UNKNOWN_JOB)
+    try:
+        return FileResponse(attribute_state.image_file(job['job_dir'], version, crop_id), media_type='image/jpeg')
+    except review_artifacts.ReviewError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+
+
+# ── Person Analysis ─────────────────────────────────────────────────────────────
+
+def _start_person_stage(job_id: str, phase: str, body: dict | None = None):
+    body = body or {}
+    parameter = "tracking_interval_seconds" if phase == "tracking" else "similarity_threshold"
+    default = TRACKING_INTERVAL_SECONDS if phase == "tracking" else SIMILARITY_THRESHOLD
+    try:
+        value = validate_parameter(parameter, body.get(parameter, default))
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    if not job.get("video_path"):
+        return JSONResponse({"error": "Video not available."}, status_code=400)
+    try:
+        if phase == "identities" and not stage_state.status(job["job_dir"])["tracking_ready"]:
+            raise review_artifacts.ReviewError("Bitte zuerst Tracking & Gesichter ausführen.", 409)
+        sm.begin_person_stage(job_id, phase)
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+    def run():
+        sm.job_id_var.set(job_id)
+        try:
+            from backend.pipeline.persons.tracking_stage import run_tracking
+            from backend.pipeline.persons.identity_stage import run_identities
+            def progress(message, current=None, total=None):
+                _push_progress(job_id, phase, message, current or 0, total or 100)
+            (run_tracking if phase == "tracking" else run_identities)(job["video_path"], job["job_dir"], progress, **{parameter: value})
+            sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
+            sm.set_status(job_id, "idle")
+            _push(job_id, f"{phase}_done", {"stage_version": stage_state.status(job["job_dir"])["tracking_revision" if phase == "tracking" else "identity_revision"]})
+        except Exception as exc:
+            sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
+            sm.set_status(job_id, "error", str(exc))
+            _push(job_id, "error", {"step": phase, "message": str(exc)})
+    _mark_step_running(job_id, phase, "Personenschritt gestartet …")
+    _start_worker(job_id, phase, run)
     return {"status": "started"}
 
+
+@app.post("/api/jobs/{job_id}/person-analysis/tracking")
+def run_tracking_stage(job_id: str, body: dict = Body(default={})):
+    return _start_person_stage(job_id, "tracking", body)
+
+
+@app.post("/api/jobs/{job_id}/person-analysis/identities")
+def run_identity_stage(job_id: str, body: dict = Body(default={})):
+    return _start_person_stage(job_id, "identities", body)
+
+
+@app.get("/api/jobs/{job_id}/person-analysis/tracking")
+def get_face_review(job_id: str):
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    try:
+        return stage_state.face_snapshot(job["job_dir"])
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+
+@app.patch("/api/jobs/{job_id}/person-analysis/face-review")
+def save_face_review(job_id: str, body: dict = Body(...)):
+    if not sm.get_job(job_id):
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    try:
+        result = sm.mutate_face_review(job_id, body)
+        _push(job_id, "persons_updated", {"face_review_version": result["version"]})
+        return result
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+
+@app.get("/api/jobs/{job_id}/person-analysis/tracking-frame/{source_track_id}/{frame_number}")
+def tracking_frame_preview(job_id: str, source_track_id: int, frame_number: int, analysis_id: str):
+    """Body fallback for a logical segment. Encoded in RAM, never written to disk."""
+    job = sm.get_job(job_id)
+    if not job:
+        raise HTTPException(404, ERR_UNKNOWN_JOB)
+    from backend.pipeline.persons import track_segments
+    try:
+        data = review_artifacts.load_tracking(job["job_dir"])
+        if data.analysis_id != analysis_id:
+            raise review_artifacts.ReviewError("Analyselauf wurde geändert. Bitte neu laden.", 409)
+        row = next((r for r in track_segments.timeline(str(data.root)).get(source_track_id, []) if r["frame_number"] == frame_number), None)
+        if row is None:
+            raise review_artifacts.ReviewError("Trackingframe nicht gefunden.", 404)
+        import cv2
+        frame = review_artifacts.read_preview_frame(job["video_path"], frame_number)
+        x1, y1, x2, y2 = map(round, row["bbox"])
+        height, width = frame.shape[:2]
+        crop = frame[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
+        if not crop.size:
+            raise review_artifacts.ReviewError("Personencrop nicht verfügbar.", 404)
+        ok, encoded = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if not ok:
+            raise review_artifacts.ReviewError("Personencrop nicht verfügbar.", 404)
+        return Response(encoded.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
 @app.get("/api/jobs/{job_id}/persons")
 def get_persons(job_id: str):
@@ -1378,12 +1504,19 @@ def get_persons(job_id: str):
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
 
+    if job.get("persons_analysis_running"):
+        return JSONResponse({"error": "Personenanalyse läuft noch."}, status_code=409)
+    if job.get("person_review_error"):
+        return JSONResponse({"error": job["person_review_error"]}, status_code=409)
+    if job.get("person_review"):
+        return _review_response(job_id, job["person_review"])
+
     persons_df = job.get("persons_df")
     if persons_df is None or persons_df.empty:
         return {"persons": []}
 
     # Replace NaN with None and convert to dict
-    persons_clean = persons_df.replace({float('nan'): None})
+    persons_clean = persons_df.drop(columns=['description'], errors='ignore').replace({float('nan'): None})
     persons_list = persons_clean.to_dict(orient="records")
 
     # Parse face_ids from JSON string
@@ -1415,92 +1548,88 @@ def get_persons(job_id: str):
     return {"persons": persons_list}
 
 
-@app.get("/api/jobs/{job_id}/persons/merge-suggestions")
-def get_merge_suggestions(job_id: str, threshold: float = 0.6):
-    """Find persons with similar face embeddings who might actually be the same person."""
+_REVIEW_DB_LOCK = threading.Lock()
+
+
+def _review_response(job_id: str, result: dict) -> dict:
+    """Optional PostgreSQL projection; the durable JSON remains authoritative."""
+    response = dict(result)
+    if _DATASTORE.enabled:
+        # Requests can finish out of order. Always mirror the latest projection
+        # inside this lock so an older request cannot overwrite a newer save.
+        with _REVIEW_DB_LOCK:
+            latest = (sm.get_job(job_id) or {}).get("person_review")
+            synced = bool(latest) and _DATASTORE.store_persons(job_id, latest["persons"])
+        response["database_sync"] = "synced" if synced else "pending"
+        if not synced:
+            response["warning"] = "Personenstand ist lokal gespeichert; die Datenbank-Synchronisierung steht noch aus."
+    return response
+
+
+def _review_change(job_id: str, operation: str, body: dict):
+    try:
+        result = sm.mutate_person_review(job_id, body.get("version"), operation, body)
+        response = _review_response(job_id, result)
+        _push(job_id, "persons_updated", {"persons_count": len(result["persons"]), "version": result["version"]})
+        return response
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+
+@app.post("/api/jobs/{job_id}/track-assignments")
+def assign_tracks(job_id: str, body: dict = Body(...)):
+    if not sm.get_job(job_id):
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    return _review_change(job_id, "assign", body)
+
+
+def _review_job(job_id: str) -> dict:
     job = sm.get_job(job_id)
     if not job:
-        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+        raise HTTPException(404, ERR_UNKNOWN_JOB)
+    if job.get("persons_analysis_running"):
+        raise HTTPException(409, "Personenanalyse läuft noch.")
+    if job.get("person_review_error") or not job.get("person_review"):
+        raise HTTPException(409, job.get("person_review_error") or "Track-Daten sind noch nicht verfügbar.")
+    return job
 
-    persons_df = job.get("persons_df")
-    if persons_df is None or persons_df.empty:
-        return {"suggestions": []}
 
-    faces = job.get("faces") or []
-    if not faces:
-        return {"suggestions": []}
+@app.get("/api/jobs/{job_id}/persons/{person_id}/tracks")
+def get_person_tracks(job_id: str, person_id: int):
+    result = _review_job(job_id)["person_review"]
+    if not any(p["person_id"] == person_id for p in result["persons"]):
+        raise HTTPException(404, "Person nicht gefunden.")
+    return {"tracks": [t for t in result["tracks"] if t["person_id"] == person_id], "version": result["version"]}
 
-    # Map face ID to its embedding
-    face_embeddings = {}
-    for face in faces:
-        fid = face.get("face_id")
-        emb = face.get("embedding")
-        if fid is not None and emb:
-            face_embeddings[fid] = emb
 
-    # Calculate mean embedding for each person
-    person_mean_embeddings = {}
-    persons_clean = persons_df.replace({float('nan'): None})
-    persons_list = persons_clean.to_dict(orient="records")
+@app.get("/api/jobs/{job_id}/tracks/unassigned")
+def get_unassigned_tracks(job_id: str):
+    result = _review_job(job_id)["person_review"]
+    return {"tracks": result["unassigned_tracks"], "version": result["version"]}
 
-    for person in persons_list:
-        person_id = person.get("person_id")
-        face_ids_str = person.get("face_ids", "[]")
-        if isinstance(face_ids_str, str):
-            try:
-                face_ids = json.loads(face_ids_str) or []
-            except:
-                face_ids = []
-        else:
-            face_ids = face_ids_str or []
 
-        embs = [face_embeddings[fid] for fid in face_ids if fid in face_embeddings]
-        if embs:
-            mean_emb = [sum(x) / len(embs) for x in zip(*embs)]
-            person_mean_embeddings[person_id] = mean_emb
+@app.get("/api/jobs/{job_id}/tracks/{track_id}/crops")
+def get_track_crops(job_id: str, track_id: int, limit: int = 8):
+    """Representative cluster previews for the current track."""
+    job = _review_job(job_id)
+    try:
+        data = review_artifacts.load_for_preview(job["job_dir"])
+        snapshot = job["person_review"]
+        return {"crops": data.review_crops(track_id, limit=max(1, min(limit, 24))), "analysis_id": data.analysis_id, "version": snapshot["version"]}
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
-    suggestions = []
-    # Compare all pairs of persons
-    for i in range(len(persons_list)):
-        for j in range(i + 1, len(persons_list)):
-            p_a = persons_list[i]
-            p_b = persons_list[j]
-            id_a = p_a.get("person_id")
-            id_b = p_b.get("person_id")
 
-            if id_a in person_mean_embeddings and id_b in person_mean_embeddings:
-                sim = _cosine_similarity(person_mean_embeddings[id_a], person_mean_embeddings[id_b])
-                if sim >= threshold:
-                    scene_images = job.get("scene_images") or []
-                    for p in [p_a, p_b]:
-                        if "representative_image" not in p or not p["representative_image"]:
-                            ts = p.get("first_seen_ts", 0)
-                            if ts and scene_images:
-                                def extract_ts(path):
-                                    m = re.search(r'(\d{2})-(\d{2})-(\d{2})-(\d{3})', path)
-                                    if m:
-                                        h, mn, s, ms = map(int, m.groups())
-                                        return h * 3600 + mn * 60 + s + ms / 1000
-                                    return 0
-                                closest = min(scene_images, key=lambda path: abs(extract_ts(path) - ts), default=None)
-                                p["representative_image"] = closest
-                        p_face_ids = p.get("face_ids")
-                        if isinstance(p_face_ids, str):
-                            try:
-                                p["face_ids"] = json.loads(p_face_ids) if p_face_ids else []
-                            except:
-                                p["face_ids"] = []
-                        elif p_face_ids is None:
-                            p["face_ids"] = []
-
-                    suggestions.append({
-                        "person_a": p_a,
-                        "person_b": p_b,
-                        "similarity": round(sim, 3)
-                    })
-
-    suggestions.sort(key=lambda x: x["similarity"], reverse=True)
-    return {"suggestions": suggestions}
+@app.get("/api/jobs/{job_id}/person-crops/{crop_id}")
+def get_person_crop(job_id: str, crop_id: int, analysis_id: str | None = None):
+    job = _review_job(job_id)
+    try:
+        data = review_artifacts.load_for_preview(job["job_dir"])
+        if analysis_id is not None and analysis_id != data.analysis_id:
+            raise review_artifacts.ReviewError("Der Personencrop gehört zu einem anderen Trackingstand.", 409)
+        return FileResponse(data.crop_file(crop_id), media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+    except review_artifacts.ReviewError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
 
 @app.post("/api/jobs/{job_id}/persons/merge")
@@ -1509,6 +1638,8 @@ def merge_persons(job_id: str, body: dict = Body(...)):
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    if review_artifacts.available(job["job_dir"]):
+        return _review_change(job_id, "merge", body)
 
     source_id = body.get("source_person_id")
     target_id = body.get("target_person_id")
@@ -1568,7 +1699,6 @@ def merge_persons(job_id: str, body: dict = Body(...)):
 
     # Update target row
     df.loc[target_idx, "name"] = target_row.get("name") or source_row.get("name")
-    df.loc[target_idx, "description"] = target_row.get("description") or source_row.get("description")
     df.loc[target_idx, "first_seen_ts"] = first_seen
     df.loc[target_idx, "last_seen_ts"] = last_seen
     df.loc[target_idx, "appearances_count"] = count
@@ -1593,10 +1723,12 @@ def merge_persons(job_id: str, body: dict = Body(...)):
 
 @app.post("/api/jobs/{job_id}/persons/{person_id}")
 def update_person(job_id: str, person_id: int, body: dict = Body(...)):
-    """Update a person's name and description."""
+    """Update a person's name and function."""
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    if review_artifacts.available(job["job_dir"]):
+        return _review_change(job_id, "metadata", {**body, "person_id": person_id})
 
     persons_df = job.get("persons_df")
     if persons_df is None or persons_df.empty:
@@ -1606,12 +1738,13 @@ def update_person(job_id: str, person_id: int, body: dict = Body(...)):
     if person_id not in persons_df["person_id"].values:
         return JSONResponse({"error": "Person not found"}, status_code=404)
 
-    name = body.get("name")
-    description = body.get("description")
-
-    df = persons_df.copy()
-    df.loc[df["person_id"] == person_id, "name"] = name
-    df.loc[df["person_id"] == person_id, "description"] = description
+    df = persons_df.drop(columns=["description"], errors="ignore").copy()
+    for field in ("name", "function"):
+        if field in body:
+            value = body[field]
+            if not isinstance(value, str) or len(value) > 10000:
+                return JSONResponse({"error": "Ungültige Personenmetadaten."}, status_code=400)
+            df.loc[df["person_id"] == person_id, field] = value.strip()
 
     # Save job
     sm.update_job(job_id, persons_df=df)
@@ -1621,15 +1754,18 @@ def update_person(job_id: str, person_id: int, body: dict = Body(...)):
         persons_list = df.replace({float('nan'): None}).to_dict(orient="records")
         _DATASTORE.store_persons(job_id, persons_list)
 
-    return {"status": "ok", "person_id": person_id, "name": name, "description": description}
+    person = df.loc[df["person_id"] == person_id].iloc[0]
+    return {"status": "ok", "person_id": person_id, "name": person.get("name"), "function": person.get("function")}
 
 
 @app.delete("/api/jobs/{job_id}/persons/{person_id}")
-def delete_person(job_id: str, person_id: int):
+def delete_person(job_id: str, person_id: int, body: dict = Body(default={})):
     """Delete a person from the job."""
     job = sm.get_job(job_id)
     if not job:
         return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    if review_artifacts.available(job["job_dir"]):
+        return _review_change(job_id, "delete", {**body, "source_person_id": person_id})
 
     persons_df = job.get("persons_df")
     if persons_df is None or persons_df.empty:
@@ -1652,48 +1788,6 @@ def delete_person(job_id: str, person_id: int):
         _DATASTORE.store_persons(job_id, persons_list)
 
     return {"status": "ok", "deleted_person_id": person_id}
-
-
-@app.get("/api/jobs/{job_id}/faces")
-def get_faces(job_id: str):
-    """Return all detected faces for a job."""
-    job = sm.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-
-    faces = job.get("faces")
-    if faces is None:
-        return {"faces": []}
-
-    return {"faces": faces}
-
-
-# ── Face Image Endpoint ─────────────────────────────────────────────────────────
-
-@app.get("/api/jobs/{job_id}/faces/{face_id}")
-def get_face_image(job_id: str, face_id: int):
-    """Return the face crop image for a face."""
-    job = sm.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-
-    faces = job.get("faces") or []
-    for face in faces:
-        if face.get("face_id") == face_id and face.get("crop_path"):
-            job_path = sm.job_dir(job_id)
-            crop_path = job_path / face["crop_path"]
-            if crop_path.exists():
-                return FileResponse(crop_path, media_type="image/jpeg")
-
-    # Fallback for old runs where faces list was not persisted in job.json:
-    # check if the face crop exists on disk at standard location faces/face_{face_id}.jpg
-    job_path = sm.job_dir(job_id)
-    if job_path:
-        crop_path = job_path / "faces" / f"face_{face_id}.jpg"
-        if crop_path.exists():
-            return FileResponse(crop_path, media_type="image/jpeg")
-
-    return JSONResponse({"error": "Face not found"}, status_code=404)
 
 
 # ── GPT Description ────────────────────────────────────────────────────────────
@@ -2189,6 +2283,11 @@ def get_job(job_id: str, request: Request):
         "slots_count": len(job["slots_df"]) if job.get("slots_df") is not None else 0,
         "images_count": len(job["scene_images"]) if job.get("scene_images") else 0,
         "persons_count": len(job["persons_df"]) if job.get("persons_df") is not None else 0,
+        "persons_analyzed": bool((job.get("person_review") or {}).get("review_available")) and not job.get("person_review_error") and not job.get("persons_analysis_running"),
+        "attribute_stage": attribute_state.status(job["job_dir"]),
+        "persons_version": (job.get("person_review") or {}).get("version"),
+        "unassigned_tracks_count": len((job.get("person_review") or {}).get("unassigned_tracks", [])),
+        "person_stages": stage_state.status(job["job_dir"]) if not job.get("person_review_error") else {"error": job["person_review_error"]},
         
         # Timeline data
         "pauses": make_serializable(job.get("pauses_df")),
@@ -2231,6 +2330,9 @@ def build_hateoas_links(job: dict, base_url: str):
         {"rel": "upload-srt", "href": f"{base}/api/jobs/{jid}/srt", "method": "POST"}
     ]
     if job.get("video_path"):
+        links.append({"rel": "run-tracking", "href": f"{base}/api/jobs/{jid}/person-analysis/tracking", "method": "POST"})
+        if stage_state.status(job["job_dir"])["tracking_ready"]:
+            links.append({"rel": "run-identities", "href": f"{base}/api/jobs/{jid}/person-analysis/identities", "method": "POST"})
         links.append({"rel": "run-vad", "href": f"{base}/api/jobs/{jid}/vad", "method": "POST"})
         links.append({"rel": "run-transcribe", "href": f"{base}/api/jobs/{jid}/transcribe", "method": "POST"})
         
@@ -2241,7 +2343,6 @@ def build_hateoas_links(job: dict, base_url: str):
         links.append({"rel": "run-images", "href": f"{base}/api/jobs/{jid}/images", "method": "POST"})
 
     if job.get("scene_images") is not None and len(job.get("scene_images", [])) > 0:
-        links.append({"rel": "run-persons", "href": f"{base}/api/jobs/{jid}/persons", "method": "POST"})
         links.append({"rel": "run-gpt", "href": f"{base}/api/jobs/{jid}/gpt", "method": "POST"})
         
     return links
@@ -2329,232 +2430,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# ── Similar Faces Endpoint ─────────────────────────────────────────────────────
-
-_SIMILARITY_CACHE: dict[tuple[str, int, int], float] = {}
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Compute cosine similarity between two vectors."""
-    import math
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
-
-
-def _get_cached_face_similarity(job_id: str, id1: int, id2: int, emb1: list[float], emb2: list[float]) -> float:
-    """Compute cosine similarity between two face embeddings, caching results."""
-    key = (job_id, min(id1, id2), max(id1, id2))
-    if key in _SIMILARITY_CACHE:
-        return _SIMILARITY_CACHE[key]
-    sim = _cosine_similarity(emb1, emb2)
-    _SIMILARITY_CACHE[key] = sim
-    return sim
-
-
-@app.get("/api/jobs/{job_id}/persons/{person_id}/similar-faces")
-def get_similar_faces(job_id: str, person_id: int, threshold: float = 0.5):
-    """Find faces similar to a person's faces that might belong to the same person."""
-    job = sm.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-
-    faces = job.get("faces") or []
-    if not faces:
-        return {"similar_faces": [], "unassigned_faces": []}
-
-    # Get person's face IDs
-    persons_df = job.get("persons_df")
-    if persons_df is None or persons_df.empty:
-        return {"similar_faces": [], "unassigned_faces": []}
-
-    # Find the person
-    person_row = persons_df[persons_df["person_id"] == person_id]
-    if person_row.empty:
-        return JSONResponse({"error": "Person not found"}, status_code=404)
-
-    # Parse face_ids
-    face_ids_str = person_row.iloc[0].get("face_ids", "[]")
-    if isinstance(face_ids_str, str):
-        try:
-            person_face_ids = set(json.loads(face_ids_str) or [])
-        except:
-            person_face_ids = set()
-    else:
-        person_face_ids = set(face_ids_str or [])
-
-    # Get all face embeddings
-    faces_with_embeddings = [f for f in faces if f.get("embedding")]
-    if not faces_with_embeddings:
-        return {"similar_faces": [], "unassigned_faces": []}
-
-    # Collect person's embeddings
-    person_embeddings = []
-    for fid in person_face_ids:
-        for f in faces_with_embeddings:
-            if f.get("face_id") == fid:
-                person_embeddings.append(f)
-                break
-
-    if not person_embeddings:
-        return {"similar_faces": [], "unassigned_faces": []}
-
-    # Find faces similar to any of person's faces
-    similar = []
-    unassigned = []
-
-    for face in faces_with_embeddings:
-        if face.get("face_id") in person_face_ids:
-            continue  # Skip own faces
-
-        # Check similarity to any of person's faces
-        max_sim = 0.0
-        best_match = None
-        for person_face in person_embeddings:
-            sim = _get_cached_face_similarity(
-                job_id,
-                face.get("face_id"),
-                person_face.get("face_id"),
-                face.get("embedding", []),
-                person_face.get("embedding", [])
-            )
-            if sim > max_sim:
-                max_sim = sim
-                best_match = person_face.get("face_id")
-
-        if max_sim >= threshold:
-            similar.append({
-                "face": face,
-                "similarity": round(max_sim, 3),
-                "matches_face_id": best_match,
-            })
-        else:
-            # Check if unassigned (not in any person's face_ids)
-            is_assigned = False
-            for _, p_row in persons_df.iterrows():
-                p_face_ids_str = p_row.get("face_ids", "[]")
-                if isinstance(p_face_ids_str, str):
-                    try:
-                        p_face_ids = set(json.loads(p_face_ids_str) or [])
-                    except:
-                        p_face_ids = set()
-                else:
-                    p_face_ids = set(p_face_ids_str or [])
-                if face.get("face_id") in p_face_ids:
-                    is_assigned = True
-                    break
-            if not is_assigned:
-                unassigned.append(face)
-
-    # Sort similar faces by similarity (highest first)
-    similar.sort(key=lambda x: x["similarity"], reverse=True)
-
-    return {
-        "similar_faces": similar[:20],  # Top 20 similar
-        "unassigned_faces": unassigned[:20],  # Top 20 unassigned
-    }
-
-
-@app.post("/api/jobs/{job_id}/faces/merge")
-def merge_faces(job_id: str, body: dict = Body(...)):
-    """Move faces between persons or merge two persons."""
-    job = sm.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
-
-    action = body.get("action")  # "merge_to_person" or "split_from_person"
-    face_ids = body.get("face_ids", [])  # List of face IDs to move
-    target_person_id = body.get("target_person_id")  # Target person ID (for merge)
-    source_person_id = body.get("source_person_id")  # Source person ID (for split)
-
-    if not face_ids:
-        return JSONResponse({"error": "No face_ids provided"}, status_code=400)
-
-    persons_df = job.get("persons_df")
-    if persons_df is None or persons_df.empty:
-        return JSONResponse({"error": "No persons found"}, status_code=400)
-
-    faces = job.get("faces") or []
-    face_id_set = set(face_ids)
-
-    # Validate faces exist
-    valid_face_ids = set()
-    for f in faces:
-        if f.get("face_id") in face_id_set:
-            valid_face_ids.add(f.get("face_id"))
-
-    if not valid_face_ids:
-        return JSONResponse({"error": "No valid faces found"}, status_code=400)
-
-    # Map face ID to its timestamp for updating person timeline range
-    face_timestamps = {}
-    for f in faces:
-        fid = f.get("face_id")
-        ts = f.get("timestamp_s")
-        if fid is not None and ts is not None:
-            face_timestamps[fid] = ts
-
-    # Update persons_df
-    df_list = persons_df.to_dict(orient="records")
-    modified = False
-
-    for person in df_list:
-        face_ids_str = person.get("face_ids", "[]")
-        if isinstance(face_ids_str, str):
-            try:
-                p_face_ids = json.loads(face_ids_str) if face_ids_str else []
-            except:
-                p_face_ids = []
-        else:
-            p_face_ids = face_ids_str or []
-
-        p_face_ids_set = set(p_face_ids)
-
-        if action == "merge_to_person":
-            # Add faces TO target person
-            if person["person_id"] == target_person_id:
-                new_face_ids = list(p_face_ids_set | valid_face_ids)
-                person["face_ids"] = json.dumps(new_face_ids)
-                person["appearances_count"] = len(new_face_ids)
-                
-                person_ts = [face_timestamps[fid] for fid in new_face_ids if fid in face_timestamps]
-                if person_ts:
-                    person["first_seen_ts"] = min(person_ts)
-                    person["last_seen_ts"] = max(person_ts)
-                modified = True
-            # Remove faces FROM any other person who might have them
-            elif p_face_ids_set & valid_face_ids:
-                new_face_ids = list(p_face_ids_set - valid_face_ids)
-                person["face_ids"] = json.dumps(new_face_ids)
-                person["appearances_count"] = len(new_face_ids)
-                
-                person_ts = [face_timestamps[fid] for fid in new_face_ids if fid in face_timestamps]
-                if person_ts:
-                    person["first_seen_ts"] = min(person_ts)
-                    person["last_seen_ts"] = max(person_ts)
-                modified = True
-
-        elif action == "split_from_person":
-            # Remove faces FROM source person
-            if person["person_id"] == source_person_id:
-                new_face_ids = list(p_face_ids_set - valid_face_ids)
-                person["face_ids"] = json.dumps(new_face_ids)
-                person["appearances_count"] = len(new_face_ids)
-                
-                person_ts = [face_timestamps[fid] for fid in new_face_ids if fid in face_timestamps]
-                if person_ts:
-                    person["first_seen_ts"] = min(person_ts)
-                    person["last_seen_ts"] = max(person_ts)
-                modified = True
-
-    if modified:
-        # Reconstruct DataFrame
-        new_df = pd.DataFrame(df_list)
-        new_df = new_df.sort_values("first_seen_ts").reset_index(drop=True)
-        sm.update_job(job_id, persons_df=new_df)
-
-    return {"status": "ok", "modified": modified, "face_ids": list(valid_face_ids)}
