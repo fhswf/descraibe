@@ -65,12 +65,87 @@ def test_current_values_batch_reload_and_replacement(attribute_job):
 
 def test_no_eligible_images_does_not_load_model(attribute_job, monkeypatch):
     job, video, calls = attribute_job
-    original = attribute_selection.select_existing
-    monkeypatch.setattr(attribute_stage, 'select_existing', lambda data, w, h, **kwargs: original(data, w, h*10, **kwargs))
+    original = attribute_state.source
+    def without_crops(job_dir):
+        data = original(job_dir)
+        data.by_track = {tid: [] for tid in data.by_track}
+        return data
+    monkeypatch.setattr(attribute_state, 'source', without_crops)
     result = attribute_stage.run_attributes(video, job)
     assert calls == []
     assert result['persons'][0]['status'] == 'no_eligible_images'
     assert result['persons'][0]['images'] == []
+
+
+def test_small_person_gets_one_image_and_qwen_call(attribute_job, monkeypatch):
+    job, video, calls = attribute_job
+    current = review_state.current(job)
+    review_state.mutate(job, current['version'], 'assign', {'changes': [
+        {'track_id': 2, 'action': 'assign', 'person_id': 1}]})
+    original = attribute_selection.select_existing
+    monkeypatch.setattr(attribute_stage, 'select_existing', lambda data, w, h, **kwargs: original(data, w, h*10, **kwargs))
+    result = attribute_stage.run_attributes(video, job)
+    person = result['persons'][0]
+    assert person['status'] == 'ok'
+    assert len(person['images']) == 1
+    assert person['images'][0]['height_ratio'] < .15
+    assert calls[0] == 'load' and calls[-1] == 'close'
+    assert len(calls) == 3 and len(calls[1][1]) == 1
+
+
+@pytest.mark.parametrize('height,expected', [(15, [1, 2]), (14, [1])])
+def test_height_boundary_and_person_wide_fallback(tmp_path, height, expected):
+    import cv2
+    import numpy as np
+    path = tmp_path / 'crop.jpg'
+    path.write_bytes(cv2.imencode('.jpg', np.zeros((20, 20, 3), np.uint8))[1].tobytes())
+    def crop(cid, tid, size):
+        return dict(crop_id=cid, track_id=tid, frame_number=cid,
+                    person_bbox=[30, 30, 50, 30+size], face_bbox=[1, 1, 5, 5])
+    data = SimpleNamespace(
+        persons={1: {}, 2: {}}, assignments={1: 1, 2: 1, 3: 2},
+        tracks={tid: {'excluded': False} for tid in (1, 2, 3)},
+        by_track={1: [crop(1, 1, height)], 2: [crop(2, 2, height)], 3: [crop(3, 3, 10)]},
+        crop_file=lambda cid: path)
+    # Both normal representatives survive at exactly 15%; below it only one wins.
+    # Person 2 needs its own fallback even when person 1 has normal images.
+    selected = attribute_selection.select_existing(data, 100, 100)
+    assert [c['crop_id'] for c in selected[1]] == expected
+    assert [c['crop_id'] for c in selected[2]] == [3]
+    if height == 15:
+        # A small candidate of a person with normal images is never even opened.
+        data.by_track[1].append(crop(4, 1, 10))
+        def read(cid):
+            assert cid != 4
+            return path
+        data.crop_file = read
+        assert attribute_selection.select_existing(data, 100, 100) == selected
+
+
+def test_small_fallback_keeps_face_preference_score_and_exclusions(tmp_path):
+    import cv2
+    import numpy as np
+    path = tmp_path / 'crop.jpg'
+    path.write_bytes(cv2.imencode('.jpg', np.zeros((20, 20, 3), np.uint8))[1].tobytes())
+    def crop(cid, tid, size, face):
+        return dict(crop_id=cid, track_id=tid, frame_number=cid,
+                    person_bbox=[30, 30, 50, 30+size], face_bbox=[1, 1, 5, 5] if face else None,
+                    excluded=True, face_usable=False)
+    def read(cid):
+        assert cid not in (5, 6)  # excluded and unassigned tracks never participate
+        return path
+    data = SimpleNamespace(
+        persons={1: {}}, assignments={1: 1, 2: 1, 3: 1, 4: None},
+        tracks={tid: {'excluded': tid == 3} for tid in (1, 2, 3, 4)},
+        by_track={1: [crop(1, 1, 14, False), crop(2, 1, 8, True), crop(3, 1, 10, True)],
+                  2: [crop(4, 2, 9, False)], 3: [crop(5, 3, 14, True)], 4: [crop(6, 4, 14, True)]},
+        crop_file=read)
+    selected = attribute_selection.select_existing(data, 100, 100)
+    # Face preference rejects crop 1 despite its size; score chooses 3 over 2 and 4.
+    assert [c['crop_id'] for c in selected[1]] == [3]
+    data.tracks[1]['excluded'] = True
+    data.tracks[2]['excluded'] = True
+    assert attribute_selection.select_existing(data, 100, 100) == {1: []}
 
 
 def test_face_exclusion_retains_crop_but_invalidates_run(attribute_job):

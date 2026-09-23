@@ -54,6 +54,6 @@ def run_attributes(video_path, job_dir, progress_cb=None, *, max_images=MAX_IMAG
         "schema_version": 1, "revision": revision, "tracking_revision": data.tracking_revision, "assignment_revision": data.assignment_revision,
         "model_id": MODEL_ID, "prompt_sha256": hashlib.sha256(PROMPT.encode()).hexdigest(),
         "max_images": max_images,
-        "generation": GENERATION, "selection_policy": "existing-crops-v1-reference-50-30-20", "persons": persons,
+        "generation": GENERATION, "selection_policy": "existing-crops-v2-small-person-fallback-50-30-20", "persons": persons,
     })
     return attribute_state.snapshot(job_dir)

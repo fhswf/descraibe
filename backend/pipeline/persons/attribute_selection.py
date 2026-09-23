@@ -142,7 +142,7 @@ def score_candidates(
         candidates,
         normalized_blur_values,
     ):
-        # Die Person muss bereits mindestens 15 % groß sein.
+        # Auch kleine Ersatzbilder erhalten denselben größenabhängigen Score.
         # Ab 25 % gibt es für die Größenbewertung 1.0.
         size_score = min(
             candidate["height_ratio"]
@@ -282,14 +282,25 @@ def select_images(
 
 
 def select_existing(data, frame_width, frame_height, max_images=MAX_IMAGES_PER_PERSON):
-    """Wählt die vorhandenen aktuellen Personencrops ohne neue Bilder zu erzeugen."""
+    """Wählt vorhandene Crops; nur ohne reguläre Auswahl ein kleines Ersatzbild."""
     validate_parameter("max_images", max_images)
     if frame_width <= 0 or frame_height <= 0:
         raise ReviewError("Frameabmessungen fehlen.", 409)
-    people = {person_id: {} for person_id in data.persons}
+    people = _collect_candidates(data, frame_width, frame_height, data.persons, MIN_PERSON_HEIGHT_RATIO)
+    selections = {pid: select_images(tracks, max_images) for pid, tracks in sorted(people.items())}
+    missing = {pid for pid, images in selections.items() if not images}
+    if missing:
+        fallback = _collect_candidates(data, frame_width, frame_height, missing, 0.0)
+        for pid, tracks in fallback.items():
+            selections[pid] = select_images(tracks, 1)
+    return selections
+
+
+def _collect_candidates(data, frame_width, frame_height, person_ids, min_height_ratio):
+    people = {person_id: {} for person_id in person_ids}
     for track_id, crops in data.by_track.items():
         person_id = data.assignments[track_id]
-        if person_id is None or data.tracks[track_id]["excluded"]:
+        if person_id is None or person_id not in people or data.tracks[track_id]["excluded"]:
             continue
         groups, seen = [[], []], set()
         for crop in crops:
@@ -297,7 +308,7 @@ def select_existing(data, frame_width, frame_height, max_images=MAX_IMAGES_PER_P
                 continue
             x1, y1, x2, y2 = crop["person_bbox"]
             height_ratio = (y2 - y1) / frame_height
-            if height_ratio < MIN_PERSON_HEIGHT_RATIO:
+            if height_ratio < min_height_ratio:
                 continue
             path = data.crop_file(crop["crop_id"])
             image = cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
@@ -313,4 +324,4 @@ def select_existing(data, frame_width, frame_height, max_images=MAX_IMAGES_PER_P
         candidates = groups[0] or groups[1]
         if candidates:
             people[person_id][track_id] = candidates
-    return {person_id: select_images(tracks, max_images) for person_id, tracks in sorted(people.items())}
+    return people
