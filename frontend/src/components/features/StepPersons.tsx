@@ -94,10 +94,10 @@ function PersonsPanel({ jobId }: { jobId: string }) {
     const filtered = persons;
     const disabled = running || busy || Boolean(error);
     return <div className="flex flex-col gap-5" data-review-size="persons">
-        <div className="flex gap-4 pb-4 border-b border-border-subtle"><div className="text-3xl">👤</div><div><h2 className="text-[1.4rem] font-bold mb-1">Personen &amp; Cluster</h2>
+        <div className="flex gap-4 pb-4 border-b border-border-subtle"><div className="text-3xl">👤</div><div><h2 className="text-[1.4rem] font-bold mb-1">Personenzuordnung</h2>
             <p className="text-sm text-text-secondary">Personen und ihre Auftritte im Video. Track-Zuordnungen können bei Bedarf manuell korrigiert werden.</p></div></div>
         {(snapshot?.identities_stale || jobData?.person_stages?.identities_stale) && <p role="status" className="p-3 border border-amber-500 rounded-lg">Veraltet: Gesichtsbereinigung wurde geändert. Angezeigt wird der bisherige Personenstand. Schritt 2 erneut ausführen, um neu zu clustern.</p>}
-        {jobData?.person_stages?.legacy && <p className="text-sm text-text-muted">Alter Analysejob: Personen und Korrekturen bleiben nutzbar. Für die neue Gesichtsbereinigung zuerst Tracking &amp; Gesichter ausführen.</p>}
+        {jobData?.person_stages?.legacy && <p className="text-sm text-text-muted">Alter Analysejob: Personen und Korrekturen bleiben nutzbar. Für die neue Gesichtsbereinigung zuerst Tracking ausführen.</p>}
         {running && <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg"><p className="text-sm">{progressData.identities?.msg || 'Verarbeitung läuft …'}</p>
             {progressData.identities && <progress aria-label="Personenanalyse Fortschritt" max={100} value={progressData.identities.percent} className="w-full" />}</div>}
         {error && <div role="alert" className="p-3 text-red-400 border border-red-500/30 rounded-lg">{error} <button onClick={() => { setLoading(true); setRefresh(n => n + 1); }} className="underline">Neu laden</button></div>}
@@ -127,7 +127,7 @@ function PersonsPanel({ jobId }: { jobId: string }) {
             </div>
             {!snapshot.review_available && persons.length > 0 && <p className="text-sm text-text-muted">Dieser ältere Job enthält keine Track-Artefakte. Name und Funktion bleiben bearbeitbar.</p>}
         </>}
-        {!running && <button disabled={!jobData?.video_path || busy || !jobData?.person_stages?.tracking_ready} onClick={handleRunPersons} className="w-fit flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg disabled:opacity-50"><span className="material-icons-round">search</span>Personen &amp; Cluster ausführen</button>}
+        {!running && <button disabled={!jobData?.video_path || busy || !jobData?.person_stages?.tracking_ready} onClick={handleRunPersons} className="w-fit flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg disabled:opacity-50"><span className="material-icons-round">search</span>Personenzuordnung ausführen</button>}
         <div className="p-4 bg-bg-card border border-border-subtle rounded-lg text-xs text-text-secondary">Ein Auftritt entspricht dem Zeitintervall eines Tracks. Die automatische Zuordnung ist sofort nutzbar; manuelle Korrekturen sind optional.</div>
         {editing && <EditPersonDialog person={editing.person} onClose={() => setEditing(null)} onSave={updates => mutate(`persons/${editing.person.person_id}`, 'POST', { ...updates, version: editing.version })} />}
         {managing && <FaceMergeDialog person={managing.person} snapshot={managing.snapshot} jobId={jobId} onClose={() => setManaging(null)} onSaved={accept} />}

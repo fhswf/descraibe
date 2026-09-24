@@ -308,7 +308,7 @@ restart the pod. The `GPT_PROMPTS_DIR=/app/config/prompts` env var is already se
 
 ## Person Analysis
 
-The Person Analysis stages (Tracking & Gesichter, Personen & Cluster, Attribute) automatically detects and tracks persons in video frames using computer vision:
+The Person Analysis stages (Tracking, Personenzuordnung, Attribute) automatically detects and tracks persons in video frames using computer vision:
 
 ### Features
 

@@ -9,7 +9,7 @@ from .review_artifacts import ReviewError
 def source(job_dir):
     data = review_artifacts.load(job_dir)
     if data.identity_revision is None:
-        raise ReviewError("Bitte zuerst Personen & Cluster ausführen.", 409)
+        raise ReviewError("Bitte zuerst Personenzuordnung ausführen.", 409)
     return data
 
 

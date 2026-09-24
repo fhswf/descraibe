@@ -1411,7 +1411,7 @@ def _start_person_stage(job_id: str, phase: str, body: dict | None = None):
         return JSONResponse({"error": "Video not available."}, status_code=400)
     try:
         if phase == "identities" and not stage_state.status(job["job_dir"])["tracking_ready"]:
-            raise review_artifacts.ReviewError("Bitte zuerst Tracking & Gesichter ausführen.", 409)
+            raise review_artifacts.ReviewError("Bitte zuerst Tracking ausführen.", 409)
         sm.begin_person_stage(job_id, phase)
     except review_artifacts.ReviewError as exc:
         return JSONResponse({"error": str(exc)}, status_code=exc.status)

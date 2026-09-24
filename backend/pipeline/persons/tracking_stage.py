@@ -70,7 +70,7 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
             counts["frames"] += 1
             number = counts["frames"]
             if progress_cb and (number % max(1, round(fps)) == 0 or number == total):
-                progress_cb(f"Tracking & Gesichter: Frame {number}/{total}", number, total)
+                progress_cb(f"Tracking: Frame {number}/{total}", number, total)
             if (number - 1) % stride != 0:
                 continue
             ok, frame = capture.retrieve()
