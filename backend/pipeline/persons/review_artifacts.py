@@ -176,6 +176,10 @@ class Artifacts:
         excluded_crop_ids = set() if include_excluded else {row["crop_id"] for row in all_evidence if row["excluded"]}
         fallback = [{**crop, "face_id": None, "excluded": False, "evidence_status": "fallback"}
                     for crop in self.by_track[track_id] if crop["crop_id"] not in excluded_crop_ids]
+        # Reuse original tracking fallbacks, including jobs with older identity copies.
+        tracking_fallbacks = [crop for crop in fallback if crop["crop_type"] == "tracking_fallback"]
+        if tracking_fallbacks:
+            return self._sample(tracking_fallbacks, limit)
         # Tracking and Identity may contain a fallback crop of the same frame.
         unique_frames = {crop["frame_number"]: crop for crop in fallback}
         return self._sample(list(unique_frames.values()), limit)
@@ -185,7 +189,9 @@ class Artifacts:
         evidence = self.evidence_by_track[track_id]
         if evidence:
             return [{**row, "evidence_status": "retinaface"} for row in evidence]
-        return self.review_crops(track_id, limit=5, include_excluded=True)
+        # Keep the original tracking images stable across splits and identity runs.
+        return [{**crop, "face_id": None, "excluded": False, "evidence_status": "fallback"}
+                for crop in self.by_track[track_id] if crop["crop_type"] == "tracking_fallback"]
 
 
 def load(job_dir: str | Path) -> Artifacts:
@@ -208,45 +214,6 @@ def load_tracking(job_dir: str | Path) -> Artifacts:
         raise
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise ReviewError("Die Tracking-Daten konnten nicht gelesen werden.", 409) from exc
-
-
-def read_preview_frame(video_path: str | Path, frame_number: int):
-    """Read a 1-based review frame; retry sequentially if seeking visibly fails.
-
-    Reported positions cannot prove pixel accuracy for every codec/container.
-    This is only used for previews, never for ML or persisted crop selection.
-    """
-    import cv2
-
-    if frame_number < 1:
-        raise ReviewError("Originalframe nicht verfügbar.", 404)
-    capture = cv2.VideoCapture(str(video_path))
-    try:
-        try:
-            if capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number - 1):
-                ok, frame = capture.read()
-                position = capture.get(cv2.CAP_PROP_POS_FRAMES)
-                if ok and frame is not None and abs(position - frame_number) < 0.5:
-                    return frame
-        except cv2.error:
-            pass
-    finally:
-        capture.release()
-
-    # Reopen rather than relying on another seek to reset a problematic decoder.
-    capture = cv2.VideoCapture(str(video_path))
-    try:
-        for _ in range(frame_number):
-            if not capture.grab():
-                raise ReviewError("Originalframe nicht verfügbar.", 404)
-        ok, frame = capture.retrieve()
-        if not ok or frame is None:
-            raise ReviewError("Originalframe nicht verfügbar.", 404)
-        return frame
-    except cv2.error as exc:
-        raise ReviewError("Originalframe nicht verfügbar.", 404) from exc
-    finally:
-        capture.release()
 
 
 # Only read endpoints use these instances. Writers keep using fresh load() data.

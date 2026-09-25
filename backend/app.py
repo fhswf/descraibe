@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException, Body
-from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -1468,34 +1468,6 @@ def save_face_review(job_id: str, body: dict = Body(...)):
     except review_artifacts.ReviewError as exc:
         return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
-
-@app.get("/api/jobs/{job_id}/person-analysis/tracking-frame/{source_track_id}/{frame_number}")
-def tracking_frame_preview(job_id: str, source_track_id: int, frame_number: int, analysis_id: str):
-    """Body fallback for a logical segment. Encoded in RAM, never written to disk."""
-    job = sm.get_job(job_id)
-    if not job:
-        raise HTTPException(404, ERR_UNKNOWN_JOB)
-    from backend.pipeline.persons import track_segments
-    try:
-        data = review_artifacts.load_tracking(job["job_dir"])
-        if data.analysis_id != analysis_id:
-            raise review_artifacts.ReviewError("Analyselauf wurde geändert. Bitte neu laden.", 409)
-        row = next((r for r in track_segments.timeline(str(data.root)).get(source_track_id, []) if r["frame_number"] == frame_number), None)
-        if row is None:
-            raise review_artifacts.ReviewError("Trackingframe nicht gefunden.", 404)
-        import cv2
-        frame = review_artifacts.read_preview_frame(job["video_path"], frame_number)
-        x1, y1, x2, y2 = map(round, row["bbox"])
-        height, width = frame.shape[:2]
-        crop = frame[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
-        if not crop.size:
-            raise review_artifacts.ReviewError("Personencrop nicht verfügbar.", 404)
-        ok, encoded = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        if not ok:
-            raise review_artifacts.ReviewError("Personencrop nicht verfügbar.", 404)
-        return Response(encoded.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
-    except review_artifacts.ReviewError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
 @app.get("/api/jobs/{job_id}/persons")
 def get_persons(job_id: str):

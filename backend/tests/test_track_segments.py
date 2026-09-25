@@ -110,7 +110,7 @@ def test_nested_splits_undo_and_face_exclusions_survive_restart(staged_job):
     assert [t["track_id"] for t in resplit["tracks"] if t["source_track_id"] == 1] == [10, 11]
 
 
-def test_faceless_segments_get_up_to_five_fallbacks_and_no_review_jpegs(staged_job, monkeypatch):
+def test_faceless_segments_keep_saved_tracking_images(staged_job, monkeypatch):
     from fastapi.testclient import TestClient
     from backend import app, session_manager as sm
     job, video, _ = staged_job
@@ -118,30 +118,65 @@ def test_faceless_segments_get_up_to_five_fallbacks_and_no_review_jpegs(staged_j
     before = hash_outputs(stage_state.root(job) / 'person_crops')
     changed = split(job, first, tid=5)
     segments = [t for t in changed["tracks"] if t["source_track_id"] == 5]
-    assert [len(t["observations"]) for t in segments] == [4, 5]
+    original = next(t for t in first["tracks"] if t["track_id"] == 5)["observations"]
+    assert [len(t["observations"]) for t in segments] == [2, 3]
+    assert [c["crop_id"] for t in segments for c in t["observations"]] == [c["crop_id"] for c in original]
     for segment in segments:
-        frames = [c['frame_number'] for c in segment['observations']]
-        assert len(set(frames)) == min(5, segment["observation_count"])
-        assert frames[0] == segment['start_frame'] and frames[-1] == segment['end_frame']
-        assert max(b - a for a, b in zip(frames, frames[1:])) <= 7
-    assert all(c["face_id"] is None and c["preview_frame"] for t in segments for c in t["observations"])
+        assert all(segment["start_frame"] <= c["frame_number"] <= segment["end_frame"]
+                   for c in segment["observations"])
+    assert all(c["face_id"] is None and not c.get("preview_frame") for t in segments for c in t["observations"])
     monkeypatch.setattr(sm, "_BASE_DIR", job.parent)
     monkeypatch.setattr(sm, "_STORE", {})
     monkeypatch.setattr(app, "_DATASTORE", SimpleNamespace(enabled=False))
     client = TestClient(app.app)
     crop = segments[0]["observations"][0]
-    url = f"/api/jobs/job/person-analysis/tracking-frame/5/{crop['frame_number']}?analysis_id={changed['analysis_id']}"
+    url = f"/api/jobs/job/person-crops/{crop['crop_id']}?analysis_id={changed['analysis_id']}"
     assert client.get(url).status_code == 200
     assert client.get(url).headers["content-type"] == "image/jpeg"
+    assert client.get(url).content == (stage_state.root(job) / crop["crop_path"]).read_bytes()
     assert hash_outputs(stage_state.root(job) / 'person_crops') == before
     run_identities(video, job)
     data = review_artifacts.load(job)
+    assert hash_outputs(stage_state.root(job) / 'person_crops') == before
+    after_identity = stage_state.face_snapshot(job)
+    assert [t["observations"] for t in after_identity["tracks"] if t["source_track_id"] == 5] == [t["observations"] for t in segments]
     for track in segments:
         crops = data.review_crops(track["track_id"])
-        assert len(crops) == min(5, track["observation_count"])
+        assert [c["crop_id"] for c in crops] == [c["crop_id"] for c in track["observations"]]
         assert len({c["frame_number"] for c in crops}) == len(crops)
         assert all(track["start_frame"] <= c["frame_number"] <= track["end_frame"] for c in crops)
         assert all(data.crop_file(c["crop_id"]).is_file() for c in crops)
+
+
+def test_faceless_repeated_split_undo_and_restart_keep_original_images(staged_job):
+    job, video, _ = staged_job
+    first = run_tracking(video, job)
+    original = next(t for t in first["tracks"] if t["track_id"] == 5)["observations"]
+    before = hash_outputs(stage_state.root(job) / "person_crops")
+    changed = split(job, first, tid=5, frame=original[1]["frame_number"])
+    right = next(t for t in changed["tracks"] if t["source_track_id"] == 5 and len(t["observations"]) > 1)
+    changed = split(job, changed, tid=right["track_id"], frame=right["observations"][1]["frame_number"])
+    parts = [t for t in changed["tracks"] if t["source_track_id"] == 5]
+    assert [c["crop_id"] for t in parts for c in t["observations"]] == [c["crop_id"] for c in original]
+    assert all(not t["split_options"] for t in parts if len(t["observations"]) == 1)
+    script = "import sys,json; from backend.pipeline.persons.stage_state import face_snapshot; print(json.dumps(face_snapshot(sys.argv[1])))"
+    reloaded = json.loads(subprocess.run([sys.executable, "-c", script, str(job)], capture_output=True, text=True, check=True).stdout)
+    assert reloaded == changed
+    undone = stage_state.save_faces(job, {"version": changed["version"], "track_changes": [{"action": "undo_split", "source_track_id": 5}]})
+    assert next(t for t in undone["tracks"] if t["track_id"] == 5)["observations"] == original
+    assert hash_outputs(stage_state.root(job) / "person_crops") == before
+
+
+def test_segment_without_saved_images_has_no_preview_or_split_options(staged_job):
+    job, video, _ = staged_job
+    first = run_tracking(video, job)
+    # API/older states can split at tracking frames not offered by the UI.
+    changed = split(job, first, tid=5, frame=8)
+    right = next(t for t in changed["tracks"] if t["source_track_id"] == 5 and t["start_frame"] == 8)
+    changed = split(job, changed, tid=right["track_id"], frame=15)
+    empty = next(t for t in changed["tracks"] if t["source_track_id"] == 5 and t["start_frame"] == 8)
+    assert empty["observations"] == []
+    assert empty["split_options"] == []
 
 
 def test_split_can_leave_child_without_saved_face(staged_job):

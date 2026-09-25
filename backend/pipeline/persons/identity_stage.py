@@ -144,7 +144,7 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
     needs_fallback = {
         track["track_id"] for track in tracks
         if not track["excluded"] and track["track_id"] not in logical_has_face
-        and (track["is_split"] or track["source_track_id"] in source_has_usable_face)
+        and track["source_track_id"] in source_has_usable_face
     }
     refresh_identity_fallbacks(video_path, base, tracks, needs_fallback, float(metadata["fps"]), progress_cb)
     stage_state.write_csv(base / "face_observations.csv", face_rows, face_fields)

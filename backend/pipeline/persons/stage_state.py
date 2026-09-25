@@ -102,14 +102,6 @@ def face_snapshot(job_dir):
         evidence = [row for row in data.evidence_by_track[track["track_id"]] if row["usable"]]
         observations = data.tracking_crops(track["track_id"])
         rows = [row for row in frames.get(track["source_track_id"], []) if track["start_frame"] <= row["frame_number"] <= track["end_frame"]]
-        if track["is_split"] and not evidence:
-            observations = [{
-                "crop_id": -row["frame_number"], "track_id": track["track_id"], "source_track_id": track["source_track_id"],
-                "frame_number": row["frame_number"], "timestamp_s": (row["frame_number"] - 1) / metadata["fps"],
-                "width": max(1, round(row["bbox"][2]) - round(row["bbox"][0])),
-                "height": max(1, round(row["bbox"][3]) - round(row["bbox"][1])),
-                "face_bbox": None, "face_id": None, "excluded": False, "evidence_status": "fallback", "preview_frame": True,
-            } for row in track_segments.spaced(rows)]
         result.append({
             **track, "quality_face_count": len(evidence), "observations": observations,
             "split_options": track_segments.split_options(rows, [row["frame_number"] for row in observations], metadata["fps"]),

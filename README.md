@@ -497,6 +497,3 @@ Additional person-review tests (from the repository root):
 cd frontend
 node --test --test-concurrency=1 tests/*.test.mjs
 ```
-
-The person-stage browser test `backend/tests/person_stages_browser.cjs` uses
-`backend/tests/person_review_server.py`; see those files for setup.

@@ -19,14 +19,20 @@ function TrackingPanel({ jobId }: { jobId: string }) {
     const [refresh, setRefresh] = useState(0);
     const dirty = Object.keys(pending).length + Object.keys(splits).length + Object.keys(trackExcludes).length > 0;
     const running = jobData?.status === 'running';
+    const trackingReady = jobData?.person_stages?.tracking_ready === true;
     useEffect(() => {
+        if (!trackingReady) {
+            setSnapshot(null); setError(''); setOpen(false); setEnlarged(null);
+            setPending({}); setSplits({}); setTrackExcludes({});
+            return;
+        }
         if (running || dirty) return;
         const controller = new AbortController();
         fetch(`/api/jobs/${jobId}/person-analysis/tracking`, { signal: controller.signal, cache: 'no-store' })
-            .then(async res => { const data = await res.json(); if (!res.ok) throw new Error(data.error || 'Tracking-Daten nicht verfügbar.'); setSnapshot(data); setError(''); })
+            .then(async res => { const data = await res.json(); if (!res.ok) throw new Error(data.error || 'Tracking-Daten nicht verfügbar.'); if (!controller.signal.aborted) { setSnapshot(data); setError(''); } })
             .catch(err => { if (!controller.signal.aborted) setError(err.message); });
         return () => controller.abort();
-    }, [jobId, jobData?.person_stages?.tracking_revision, running, dirty, refresh]);
+    }, [jobId, jobData?.person_stages?.tracking_revision, trackingReady, running, dirty, refresh]);
     useEffect(() => {
         if (!open) return;
         const previous = document.body.style.overflow;

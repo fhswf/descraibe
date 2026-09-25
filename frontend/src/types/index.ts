@@ -116,7 +116,7 @@ export interface PersonTrack {
 }
 
 export interface PersonCrop {
-  source_track_id?: number; preview_frame?: boolean;
+  source_track_id?: number;
   crop_id: number; track_id: number; frame_number: number; timestamp_s: number;
   width: number; height: number; face_bbox: [number, number, number, number] | null;
   face_id: number | null; excluded: boolean;

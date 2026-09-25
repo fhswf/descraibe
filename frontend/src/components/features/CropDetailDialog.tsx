@@ -2,9 +2,7 @@ import { useState } from 'react';
 import type { PersonCrop } from '../../types';
 
 function source(crop: PersonCrop, jobId: string, analysisId: string) {
-    return crop.preview_frame
-        ? `/api/jobs/${jobId}/person-analysis/tracking-frame/${crop.source_track_id}/${crop.frame_number}?analysis_id=${encodeURIComponent(analysisId)}`
-        : `/api/jobs/${jobId}/person-crops/${crop.crop_id}?analysis_id=${encodeURIComponent(analysisId)}`;
+    return `/api/jobs/${jobId}/person-crops/${crop.crop_id}?analysis_id=${encodeURIComponent(analysisId)}`;
 }
 
 export function CropImage({ crop, jobId, analysisId }: { crop: PersonCrop; jobId: string; analysisId: string }) {
