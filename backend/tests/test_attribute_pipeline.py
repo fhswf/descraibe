@@ -100,10 +100,10 @@ def test_height_boundary_and_person_wide_fallback(tmp_path, height, expected):
     path = tmp_path / 'crop.jpg'
     path.write_bytes(cv2.imencode('.jpg', np.zeros((20, 20, 3), np.uint8))[1].tobytes())
     def crop(cid, tid, size):
-        return dict(crop_id=cid, track_id=tid, frame_number=cid,
+        return dict(crop_id=cid, track_id=tid, source_track_id=tid, frame_number=cid,
                     person_bbox=[30, 30, 50, 30+size], face_bbox=[1, 1, 5, 5])
     data = SimpleNamespace(
-        persons={1: {}, 2: {}}, assignments={1: 1, 2: 1, 3: 2},
+        persons={1: {}, 2: {}}, assignments={1: 1, 2: 1, 3: 2}, faces=[],
         tracks={tid: {'excluded': False} for tid in (1, 2, 3)},
         by_track={1: [crop(1, 1, height)], 2: [crop(2, 2, height)], 3: [crop(3, 3, 10)]},
         crop_file=lambda cid: path)
@@ -128,14 +128,14 @@ def test_small_fallback_keeps_face_preference_score_and_exclusions(tmp_path):
     path = tmp_path / 'crop.jpg'
     path.write_bytes(cv2.imencode('.jpg', np.zeros((20, 20, 3), np.uint8))[1].tobytes())
     def crop(cid, tid, size, face):
-        return dict(crop_id=cid, track_id=tid, frame_number=cid,
+        return dict(crop_id=cid, track_id=tid, source_track_id=tid, frame_number=cid,
                     person_bbox=[30, 30, 50, 30+size], face_bbox=[1, 1, 5, 5] if face else None,
-                    excluded=True, face_usable=False)
+                    face_usable=False)
     def read(cid):
         assert cid not in (5, 6)  # excluded and unassigned tracks never participate
         return path
     data = SimpleNamespace(
-        persons={1: {}}, assignments={1: 1, 2: 1, 3: 1, 4: None},
+        persons={1: {}}, assignments={1: 1, 2: 1, 3: 1, 4: None}, faces=[],
         tracks={tid: {'excluded': tid == 3} for tid in (1, 2, 3, 4)},
         by_track={1: [crop(1, 1, 14, False), crop(2, 1, 8, True), crop(3, 1, 10, True)],
                   2: [crop(4, 2, 9, False)], 3: [crop(5, 3, 14, True)], 4: [crop(6, 4, 14, True)]},
@@ -148,20 +148,44 @@ def test_small_fallback_keeps_face_preference_score_and_exclusions(tmp_path):
     assert attribute_selection.select_existing(data, 100, 100) == {1: []}
 
 
-def test_face_exclusion_retains_crop_but_invalidates_run(attribute_job):
+def test_face_exclusion_filters_attribute_crop_and_invalidates_run(attribute_job):
     job, video, _ = attribute_job
     data = attribute_state.source(job)
-    before = attribute_selection.select_existing(data, 200, 100)
     faces = stage_state.face_snapshot(job)
+    excluded = faces['tracks'][0]['observations'][0]
     stage_state.save_faces(job, {'version': faces['version'], 'face_exclusions': [
-        {'face_id': faces['tracks'][0]['observations'][0]['face_id'], 'excluded': True}]})
+        {'face_id': excluded['face_id'], 'excluded': True}]})
     from backend.pipeline.persons import review_artifacts
     after_data = review_artifacts.load_tracking(job)
     # Only the face flag changed; use the previous assignment to compare candidates.
     after_data.persons, after_data.assignments = data.persons, data.assignments
-    assert attribute_selection.select_existing(after_data, 200, 100) == before
+    selected = attribute_selection.select_existing(after_data, 200, 100)
+    assert selected[1]
+    assert all(c['frame_number'] != excluded['frame_number'] for c in selected[1])
+    assert after_data.crop_file(excluded['crop_id']).is_file()
     with pytest.raises(ReviewError):
         attribute_stage.run_attributes(video, job)
+
+
+@pytest.mark.parametrize('height', [20, 10])
+def test_excluded_observation_blocks_duplicate_fallback_but_not_other_frames(tmp_path, height):
+    import cv2
+    import numpy as np
+    path = tmp_path / 'crop.jpg'
+    path.write_bytes(cv2.imencode('.jpg', np.zeros((20, 20, 3), np.uint8))[1].tobytes())
+    def crop(cid, frame):
+        return dict(crop_id=cid, track_id=6, source_track_id=1, frame_number=frame,
+                    person_bbox=[30, 30, 50, 30 + height], face_bbox=None)
+    def read(cid):
+        assert cid not in (1, 2)  # Original and replacement from excluded frame.
+        return path
+    data = SimpleNamespace(
+        persons={1: {}}, assignments={6: 1}, tracks={6: {'excluded': False}},
+        faces=[{'source_track_id': 1, 'frame_number': 29, 'excluded': True}],
+        by_track={6: [crop(1, 29), crop(2, 29), crop(3, 43)]}, crop_file=read)
+    assert [c['crop_id'] for c in attribute_selection.select_existing(data, 100, 100)[1]] == [3]
+    data.by_track[6] = data.by_track[6][:2]
+    assert attribute_selection.select_existing(data, 100, 100) == {1: []}
 
 
 def test_reference_scoring_and_five_chronological_representatives():

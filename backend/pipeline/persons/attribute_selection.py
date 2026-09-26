@@ -298,12 +298,17 @@ def select_existing(data, frame_width, frame_height, max_images=MAX_IMAGES_PER_P
 
 def _collect_candidates(data, frame_width, frame_height, person_ids, min_height_ratio):
     people = {person_id: {} for person_id in person_ids}
+    # A regenerated fallback may have a new crop ID for the same observation.
+    excluded_frames = {(face["source_track_id"], face["frame_number"])
+                       for face in data.faces if face["excluded"]}
     for track_id, crops in data.by_track.items():
         person_id = data.assignments[track_id]
         if person_id is None or person_id not in people or data.tracks[track_id]["excluded"]:
             continue
         groups, seen = [[], []], set()
         for crop in crops:
+            if (crop["source_track_id"], crop["frame_number"]) in excluded_frames:
+                continue
             if crop["frame_number"] in seen:
                 continue
             x1, y1, x2, y2 = crop["person_bbox"]
