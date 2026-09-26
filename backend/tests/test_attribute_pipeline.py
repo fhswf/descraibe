@@ -244,7 +244,7 @@ def test_split_segments_are_separate_candidates_and_recluster_removes_attributes
     assert attribute_state.snapshot(job)['persons'][0]['name'] == 'Anna'
 
 
-def test_quality_flags_do_not_filter_and_missing_jpeg_is_not_reconstructed(attribute_job):
+def test_quality_flags_do_not_filter_and_corrupt_jpeg_is_not_reconstructed(attribute_job):
     job, _, _ = attribute_job
     data = attribute_state.source(job)
     expected = attribute_selection.select_existing(data, 200, 100)

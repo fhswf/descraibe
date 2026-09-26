@@ -140,7 +140,7 @@ def test_missing_sharpness_in_old_jobs(job_dir):
     assert people(review.current(job_dir)) == {1: 1, 2: 25}
 
 
-def test_larger_face_wins_without_sharpness_ranking(ranked_job):
+def test_larger_face_wins_at_equal_confidence(ranked_job):
     data = artifacts.load(ranked_job)
     for c in data.observations.values():
         c['face_confidence'] = .9
@@ -171,7 +171,7 @@ def test_invalid_face_geometry_cannot_win(ranked_job, bbox):
     assert people(review.project(data))[1] == 1
 
 
-def test_missing_best_jpeg_does_not_affect_normalization(ranked_job):
+def test_missing_best_jpeg_selects_an_existing_alternative(ranked_job):
     data = artifacts.load(ranked_job)
     data.crop_file(6).unlink()
     data.observations[6]['blur_score'] = 1e100

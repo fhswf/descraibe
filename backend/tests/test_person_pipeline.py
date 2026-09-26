@@ -87,7 +87,7 @@ def test_person_count_comes_from_current_files(current_api):
 
 
 @pytest.mark.parametrize("operation", ["metadata", "merge", "delete"])
-def test_current_person_edits_survive_restart(current_api, operation):
+def test_current_person_edits_survive_job_cache_clear(current_api, operation):
     client, sm = current_api
     version = client.get("/api/jobs/job/persons").json()["version"]
     if operation == "metadata":

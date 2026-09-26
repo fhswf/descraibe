@@ -19,7 +19,7 @@ const path = require('node:path');
       if (request.method() === 'POST' && request.url().endsWith('/track-assignments')) batches.push(request.postDataJSON());
     });
     const data = await (await page.request.get(`${base}/api/jobs/job/persons`)).json();
-    assert.equal(data.revision, 0, 'Requires a fresh isolated fixture');
+    assert.equal(data.revision, 1, 'Requires a fresh isolated fixture');
     assert.equal(data.tracks.length, 5);
     assert.equal(data.persons[0].name, 'Anna');
     await page.goto(`${base}/?job=job`);
@@ -29,7 +29,8 @@ const path = require('node:path');
     const track = id => page.getByRole('region', { name: `Track ${id}`, exact: true });
     await expect(track(1).getByRole('button', { name: /Crop vergrößern/ })).toHaveCount(1);
     await expect(track(1)).toContainText('1 FaceMoE-Vorschauen');
-    await expect(track(2).getByRole('button', { name: /Crop vergrößern/ })).toHaveCount(5);
+    // Der API-Endpunkt liefert standardmaessig bis zu acht gespeicherte Vorschauen.
+    await expect(track(2).getByRole('button', { name: /Crop vergrößern/ })).toHaveCount(8);
     await track(1).getByRole('button', { name: /Crop vergrößern/ }).first().click();
     const preview = page.getByRole('dialog', { name: 'Crop-Vorschau', exact: true });
     await expect(preview).toBeVisible();
@@ -43,7 +44,7 @@ const path = require('node:path');
     if (process.argv[3]) await page.screenshot({ path: path.join(process.argv[3], 'review-crop.png') });
     await preview.getByRole('button', { name: /Vorschau schließen/ }).click();
     console.log('PASS: current evidence/fallback previews and proportional bbox');
-    batches.length = 0;
+    // Zwei Zuordnungen vormerken; erst Speichern darf eine Anfrage senden.
     await track(1).getByRole('button', { name: 'Track zuweisen' }).click();
     const picker = page.getByRole('dialog', { name: 'Track 1 zuweisen', exact: true });
     await expect(picker.getByRole('img', { name: 'Beispiel Ben' })).toBeVisible();
@@ -77,9 +78,10 @@ const path = require('node:path');
     await page.reload();
     await page.locator('#step-nav > button').nth(6).click();
     await expect(page.getByRole('article', { name: 'Person 3', exact: true })).toContainText('Carla');
+    await expect(page.getByRole('article', { name: 'Person 3', exact: true })).toContainText('Moderatorin');
     console.log('PASS: unassigned/new person/leave unassigned, empty crops, name and function survive reload');
 
-    // Server conflict keeps the user's staged draft visible.
+    // Eine direkte API-Aenderung macht den offenen Entwurf veraltet.
     await page.getByRole('button', { name: 'Tracks von Person 3 verwalten', exact: true }).click();
     await track(4).getByRole('button', { name: 'Track zuweisen' }).click();
     await page.getByRole('button', { name: 'Ben (ID 2) auswählen' }).click();
@@ -103,7 +105,7 @@ const path = require('node:path');
     await track(1).getByRole('button', { name: 'Track zuweisen' }).click();
     await page.getByRole('button', { name: '+ Neue Person', exact: true }).click();
     await page.getByRole('button', { name: 'Alle Änderungen speichern' }).click();
-    await expect(page.getByRole('article', { name: 'Person 4', exact: true })).toBeVisible();
+    await expect(page.getByRole('article', { name: 'Person 1', exact: true })).toBeVisible();
     assert.deepEqual(oldRoutes, []);
     assert.deepEqual(errors, []);
     console.log('PASS: stale conflict retains draft, merge/delete move whole tracks, all-unassigned reload, recreation, no old face routes or page errors');

@@ -53,6 +53,9 @@ const path = require('node:path');
     assert(!dialogs.some(d => /bestätigen|Bereinigung/.test(d)), 'Optional reviews never interrupt Run All');
     console.log('PASS: Run All -> tracking -> identities -> attributes automatically, without manual review');
     const nav = async n => {
+      // Nach Neuladen erst auf den eingelesenen Job warten: Bildextraktion ist in dieser Fixture fertig.
+      // Sonst kann fetchJobData den gerade angeklickten Schritt wieder ueberschreiben.
+      await expect(page.locator('#step-nav > button').nth(4).locator('div').first()).toHaveClass(/border-green-500/);
       const review = page.getByRole('dialog', { name: 'Tracking-Review', exact: true });
       if (await review.count()) await review.getByRole('button', { name: 'Tracking-Review schließen', exact: true }).click();
       await page.locator('#step-nav > button').nth(n).click();
@@ -66,7 +69,8 @@ const path = require('node:path');
     };
     const attributeReview = await openAttributes();
     const attributes = attributeReview.getByRole('region', { name: 'Attribute Person 1', exact: true });
-    await expect(attributes.locator('input, select')).toHaveCount(13);
+    // Zwoelf Attribute sowie Name und Funktion ergeben 14 Eingabefelder.
+    await expect(attributes.locator('input, select')).toHaveCount(14);
     await expect(attributes.locator('img')).toHaveCount(1);
     await expect.poll(() => attributes.locator('img').evaluate(img => img.naturalWidth)).toBeGreaterThan(0);
     await attributes.getByLabel('Name Person 1', { exact: true }).fill('Anna');

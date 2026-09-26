@@ -7,7 +7,7 @@ from backend.tests.test_person_review import job_dir
 from backend.pipeline.persons import review_state, stage_state
 
 
-def test_current_job_rebuilds_persons_faces_and_attributes_after_restart(job_dir, monkeypatch):
+def test_current_job_rebuilds_persons_faces_and_attributes_after_job_cache_clear(job_dir, monkeypatch):
     from backend import session_manager as sm
     monkeypatch.setattr(sm, '_BASE_DIR', job_dir.parent)
     monkeypatch.setattr(sm, '_STORE', {})
