@@ -1,4 +1,4 @@
-"""Current person manifests replace persisted projections; legacy jobs still load."""
+"""Person manifests are authoritative; retired copies never restore persons."""
 import json
 
 import pandas as pd
@@ -55,16 +55,40 @@ def test_current_job_rebuilds_persons_faces_and_attributes_after_restart(job_dir
     assert sm.get_job('job')['faces'][0]['excluded'] is True
 
 
-def test_legacy_job_still_persists_persons_and_faces(tmp_path, monkeypatch):
+def test_old_person_copies_are_ignored_but_other_job_data_survives(tmp_path, monkeypatch):
     from backend import session_manager as sm
     monkeypatch.setattr(sm, '_BASE_DIR', tmp_path)
     monkeypatch.setattr(sm, '_STORE', {})
     job_id = sm.create_job()
-    persons = pd.DataFrame([{'person_id': 1, 'name': 'Legacy'}])
-    faces = [{'face_id': 1, 'person_id': 1}]
-    sm.update_job(job_id, persons_df=persons, faces=faces)
-    assert (tmp_path / job_id / 'persons_df.parquet').is_file()
+    folder = tmp_path / job_id
+    sm.update_job(job_id, video_path='video.mp4', transcript_srt='Existing transcript')
+    (folder / 'persons_df.parquet').write_bytes(b'invalid retired table')
+    saved = json.loads((folder / 'job.json').read_text())
+    saved['faces'] = [{'face_id': 999}]
+    saved['person_review'] = {'persons': [{'person_id': 999}]}
+    stage_state.atomic_write(folder / 'job.json', saved)
     sm._STORE.clear()
     restored = sm.get_job(job_id)
-    pd.testing.assert_frame_equal(restored['persons_df'], persons)
-    assert restored['faces'] == faces
+    assert restored['persons_df'] is None
+    assert restored['faces'] == []
+    assert 'person_review' not in restored
+    assert restored['video_path'] == 'video.mp4'
+    assert restored['transcript_srt'] == 'Existing transcript'
+    sm._persist_job(restored)
+    assert 'faces' not in json.loads((folder / 'job.json').read_text())
+    assert (folder / 'persons_df.parquet').read_bytes() == b'invalid retired table'
+
+
+def test_removed_tracking_files_clear_in_memory_projection(job_dir, monkeypatch):
+    from backend import session_manager as sm
+    monkeypatch.setattr(sm, '_STORE', {})
+    job = {'job_id': 'job', 'job_dir': str(job_dir), 'status': 'idle'}
+    sm._STORE['job'] = job
+    sm._apply_person_review(job)
+    assert not job['persons_df'].empty
+    (job_dir / 'person_analysis' / 'tracks.json').unlink()
+    refreshed = sm.get_job('job')
+    assert refreshed['persons_df'] is None
+    assert refreshed['faces'] == []
+    assert 'person_review' not in refreshed
+    assert '_person_review_signature' not in refreshed

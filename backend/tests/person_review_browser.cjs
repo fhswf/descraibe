@@ -42,7 +42,7 @@ const path = require('node:path');
     [0.1, 0.1, 0.3, 0.2].forEach((v, i) => assert(Math.abs(ratios[i] - v) < .01));
     if (process.argv[3]) await page.screenshot({ path: path.join(process.argv[3], 'review-crop.png') });
     await preview.getByRole('button', { name: /Vorschau schließen/ }).click();
-    console.log('PASS: legacy evidence/fallback previews and proportional bbox');
+    console.log('PASS: current evidence/fallback previews and proportional bbox');
     batches.length = 0;
     await track(1).getByRole('button', { name: 'Track zuweisen' }).click();
     const picker = page.getByRole('dialog', { name: 'Track 1 zuweisen', exact: true });

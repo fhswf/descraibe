@@ -29,7 +29,7 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
     cuts_from_images = stage_state.scene_cuts(job_dir)
     import cv2
 
-    from ..person_analysis import assign_faces_to_tracks
+    from .face_assignment import assign_faces_to_tracks
     from .appearances import TrackIntervalAccumulator
     from .detection import RFDETRPersonDetector
     from .face_detection import RetinaFaceDetector

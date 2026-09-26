@@ -99,7 +99,6 @@ function AttributesPanel({ jobId }: { jobId: string }) {
         <button disabled={running || saving || dirty || !jobData?.person_stages?.identities_ready || jobData?.person_stages?.identities_stale} onClick={() => void handleRunAttributes()}
             className="w-fit px-4 py-2 bg-violet-600 text-white rounded-lg disabled:opacity-50">Attribute ausführen</button>
         {snapshot && !snapshot.ready && <p>Noch kein Attributlauf vorhanden.</p>}
-        {jobData?.person_stages?.legacy && <p>Für Attribute dieses älteren Jobs bitte zuerst Tracking und Personenzuordnung ausführen. Vorhandene Ergebnisse bleiben verfügbar.</p>}
         {snapshot?.ready && snapshot.persons.length === 0 && <p>Keine zugeordneten Personen.</p>}
         {snapshot?.ready && <div className="p-4 border border-border-subtle rounded-lg flex flex-wrap justify-between items-center gap-3">
             <div><p className="font-medium">{snapshot.persons.length} Personen</p><p className="text-sm text-text-secondary">{stale ? 'Attributlauf veraltet' : 'Attributlauf vorhanden'} · {snapshot.persons.filter(person => person.status === 'ok').length} erfolgreich extrahiert</p></div>

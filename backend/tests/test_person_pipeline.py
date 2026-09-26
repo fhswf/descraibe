@@ -1,6 +1,6 @@
 """Integration tests for the person analysis pipeline endpoints."""
 import pytest
-import pandas as pd
+from backend.tests.test_person_review import job_dir
 
 
 class TestPersonsEndpoint:
@@ -69,199 +69,63 @@ class TestPersonHateoasLinks:
             sm.cleanup_job(job_id)
 
 
-class TestPersonJobResponse:
-    """Tests for persons_count in job response."""
-
-    def test_job_response_includes_persons_count(self):
-        """GET /api/jobs/{job_id} includes persons_count."""
-        from fastapi.testclient import TestClient
-        from backend.app import app
-        from backend import session_manager as sm
-
-        job_id = sm.create_job()
-        job = sm.get_job(job_id)
-
-        # Set persons_df
-        persons_df = pd.DataFrame([
-            {"person_id": 1, "name": "Person A"},
-            {"person_id": 2, "name": "Person B"},
-        ])
-        sm.update_job(job_id, persons_df=persons_df)
-
-        client = TestClient(app)
-        response = client.get(f"/api/jobs/{job_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["persons_count"] == 2
-
-        sm.cleanup_job(job_id)
-
-    def test_job_response_persons_count_zero_when_empty(self):
-        """GET /api/jobs/{job_id} includes persons_count=0 when no persons."""
-        from fastapi.testclient import TestClient
-        from backend.app import app
-        from backend import session_manager as sm
-
-        job_id = sm.create_job()
-        sm.update_job(job_id, persons_df=None)
-
-        client = TestClient(app)
-        response = client.get(f"/api/jobs/{job_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["persons_count"] == 0
-
-        sm.cleanup_job(job_id)
+@pytest.fixture
+def current_api(job_dir, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend.app import app
+    from backend import session_manager as sm
+    from backend.pipeline.persons import stage_state
+    monkeypatch.setattr(sm, "_BASE_DIR", job_dir.parent)
+    monkeypatch.setattr(sm, "_STORE", {})
+    stage_state.atomic_write(job_dir / "job.json", {"job_id": "job", "status": "idle"})
+    return TestClient(app), sm
 
 
-class TestSessionManagerPersons:
-    """Tests for session_manager persons_df persistence."""
-
-    def test_persons_df_in_df_fields(self):
-        """persons_df is listed in _DF_FIELDS."""
-        from backend import session_manager as sm
-
-        assert "persons_df" in sm._DF_FIELDS
-
-    def test_job_initializes_persons_df_none(self):
-        """create_job initializes persons_df to None."""
-        from backend import session_manager as sm
-
-        job_id = sm.create_job()
-        job = sm.get_job(job_id)
-        assert job["persons_df"] is None
-        sm.cleanup_job(job_id)
+def test_person_count_comes_from_current_files(current_api):
+    client, _ = current_api
+    assert client.get("/api/jobs/job").json()["persons_count"] == 2
 
 
-class TestPersonModifications:
-    """Tests for the new person editing, merging, and suggestions endpoints."""
+@pytest.mark.parametrize("operation", ["metadata", "merge", "delete"])
+def test_current_person_edits_survive_restart(current_api, operation):
+    client, sm = current_api
+    version = client.get("/api/jobs/job/persons").json()["version"]
+    if operation == "metadata":
+        response = client.post("/api/jobs/job/persons/1", json={"version": version, "name": "Anna neu", "function": "Moderatorin"})
+    elif operation == "merge":
+        response = client.post("/api/jobs/job/persons/merge", json={"version": version, "source_person_id": 1, "target_person_id": 2})
+    else:
+        response = client.request("DELETE", "/api/jobs/job/persons/1", json={"version": version})
+    assert response.status_code == 200
+    expected = response.json()
+    sm._STORE.clear()
+    restored = client.get("/api/jobs/job/persons").json()
+    assert restored["persons"] == expected["persons"]
+    assert restored["unassigned_tracks"] == expected["unassigned_tracks"]
+    if operation == "metadata":
+        assert restored["persons"][0]["name"] == "Anna neu"
+        assert restored["persons"][0]["function"] == "Moderatorin"
+    elif operation == "merge":
+        assert len(restored["persons"]) == 1
+        assert restored["persons"][0]["track_ids"] == [1, 2, 3]
+    else:
+        assert [p["person_id"] for p in restored["persons"]] == [2]
+        assert {t["track_id"] for t in restored["unassigned_tracks"]} == {1, 2, 4, 5}
 
-    def test_update_person_success(self):
-        """POST /api/jobs/{job_id}/persons/{person_id} updates name/function and ignores retired descriptions."""
-        from fastapi.testclient import TestClient
-        from backend.app import app
-        from backend import session_manager as sm
 
-        job_id = sm.create_job()
-        persons_df = pd.DataFrame([
-            {"person_id": 1, "name": "Old Name", "description": "Old Desc", "first_seen_ts": 1.0, "last_seen_ts": 2.0, "appearances_count": 1}
-        ])
-        sm.update_job(job_id, persons_df=persons_df)
+@pytest.mark.parametrize("method,path,body", [
+    ("POST", "/persons/1", {"name": "Anna"}),
+    ("POST", "/persons/merge", {"source_person_id": 1, "target_person_id": 2}),
+    ("DELETE", "/persons/1", {}),
+])
+def test_person_edits_require_current_analysis(current_api, job_dir, method, path, body):
+    client, _ = current_api
+    (job_dir / "person_analysis" / "persons.json").unlink()
+    response = client.request(method, "/api/jobs/job" + path, json=body)
+    assert response.status_code == 409
 
-        client = TestClient(app)
-        response = client.post(
-            f"/api/jobs/{job_id}/persons/1",
-            json={"name": "New Name", "function": "Moderatorin", "description": "Ignored"}
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["name"] == "New Name"
-        assert data["function"] == "Moderatorin"
-        assert "description" not in data
 
-        # Force clear test memory cache so it reads from disk
-        sm._STORE.pop(job_id, None)
-
-        # Verify state in session manager
-        updated_job = sm.get_job(job_id)
-        df = updated_job["persons_df"]
-        assert df.iloc[0]["name"] == "New Name"
-        assert df.iloc[0]["function"] == "Moderatorin"
-        assert "description" not in df.columns
-
-        sm.cleanup_job(job_id)
-
-    def test_merge_persons_success(self):
-        """POST /api/jobs/{job_id}/persons/merge merges two persons."""
-        import json
-        from fastapi.testclient import TestClient
-        from backend.app import app
-        from backend import session_manager as sm
-
-        job_id = sm.create_job()
-        persons_df = pd.DataFrame([
-            {
-                "person_id": 1, 
-                "name": "Person A", 
-                "description": "Desc A", 
-                "first_seen_ts": 10.0, 
-                "last_seen_ts": 12.0, 
-                "appearances_count": 2,
-                "face_ids": "[1, 2]",
-                "attributes": '{"top_color": "rot"}',
-                "representative_image": "img1.jpg",
-                "representative_crop": "crop1.jpg"
-            },
-            {
-                "person_id": 2, 
-                "name": "Person B", 
-                "description": "Desc B", 
-                "first_seen_ts": 5.0, 
-                "last_seen_ts": 15.0, 
-                "appearances_count": 3,
-                "face_ids": "[3]",
-                "attributes": '{"bottom_color": "blau"}',
-                "representative_image": "img2.jpg",
-                "representative_crop": "crop2.jpg"
-            }
-        ])
-        sm.update_job(job_id, persons_df=persons_df)
-
-        client = TestClient(app)
-        response = client.post(
-            f"/api/jobs/{job_id}/persons/merge",
-            json={"source_person_id": 1, "target_person_id": 2}
-        )
-        assert response.status_code == 200
-        assert response.json()["status"] == "ok"
-
-        # Force clear test memory cache so it reads from disk
-        sm._STORE.pop(job_id, None)
-
-        updated_job = sm.get_job(job_id)
-        df = updated_job["persons_df"]
-        # Person 1 (source) should be removed
-        assert len(df) == 1
-        merged = df.iloc[0]
-        assert merged["person_id"] == 2
-        assert merged["appearances_count"] == 5
-        assert merged["first_seen_ts"] == 5.0
-        assert merged["last_seen_ts"] == 15.0
-        # face_ids combined
-        fids = set(json.loads(merged["face_ids"]))
-        assert fids == {1, 2, 3}
-        # attributes combined
-        attrs = json.loads(merged["attributes"])
-        assert attrs.get("top_color") == "rot"
-        assert attrs.get("bottom_color") == "blau"
-
-        sm.cleanup_job(job_id)
-
-    def test_delete_person_success(self):
-        """DELETE /api/jobs/{job_id}/persons/{person_id} deletes the person."""
-        from fastapi.testclient import TestClient
-        from backend.app import app
-        from backend import session_manager as sm
-
-        job_id = sm.create_job()
-        persons_df = pd.DataFrame([
-            {"person_id": 1, "name": "Person A", "description": "Desc A", "first_seen_ts": 1.0, "last_seen_ts": 2.0, "appearances_count": 1},
-            {"person_id": 2, "name": "Person B", "description": "Desc B", "first_seen_ts": 3.0, "last_seen_ts": 4.0, "appearances_count": 2}
-        ])
-        sm.update_job(job_id, persons_df=persons_df)
-
-        client = TestClient(app)
-        response = client.delete(f"/api/jobs/{job_id}/persons/1")
-        assert response.status_code == 200
-        assert response.json()["status"] == "ok"
-
-        # Force clear test memory cache so it reads from disk
-        sm._STORE.pop(job_id, None)
-
-        # Verify state in session manager
-        updated_job = sm.get_job(job_id)
-        df = updated_job["persons_df"]
-        assert len(df) == 1
-        assert df.iloc[0]["person_id"] == 2
-
-        sm.cleanup_job(job_id)
+def test_person_projection_is_not_a_persisted_table():
+    from backend import session_manager as sm
+    assert "persons_df" not in sm._DF_FIELDS
+    assert "faces" not in sm._JSON_FIELDS

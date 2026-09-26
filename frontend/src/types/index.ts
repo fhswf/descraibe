@@ -39,7 +39,7 @@ export interface JobData {
   persons_analyzed?: boolean;
   persons_version?: string;
   attribute_stage?: { ready: boolean; stale: boolean; version: string | null; error?: string };
-  person_stages?: { tracking_interval_seconds?: number | null; similarity_threshold?: number | null; max_images?: number | null; tracking_ready: boolean; identities_ready: boolean; identities_stale: boolean; legacy: boolean; tracking_revision?: number | null; identity_revision?: number | null };
+  person_stages?: { tracking_interval_seconds?: number | null; similarity_threshold?: number | null; max_images?: number | null; tracking_ready: boolean; identities_ready: boolean; identities_stale: boolean; tracking_revision?: number | null; identity_revision?: number | null };
   unassigned_tracks_count?: number;
   gpt_records_broadcast?: unknown;
   gpt_records_directors?: unknown;
@@ -112,7 +112,7 @@ export interface PersonTrack {
   start_s: number; end_s: number; crop_count: number;
   start_frame: number | null; end_frame: number | null;
   facemoe_observation_count: number; review_observation_count: number;
-  review_mode: 'facemoe' | 'retinaface' | 'legacy_unverified' | 'fallback';
+  review_mode: 'facemoe' | 'retinaface' | 'fallback';
 }
 
 export interface PersonCrop {
@@ -120,13 +120,13 @@ export interface PersonCrop {
   crop_id: number; track_id: number; frame_number: number; timestamp_s: number;
   width: number; height: number; face_bbox: [number, number, number, number] | null;
   face_id: number | null; excluded: boolean;
-  evidence_status: 'facemoe' | 'retinaface' | 'legacy_unverified' | 'fallback';
+  evidence_status: 'facemoe' | 'retinaface' | 'fallback';
 }
 
 export interface PersonReview {
   persons: PersonData[]; tracks: PersonTrack[]; unassigned_tracks: PersonTrack[];
   version: string; analysis_id: string; revision: number; review_available: boolean; warning?: string;
-  excluded_face_observations: number[]; legacy_evidence: boolean;
+  excluded_face_observations: number[];
   tracking_ready?: boolean; identities_ready?: boolean; identities_stale?: boolean;
 }
 

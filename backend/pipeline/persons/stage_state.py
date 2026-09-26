@@ -87,7 +87,7 @@ def status(job_dir):
         "max_images": attributes.get("max_images") if attributes else None,
         "tracking_ready": tracks is not None, "identities_ready": identity_revision is not None,
         "attributes_ready": attributes_ready, "identities_stale": identities_stale,
-        "tracking_revision": tracking_revision, "identity_revision": identity_revision, "legacy": False,
+        "tracking_revision": tracking_revision, "identity_revision": identity_revision,
     }
 
 

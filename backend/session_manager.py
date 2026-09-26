@@ -87,14 +87,13 @@ _LOCK = threading.Lock()
 
 # ── Field classification ───────────────────────────────────────────────────────
 
-# DataFrame fields – stored as Parquet, except derived persons for current jobs.
+# DataFrame fields persisted as Parquet; person projections are rebuilt from manifests.
 _DF_FIELDS: List[str] = [
     "pauses_df",
     "speech_df",
     "segments_df",
     "slots_df",
     "slot_map_df",
-    "persons_df",
 ]
 
 # Scalar fields – stored in job.json.
@@ -119,7 +118,6 @@ _JSON_FIELDS: List[str] = [
     "gpt_records_broadcast",
     "gpt_records_directors",
     "final_mp4_path",
-    "faces",
     "persons_analysis_running",
     "persons_phase",
 ]
@@ -128,7 +126,12 @@ _JSON_FIELDS: List[str] = [
 
 def _apply_person_review(job: Dict[str, Any], force: bool = False) -> None:
     """Refresh derived caches from the current person_analysis files."""
-    if job.get("persons_analysis_running") or not review_artifacts.available(job["job_dir"]):
+    if job.get("persons_analysis_running"):
+        return
+    if not review_artifacts.available(job["job_dir"]):
+        job.update(persons_df=None, faces=[])
+        for key in ("person_review", "person_review_error", "_person_review_signature"):
+            job.pop(key, None)
         return
     root = Path(job["job_dir"]) / "person_analysis"
     paths = [root / name for name in review_artifacts.FILES]
@@ -221,26 +224,19 @@ def _persist_job(job: Dict[str, Any]) -> None:
     """Write job state to disk (must be called while _LOCK is held or with a copy)."""
     job_dir = Path(job["job_dir"])
     job_dir.mkdir(parents=True, exist_ok=True)
-    current_persons = review_artifacts.available(job_dir)
 
     # Save DataFrames as Parquet
     for field in _DF_FIELDS:
-        if field == "persons_df" and current_persons:
-            continue  # Rebuilt from person_analysis/; legacy jobs keep their copy.
         val = job.get(field)
         parquet_path = job_dir / f"{field}.parquet"
         if val is not None and isinstance(val, pd.DataFrame):
             try:
-                if field == "persons_df":
-                    val = val.drop(columns=["description"], errors="ignore")
                 val.to_parquet(str(parquet_path), index=True, engine="pyarrow")
             except Exception as exc:
                 log.warning("Could not save %s.parquet: %s", field, exc)
 
     # Save scalar fields as JSON (atomic write via tmp file)
     sidecar: Dict[str, Any] = {field: job.get(field) for field in _JSON_FIELDS}
-    if current_persons:
-        sidecar.pop("faces", None)
     try:
         tmp = job_dir / "job.json.tmp"
         tmp.write_text(json.dumps(sidecar, ensure_ascii=False, default=str), encoding="utf-8")
@@ -263,21 +259,17 @@ def _load_job_from_disk(job_dir: Path) -> Optional[Dict[str, Any]]:
 
     job: Dict[str, Any] = {field: None for field in _JSON_FIELDS + _DF_FIELDS}
     job.update(sidecar)
-    current_persons = review_artifacts.available(job_dir)
-    if current_persons:
-        job["faces"] = None  # Ignore old copies; _apply_person_review rebuilds both.
-        job["persons_df"] = None
+    # Never restore retired person copies from job.json or Parquet.
+    job.update(persons_df=None, faces=[])
+    for key in ("person_review", "person_review_error", "_person_review_signature"):
+        job.pop(key, None)
 
     # Reload DataFrames from Parquet
     for field in _DF_FIELDS:
-        if field == "persons_df" and current_persons:
-            continue
         parquet_path = job_dir / f"{field}.parquet"
         if parquet_path.exists():
             try:
                 job[field] = pd.read_parquet(str(parquet_path), engine="pyarrow")
-                if field == "persons_df":
-                    job[field] = job[field].drop(columns=["description"], errors="ignore")
             except Exception as exc:
                 log.warning("Could not load %s: %s", parquet_path, exc)
 

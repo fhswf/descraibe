@@ -1,8 +1,8 @@
 """Loopback-only Playwright fixture. Never opens existing production jobs.
 
-python backend/tests/person_review_server.py --build <frontend-build> --data-dir <scratch> [--legacy]
+python backend/tests/person_review_server.py --build <frontend-build> --data-dir <scratch> [--review-only]
 node backend/tests/person_stages_browser.cjs http://127.0.0.1:5181
-With --legacy, use person_review_browser.cjs instead.
+With --review-only, use person_review_browser.cjs instead.
 """
 import argparse
 import json
@@ -16,7 +16,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", required=True, type=Path)
     parser.add_argument("--data-dir", required=True, type=Path)
-    parser.add_argument("--legacy", action="store_true")
+    parser.add_argument("--review-only", action="store_true")
     parser.add_argument("--port", default=5181, type=int)
     args = parser.parse_args()
     base = args.data_dir / ("review-fixture-" + uuid.uuid4().hex[:8])
@@ -25,7 +25,7 @@ def main():
     import pytest
     patches = pytest.MonkeyPatch()
     tests = Path(__file__).parent
-    if args.legacy:
+    if args.review_only:
         job = runpy.run_path(str(tests / "test_person_review.py"))["job_dir"].__wrapped__(base)
         (job / "job.json").write_text(json.dumps({"job_id": "job", "status": "idle"}))
         import cv2

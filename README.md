@@ -341,6 +341,8 @@ The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICEN
 7. Current data is stored under `person_analysis/` in the job directory, without run history. Earlier changes invalidate dependent results.
 8. GPT prompts receive person names with Erstnennung/Folgebenennung flags. The free-text person description has been removed; Qwen attributes are not additionally included.
 
+Person results are loaded exclusively from `person_analysis/`; older person tables are ignored and require a new analysis. Other job results remain available.
+
 The existing settings dialog now includes **Personen**: tracking interval (default `0.233` seconds), clustering similarity threshold (default `0.214`; higher is stricter), and maximum attribute images per person (`1–5`, default `5`). Changes apply on the next execution of the respective stage; the dialog also shows the settings used for the current results.
 
 ### AD Naming Conventions
