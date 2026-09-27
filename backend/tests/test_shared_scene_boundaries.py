@@ -82,13 +82,11 @@ def test_saved_cuts_and_invalidation_survive_restart(staged_job, monkeypatch):
     before = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
     sm.update_job('job', scene_cut_frames=[31])
     assert before == {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
-    # Also invalidate any dependent current results and legacy projection.
+    # Also invalidate dependent person and attribute results.
     (root / 'persons.json').write_text('{}')
     (root / 'attributes.json').write_text('{}')
-    (job / 'persons_df.parquet').write_bytes(b'old projection')
     sm.update_job('job', scene_cut_frames=[15, 31])
     assert not root.exists()
-    assert not (job / 'persons_df.parquet').exists()
     sm._STORE.clear()
     restored = sm.get_job('job')
     assert restored['scene_cut_frames'] == [15, 31]

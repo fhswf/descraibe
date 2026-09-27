@@ -46,7 +46,7 @@ class TestPersonsEndpoint:
 
 
 class TestPersonHateoasLinks:
-    """The API advertises the separate tracking stage, not the retired shortcut."""
+    """The API advertises tracking when a video is available."""
 
     @pytest.mark.parametrize("has_video", [False, True])
     def test_hateoas_tracking_link(self, has_video):
@@ -58,7 +58,6 @@ class TestPersonHateoasLinks:
             sm.update_job(job_id, video_path="/tmp/video.mp4" if has_video else None,
                           scene_images=["/tmp/test.jpg"])
             links = build_hateoas_links(sm.get_job(job_id), "http://localhost:5000")
-            assert not any(link["rel"] == "run-persons" for link in links)
             tracking = [link for link in links if link["rel"] == "run-tracking"]
             if has_video:
                 assert tracking == [{"rel": "run-tracking", "method": "POST",

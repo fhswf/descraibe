@@ -176,7 +176,7 @@ class Artifacts:
         excluded_crop_ids = set() if include_excluded else {row["crop_id"] for row in all_evidence if row["excluded"]}
         fallback = [{**crop, "face_id": None, "excluded": False, "evidence_status": "fallback"}
                     for crop in self.by_track[track_id] if crop["crop_id"] not in excluded_crop_ids]
-        # Reuse original tracking fallbacks, including jobs with older identity copies.
+        # Prefer existing tracking fallbacks for the current logical segment.
         tracking_fallbacks = [crop for crop in fallback if crop["crop_type"] == "tracking_fallback"]
         if tracking_fallbacks:
             return self._sample(tracking_fallbacks, limit)

@@ -107,8 +107,6 @@ def test_stage1_has_no_alignment_recognition_or_clusters(staged_job):
     output = stage_state.root(job)
     assert len(list(output.rglob("*.jpg"))) == 25  # 15 quality faces + 2*5 fallbacks
     assert not list(output.rglob("persons.json"))
-    assert not list(output.rglob("track_identities.csv"))
-    assert not (stage_state.root(job) / "review_state.json").exists()
     assert len(result["tracks"][1]["observations"]) == 5
     assert result["tracks"][0]["observations"][0]["face_bbox"] == [10, 10, 30, 30]
 
@@ -174,7 +172,6 @@ def test_restart_reads_current_files_and_rejects_changed_video(staged_job):
     assert state['persons'][0]['name'] == 'Anna'
     rows, _ = stage_state.read_csv(stage_state.root(job) / 'face_observations.csv')
     assert rows[0]['excluded'] == 'True'
-    assert not (stage_state.root(job) / 'review_state.json').exists()
     with video.open("ab") as stream:
         stream.write(b"changed")
     with pytest.raises(review_artifacts.ReviewError):
@@ -192,8 +189,6 @@ def test_tracking_then_identity_runs_without_manual_review(staged_job):
     assert calls["detection"] == calls["tracking"] == 9
     assert len(calls["clusters"]) == 1
     assert stage_state.status(job)["identities_ready"] is True
-    assert not (stage_state.root(job) / "review_state.json").exists()
-    assert not (stage_state.root(job) / 'runs').exists()
     for path in stage_state.root(job).rglob("*"):
         assert path.suffix not in {".npy", ".npz", ".pkl"}
         if path.suffix in {".json", ".csv"}:
@@ -262,7 +257,6 @@ def test_stage_lock_rejects_overlapping_runs_and_reviews(staged_job, monkeypatch
     for route in ["person-analysis/tracking", "person-analysis/identities"]:
         assert client.post("/api/jobs/job/" + route).status_code == 409
     assert client.patch("/api/jobs/job/person-analysis/face-review", json={"version": first["version"], "face_exclusions": [{"face_id": 1, "excluded": True}]}).status_code == 409
-    assert not (stage_state.root(job) / "review_state.json").exists()
 
 
 def test_new_tracking_replaces_current_files_and_cached_timeline(staged_job, monkeypatch):

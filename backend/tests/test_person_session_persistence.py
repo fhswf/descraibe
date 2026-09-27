@@ -1,4 +1,4 @@
-"""Person manifests are authoritative; retired copies never restore persons."""
+"""Current person files rebuild the job overview after clearing its cache."""
 import json
 
 import pandas as pd
@@ -27,17 +27,6 @@ def test_current_job_rebuilds_persons_faces_and_attributes_after_job_cache_clear
     sm._persist_job(job)
     assert not (job_dir / 'persons_df.parquet').exists()
     assert 'faces' not in json.loads((job_dir / 'job.json').read_text())
-    # Existing stale copies must not even be decoded on restart, or rewritten.
-    stale = job_dir / 'persons_df.parquet'
-    stale.write_bytes(b'not a parquet file')
-    saved = json.loads((job_dir / 'job.json').read_text())
-    saved['faces'] = [{'face_id': 999}]
-    (job_dir / 'job.json').write_text(json.dumps(saved))
-    original_read = pd.read_parquet
-    def read(path, **kwargs):
-        assert not str(path).endswith('persons_df.parquet')
-        return original_read(path, **kwargs)
-    monkeypatch.setattr(pd, 'read_parquet', read)
     sm._STORE.clear()
     restored = sm.get_job('job')
     pd.testing.assert_frame_equal(restored['persons_df'], expected)
@@ -45,38 +34,13 @@ def test_current_job_rebuilds_persons_faces_and_attributes_after_job_cache_clear
     assert json.loads(restored['persons_df'].iloc[0]['attributes'])['hair_color'] == 'schwarz'
     pd.testing.assert_frame_equal(restored['slots_df'], job['slots_df'])
     sm._persist_job(restored)
-    assert stale.read_bytes() == b'not a parquet file'
     assert 'faces' not in json.loads((job_dir / 'job.json').read_text())
     assert canonical == {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
-    # A review invalidates Identity: old saved persons must not reappear.
+    # A face review invalidates the current identity results after reload.
     stage_state.save_faces(job_dir, {'version': 1, 'face_exclusions': [{'face_id': 1, 'excluded': True}]})
     sm._STORE.clear()
     assert sm.get_job('job')['persons_df'].empty
     assert sm.get_job('job')['faces'][0]['excluded'] is True
-
-
-def test_old_person_copies_are_ignored_but_other_job_data_survives(tmp_path, monkeypatch):
-    from backend import session_manager as sm
-    monkeypatch.setattr(sm, '_BASE_DIR', tmp_path)
-    monkeypatch.setattr(sm, '_STORE', {})
-    job_id = sm.create_job()
-    folder = tmp_path / job_id
-    sm.update_job(job_id, video_path='video.mp4', transcript_srt='Existing transcript')
-    (folder / 'persons_df.parquet').write_bytes(b'invalid retired table')
-    saved = json.loads((folder / 'job.json').read_text())
-    saved['faces'] = [{'face_id': 999}]
-    saved['person_review'] = {'persons': [{'person_id': 999}]}
-    stage_state.atomic_write(folder / 'job.json', saved)
-    sm._STORE.clear()
-    restored = sm.get_job(job_id)
-    assert restored['persons_df'] is None
-    assert restored['faces'] == []
-    assert 'person_review' not in restored
-    assert restored['video_path'] == 'video.mp4'
-    assert restored['transcript_srt'] == 'Existing transcript'
-    sm._persist_job(restored)
-    assert 'faces' not in json.loads((folder / 'job.json').read_text())
-    assert (folder / 'persons_df.parquet').read_bytes() == b'invalid retired table'
 
 
 def test_removed_tracking_files_clear_in_memory_projection(job_dir, monkeypatch):

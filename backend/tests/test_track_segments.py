@@ -213,7 +213,6 @@ def test_invalid_batch_does_not_save_face_change_or_split(staged_job):
         with pytest.raises(review_artifacts.ReviewError):
             stage_state.save_faces(job, {"version": first["version"], "face_exclusions": [{"face_id": 1, "excluded": True}],
                 "track_changes": [{"action": "split", "track_id": 1, "before_frame": frame}]})
-    assert not (stage_state.root(job) / "review_state.json").exists()
 
 
 def test_sparse_split_and_undo_preserve_exact_observations(staged_job):

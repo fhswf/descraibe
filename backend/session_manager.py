@@ -259,10 +259,8 @@ def _load_job_from_disk(job_dir: Path) -> Optional[Dict[str, Any]]:
 
     job: Dict[str, Any] = {field: None for field in _JSON_FIELDS + _DF_FIELDS}
     job.update(sidecar)
-    # Never restore retired person copies from job.json or Parquet.
+    # Initialize derived person data; rebuild it from person_analysis below.
     job.update(persons_df=None, faces=[])
-    for key in ("person_review", "person_review_error", "_person_review_signature"):
-        job.pop(key, None)
 
     # Reload DataFrames from Parquet
     for field in _DF_FIELDS:
@@ -381,7 +379,6 @@ def update_job(job_id: str, **kwargs) -> None:
             person_root = stage_state.root(job["job_dir"])
             if person_root.exists():
                 shutil.rmtree(person_root)
-            (Path(job["job_dir"]) / "persons_df.parquet").unlink(missing_ok=True)
             job.update(persons_df=None, faces=[], persons_phase=None)
             for key in ("person_review", "person_review_error", "_person_review_signature"):
                 job.pop(key, None)

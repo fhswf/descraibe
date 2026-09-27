@@ -81,7 +81,7 @@ export function TrackRow({ track, change, jobId, analysisId, onChoose, onUndo, o
         : change?.action === 'assign' ? `${persons.find(p => p.person_id === change.person_id)?.name || `Person ${change.person_id}`} (ID ${change.person_id})` : '';
     return <section className={`p-3 border rounded-lg ${change ? 'border-violet-500 bg-violet-500/10' : 'border-border-subtle bg-bg-card'}`} aria-label={`Track ${track.track_id}`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-            <div><h4 className="font-medium">Track {track.track_id}{track.is_split && ` · Segment von Track ${track.source_track_id}`}</h4><p className="text-xs text-text-muted">{track.start_s.toFixed(2)}–{track.end_s.toFixed(2)} s · {track.review_observation_count} {track.review_mode === 'facemoe' ? 'FaceMoE-Vorschauen' : track.review_mode === 'retinaface' ? 'Face-Beobachtungen' : track.review_mode === 'fallback' ? 'Fallback-Crops' : 'Legacy-Beobachtungen'} · Szene {track.scene_id}</p></div>
+            <div><h4 className="font-medium">Track {track.track_id}{track.is_split && ` · Segment von Track ${track.source_track_id}`}</h4><p className="text-xs text-text-muted">{track.start_s.toFixed(2)}–{track.end_s.toFixed(2)} s · {track.review_observation_count} {track.review_mode === 'facemoe' ? 'FaceMoE-Vorschauen' : track.review_mode === 'retinaface' ? 'Face-Beobachtungen' : 'Fallback-Crops'} · Szene {track.scene_id}</p></div>
             {showAssignments && <div className="flex gap-3 text-sm">
                 <button disabled={disabled} onClick={onChoose} className="px-3 py-1.5 bg-violet-600 text-white rounded-lg disabled:opacity-50">Track zuweisen</button></div>}
         </div>

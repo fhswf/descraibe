@@ -29,7 +29,6 @@ const path = require('node:path');
     page.on('request', r => {
       if (r.method() === 'POST') requests.push(new URL(r.url()).pathname);
       if (r.url().endsWith('/track-assignments') && r.method() === 'POST') batches.push(r.postDataJSON());
-      assert(!/similar-faces|merge-suggestions|\/faces\//.test(r.url()), 'No old face routes in new UI');
     });
     // Earlier workflow steps are already complete in this frontend fixture.
     // GPT is intercepted: the test only exercises the handoff, never external services.

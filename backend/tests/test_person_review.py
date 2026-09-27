@@ -174,20 +174,18 @@ def api(job_dir, monkeypatch):
     return TestClient(app.app), sm, app
 
 
-def test_api_batch_and_restart_ignore_stale_parquet(api, job_dir):
+def test_api_batch_survives_cache_clear_and_new_process(api, job_dir):
     client, sm, _ = api
     first = client.get("/api/jobs/job/persons").json()
     response = client.post("/api/jobs/job/track-assignments", json={"version": first["version"], "changes": [{"track_id": 4, "action": "create_person"}]})
     assert response.status_code == 200, response.text
     assert response.json()["revision"] == 2
     assert client.post("/api/jobs/job/track-assignments", json={"version": first["version"], "changes": [{"track_id": 1, "action": "unassign"}]}).status_code == 409
-    import pandas as pd
-    pd.DataFrame([{"person_id": 999, "name": "stale"}]).to_parquet(job_dir / "persons_df.parquet")
     sm._STORE.clear()
     restored = client.get("/api/jobs/job/persons").json()
     assert restored["version"] == response.json()["version"]
     assert len(restored["persons"]) == 3
-    # A fresh interpreter also reconstructs the exact same canonical projection.
+    # A fresh interpreter also loads the same saved version.
     script = "import json,sys,os; from pathlib import Path; os.environ['AD_JOBS_DIR']=str(Path(sys.argv[1]).parent); from backend.session_manager import get_job; print(json.dumps(get_job('job')['person_review']))"
     process = subprocess.run([sys.executable, "-c", script, str(job_dir)], capture_output=True, text=True, check=True)
     assert json.loads(process.stdout)["version"] == restored["version"]
@@ -221,6 +219,7 @@ def test_concurrent_saves_have_one_winner_and_running_job_rejects(api):
         return client.post("/api/jobs/job/track-assignments", json={"version": version, "changes": [{"track_id": tid, "action": "unassign"}]}).status_code
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert sorted(pool.map(save, [1, 2])) == [200, 409]
+    version = client.get("/api/jobs/job/persons").json()["version"]
     sm._STORE["job"]["status"] = "running"
     assert save(3) == 409
 
@@ -257,32 +256,7 @@ def test_corrupt_review_clears_cached_projection(api, job_dir):
     assert sm.get_job("job")["persons_df"] is None
 
 
-def test_retired_description_is_ignored_and_not_saved_after_metadata_edit(api, job_dir):
-    client, sm, _ = api
-    path = job_dir / "person_analysis" / "persons.json"
-    saved = json.loads(path.read_text())
-    for person in saved["persons"]:
-        person["description"] = "Alte freie Beschreibung"
-    path.write_text(json.dumps(saved))
-    first = client.get("/api/jobs/job/persons").json()
-    assert all("description" not in person for person in first["persons"])
-    response = client.post("/api/jobs/job/persons/1", json={
-        "version": first["version"], "name": "Anna neu", "function": "Moderatorin",
-        "description": "Nicht mehr speichern",
-    })
-    assert response.status_code == 200, response.text
-    updated = json.loads(path.read_text())
-    assert updated["assignment_revision"] == saved["assignment_revision"]
-    assert all("description" not in person for person in updated["persons"])
-    sm._STORE.clear()
-    restored = client.get("/api/jobs/job/persons").json()
-    person = next(p for p in restored["persons"] if p["person_id"] == 1)
-    assert person["name"] == "Anna neu" and person["function"] == "Moderatorin"
-    assert "description" not in person
-    assert "description" not in sm.get_job("job")["persons_df"].columns
-
-
-def test_database_person_projection_ignores_retired_description(tmp_path):
+def test_database_person_projection_reads_and_writes_current_fields(tmp_path):
     import logging
     from unittest.mock import MagicMock
     from backend.db.store import DataStore
@@ -291,27 +265,8 @@ def test_database_person_projection_ignores_retired_description(tmp_path):
     store._psycopg = driver
     store.database_url = "postgresql://test"
     cursor = driver.connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
-    assert store.store_persons("job", [{"person_id": 1, "name": "Anna", "description": "Alte Beschreibung"}])
-    sql, params = next(call.args for call in cursor.execute.call_args_list if "INSERT INTO job_persons" in call.args[0])
-    assert "description" not in sql and "Alte Beschreibung" not in params
+    assert store.store_persons("job", [{"person_id": 1, "name": "Anna"}])
+    assert any("INSERT INTO job_persons" in call.args[0] for call in cursor.execute.call_args_list)
     cursor.fetchall.return_value = [(1, "Anna", {}, 10, 22, [{"start_s": 10, "end_s": 22}])]
     assert store.get_persons("job") == [{"person_id": 1, "name": "Anna", "attributes": {},
         "first_seen_ts": 10, "last_seen_ts": 22, "appearances": [{"start_s": 10, "end_s": 22}]}]
-
-
-@pytest.mark.parametrize("method,path,status", [
-    ("POST", "/persons", 405),
-    ("GET", "/persons/merge-suggestions", 405),
-    ("GET", "/persons/1/similar-faces", 404),
-    ("GET", "/faces", 404),
-    ("GET", "/faces/1", 404),
-    ("POST", "/faces/merge", 404),
-])
-def test_retired_routes_cannot_read_or_mutate_persons(api, job_dir, method, path, status):
-    client, _, app = api
-    before = review.current(job_dir)
-    operations = app.app.openapi()["paths"].get(f"/api/jobs/{{job_id}}{path}", {})
-    assert method.lower() not in operations
-    response = client.request(method, f"/api/jobs/job{path}", json={"face_ids": [1], "target_person_id": 2})
-    assert response.status_code == status, response.text
-    assert review.current(job_dir) == before

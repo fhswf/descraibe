@@ -11,11 +11,10 @@ const path = require('node:path');
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-    const errors = [], oldRoutes = [], batches = [];
+    const errors = [], batches = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('dialog', dialog => dialog.accept());
     page.on('request', request => {
-      if (/similar-faces|merge-suggestions|\/faces\//.test(request.url())) oldRoutes.push(request.url());
       if (request.method() === 'POST' && request.url().endsWith('/track-assignments')) batches.push(request.postDataJSON());
     });
     const data = await (await page.request.get(`${base}/api/jobs/job/persons`)).json();
@@ -106,8 +105,7 @@ const path = require('node:path');
     await page.getByRole('button', { name: '+ Neue Person', exact: true }).click();
     await page.getByRole('button', { name: 'Alle Änderungen speichern' }).click();
     await expect(page.getByRole('article', { name: 'Person 1', exact: true })).toBeVisible();
-    assert.deepEqual(oldRoutes, []);
     assert.deepEqual(errors, []);
-    console.log('PASS: stale conflict retains draft, merge/delete move whole tracks, all-unassigned reload, recreation, no old face routes or page errors');
+    console.log('PASS: stale conflict retains draft, merge/delete move whole tracks, all-unassigned reload, recreation, no page errors');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -136,7 +136,7 @@ def test_quality_tiebreaks(ranked_job, field, value):
     assert people(review.project(data))[1] == 12
 
 
-def test_missing_sharpness_in_old_jobs(job_dir):
+def test_current_job_selects_face_and_body_representatives(job_dir):
     assert people(review.current(job_dir)) == {1: 1, 2: 25}
 
 

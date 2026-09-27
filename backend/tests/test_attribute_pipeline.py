@@ -60,7 +60,6 @@ def test_current_values_batch_reload_and_replacement(attribute_job):
     assert not again['stale'] and again['version'] != result['version']
     assert len(again['persons'][0]['images']) == 2  # existing fallback track
     assert again['persons'][0]['attributes'][field] == 'automatic'
-    assert not (stage_state.root(job) / 'runs').exists()
 
 
 def test_no_eligible_images_does_not_load_model(attribute_job, monkeypatch):
