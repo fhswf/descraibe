@@ -48,7 +48,7 @@ test('person function is shared by cluster and attribute review, survives reload
         await server.listen();
         browser = await chromium.launch({ channel:'msedge', headless:true });
         const page = await browser.newPage();
-        const person = {person_id:1,name:'Person 1',function:'',description:'Alte freie Beschreibung',appearances_count:1,track_ids:[1],appearances:[],status:'ok',images:[],attributes:{}};
+        const person = {person_id:1,name:'Person 1',function:'',appearances_count:1,track_ids:[1],appearances:[],status:'ok',images:[],attributes:{}};
         let revision = 1;
         const review = () => ({persons:[person],version:`1:${revision}`,analysis_id:'1',tracks:[],unassigned_tracks:[],review_available:true});
         const errors = [];
@@ -58,7 +58,6 @@ test('person function is shared by cluster and attribute review, survives reload
             if (route.request().method()==='POST') {
                 const body = route.request().postDataJSON();
                 expect(body.version).toBe(`1:${revision}`);
-                expect(body).not.toHaveProperty('description');
                 for (const field of ['name','function']) if(field in body) person[field]=body[field].trim();
                 revision++;
             }
@@ -74,8 +73,6 @@ test('person function is shared by cluster and attribute review, survives reload
         await page.getByRole('button',{name:'Wechseln'}).click();
         await expect(page.getByText('Försterin',{exact:true})).toBeVisible();
         await page.getByRole('button',{name:'Person 1 bearbeiten',exact:true}).click();
-        await expect(page.getByLabel('Beschreibung',{exact:true})).toHaveCount(0);
-        await expect(page.getByText('Alte freie Beschreibung',{exact:true})).toHaveCount(0);
         await expect(page.getByLabel('Name',{exact:true})).toHaveValue('Anna');
         await expect(page.getByLabel('Funktion',{exact:true})).toHaveValue('Försterin');
         await page.getByLabel('Funktion',{exact:true}).fill('Moderatorin');

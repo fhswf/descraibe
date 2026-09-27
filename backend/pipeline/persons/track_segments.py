@@ -109,7 +109,7 @@ def resolve_track(source_track_id, frame_number, metadata):
     raise ReviewError("Beobachtung liegt außerhalb der aktuellen Tracksegmente.", 409)
 
 
-def apply_changes(root, metadata, changes):
+def apply_changes(root, metadata, changes, observations_for_segment):
     if not isinstance(changes, list):
         raise ReviewError("Ungültige Track-Änderungen.")
     if not changes:
@@ -153,6 +153,10 @@ def apply_changes(root, metadata, changes):
         at = bisect.bisect_left(numbers, cut)
         if at == 0 or at == len(numbers) or numbers[at] != cut:
             raise ReviewError("Der Schnitt muss auf einem beobachteten Trackingframe liegen und zwei nichtleere Segmente erzeugen.")
+        visible_frames = [row["frame_number"] for row in observations_for_segment(track)]
+        allowed = split_options(rows, visible_frames, metadata["fps"])
+        if cut not in {option["before_frame"] for option in allowed}:
+            raise ReviewError("Teilen ist nur ab der zweiten sichtbaren Beobachtung möglich.")
         chunks = (numbers[:at], numbers[at:])
         replacements = []
         for new_id, chunk in zip((next_id, next_id + 1), chunks):

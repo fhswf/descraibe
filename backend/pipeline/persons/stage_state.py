@@ -140,7 +140,7 @@ def save_faces(job_dir, body):
             by_id[face_id]["excluded"] = value
             changed = True
 
-    updated = track_segments.apply_changes(data.root, metadata, track_changes)
+    updated = track_segments.apply_changes(data.root, metadata, track_changes, data.tracking_crops_for_segment)
     changed = changed or updated != metadata
     if not changed:
         return face_snapshot(job_dir)

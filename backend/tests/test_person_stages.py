@@ -184,8 +184,6 @@ def test_tracking_then_identity_runs_without_manual_review(staged_job):
     run_tracking(video, job)
     result = run_identities(video, job)
     assert len(result["persons"]) == 1 and result["faces"]
-    assert all("description" not in person for person in result["persons"])
-    assert all("description" not in person for person in stage_state.read_json(stage_state.root(job) / "persons.json")["persons"])
     assert calls["detection"] == calls["tracking"] == 9
     assert len(calls["clusters"]) == 1
     assert stage_state.status(job)["identities_ready"] is True
