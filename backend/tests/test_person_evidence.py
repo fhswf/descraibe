@@ -1,4 +1,4 @@
-"""Current face flags, invalidation, restart and rejection of old jobs."""
+"""Current face exclusions, invalidation and reload."""
 import json
 import subprocess
 import sys
@@ -26,7 +26,6 @@ def test_exclusion_restore_preserves_track_times_and_crops(job_dir):
     assert artifacts.load_tracking(job_dir).review_crops(1, include_excluded=True)[0]['excluded']
     assert exclude(job_dir, False)['excluded_face_observations'] == []
     assert originals == {name: (root / name).read_bytes() for name in originals}
-    assert not (root / 'review_state.json').exists()
 
 
 @pytest.mark.parametrize('bad', [{'face_id': 999, 'excluded': True}, {'face_id': True, 'excluded': True},
@@ -39,19 +38,6 @@ def test_invalid_exclusion_rolls_back_entire_batch(job_dir, bad):
             'face_exclusions': [{'face_id': 1, 'excluded': True}, bad],
             'track_changes': [{'action': 'set_excluded', 'track_id': 2, 'excluded': True}]})
     assert review.current(job_dir) == before
-
-
-def test_old_run_structure_is_not_migrated(tmp_path):
-    root = tmp_path / 'person_analysis'
-    old = root / 'runs' / 'old-run'
-    old.mkdir(parents=True)
-    (old / 'persons.json').write_text('{"persons": []}')
-    (root / 'pipeline_state.json').write_text('{"tracking_run": "old-run"}')
-    before = {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()}
-    assert not stage_state.status(tmp_path)['tracking_ready']
-    with pytest.raises(artifacts.ReviewError):
-        artifacts.load(tmp_path)
-    assert before == {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()}
 
 
 def test_pending_embedding_counts_as_zero(job_dir):

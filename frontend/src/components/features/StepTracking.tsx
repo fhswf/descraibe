@@ -19,14 +19,20 @@ function TrackingPanel({ jobId }: { jobId: string }) {
     const [refresh, setRefresh] = useState(0);
     const dirty = Object.keys(pending).length + Object.keys(splits).length + Object.keys(trackExcludes).length > 0;
     const running = jobData?.status === 'running';
+    const trackingReady = jobData?.person_stages?.tracking_ready === true;
     useEffect(() => {
+        if (!trackingReady) {
+            setSnapshot(null); setError(''); setOpen(false); setEnlarged(null);
+            setPending({}); setSplits({}); setTrackExcludes({});
+            return;
+        }
         if (running || dirty) return;
         const controller = new AbortController();
         fetch(`/api/jobs/${jobId}/person-analysis/tracking`, { signal: controller.signal, cache: 'no-store' })
-            .then(async res => { const data = await res.json(); if (!res.ok) throw new Error(data.error || 'Tracking-Daten nicht verfügbar.'); setSnapshot(data); setError(''); })
+            .then(async res => { const data = await res.json(); if (!res.ok) throw new Error(data.error || 'Tracking-Daten nicht verfügbar.'); if (!controller.signal.aborted) { setSnapshot(data); setError(''); } })
             .catch(err => { if (!controller.signal.aborted) setError(err.message); });
         return () => controller.abort();
-    }, [jobId, jobData?.person_stages?.tracking_revision, running, dirty, refresh]);
+    }, [jobId, jobData?.person_stages?.tracking_revision, trackingReady, running, dirty, refresh]);
     useEffect(() => {
         if (!open) return;
         const previous = document.body.style.overflow;
@@ -50,14 +56,14 @@ function TrackingPanel({ jobId }: { jobId: string }) {
     const stale = snapshot?.identities_stale || jobData?.person_stages?.identities_stale;
     const summary = snapshot ? `${snapshot.tracks.length} Tracks · ${snapshot.tracks.reduce((n, t) => n + t.quality_face_count, 0)} Face-Beobachtungen` : '';
     return <div className="flex flex-col gap-5" data-review-size="tracking">
-        <h2 className="text-[1.4rem] font-bold">Tracking &amp; Gesichter</h2>
+        <h2 className="text-[1.4rem] font-bold">Tracking</h2>
         <p className="text-sm text-text-secondary">Die Review ist optional. Face- und Track-Ausschlüsse bleiben umkehrbar. Gespeicherte Änderungen erfordern eine neue Personen- und Attributberechnung. Für einen dauerhaften Personenwechsel kann ein Track zeitlich geteilt werden.</p>
         {running && <p role="status">{progressData.tracking?.msg || 'Verarbeitung läuft …'}</p>}
         {!open && error && <p role="alert" className="text-amber-600">{error}</p>}
-        {stale && !open && <p role="status" className="p-3 border border-amber-500 rounded-lg">Personen &amp; Cluster ist veraltet. Vorhandene Personen bleiben bis zum erneuten Ausführen von Schritt 2 unverändert.</p>}
+        {stale && !open && <p role="status" className="p-3 border border-amber-500 rounded-lg">Personenzuordnung ist veraltet. Vorhandene Personen bleiben bis zum erneuten Ausführen von Schritt 2 unverändert.</p>}
         {snapshot && !running && <div className="p-4 border border-border-subtle rounded-lg flex flex-wrap justify-between items-center gap-4"><span>{summary}</span>
             <button onClick={() => setOpen(true)} className="px-4 py-2 bg-violet-600 text-white rounded-lg">Tracks prüfen</button></div>}
-        <button disabled={running || saving || !jobData?.video_path} onClick={() => void handleRunTracking()} className="w-fit px-4 py-2 bg-violet-600 text-white rounded-lg disabled:opacity-50">Tracking &amp; Gesichter ausführen</button>
+        <button disabled={running || saving || !jobData?.video_path} onClick={() => void handleRunTracking()} className="w-fit px-4 py-2 bg-violet-600 text-white rounded-lg disabled:opacity-50">Tracking ausführen</button>
         {open && snapshot && <div role="dialog" aria-modal="true" aria-label="Tracking-Review" className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-2 sm:p-4"
             onKeyDown={e => { if (e.key === 'Escape' && !enlarged) close(); }}>
             <div className="w-[97vw] h-[94vh] bg-bg-surface rounded-xl border border-border-subtle shadow-2xl flex flex-col overflow-hidden">
@@ -69,7 +75,7 @@ function TrackingPanel({ jobId }: { jobId: string }) {
                     <span className="text-sm text-text-muted">Originaltracks: {snapshot.original_tracks_count} · Fallbacks: bis zu 5 pro Track</span>
                 </div>
                 {!snapshot.split_available && <p className="px-4 pb-3 text-amber-600">Dieser ältere Lauf enthält kein vollständiges Frame-Protokoll. Gesichtsbereinigung bleibt möglich; für präzise Track-Splits Tracking erneut ausführen.</p>}
-                {stale && <p role="status" className="px-4 pb-3 text-amber-600">Personen &amp; Cluster ist veraltet. Angezeigt bleiben die bisherigen Personen bis zum erneuten Clustering.</p>}
+                {stale && <p role="status" className="px-4 pb-3 text-amber-600">Personenzuordnung ist veraltet. Angezeigt bleiben die bisherigen Personen bis zum erneuten Clustering.</p>}
                 <div data-testid="tracking-review-scroll" className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5">
                     {snapshot.tracks.filter(t => t.quality_face_count > 0 || fallbacks).map(track => {
                         const source = track.source_track_id ?? track.track_id;

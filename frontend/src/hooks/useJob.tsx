@@ -567,9 +567,8 @@ export function JobProvider({ children }: JobProviderProps) {
                 if (data.transcript_meta) newDone.add(2);
                 if ((data.slots_count ?? 0) > 0) newDone.add(3);
                 if ((data.images_count ?? 0) > 0) newDone.add(4);
-                const legacyPersons = data.person_stages?.legacy && (data.persons_analyzed || (data.persons_count ?? 0) > 0);
-                if (data.person_stages?.tracking_ready || legacyPersons) newDone.add(5);
-                if ((data.person_stages?.identities_ready && !data.person_stages.identities_stale) || legacyPersons) newDone.add(6);
+                if (data.person_stages?.tracking_ready) newDone.add(5);
+                if ((data.person_stages?.identities_ready && !data.person_stages.identities_stale)) newDone.add(6);
                 if (data.attribute_stage?.ready && !data.attribute_stage.stale) newDone.add(7);
                 if (data.gpt_records_broadcast || data.gpt_records_directors) newDone.add(8);
                 if (data.final_mp4_path) newDone.add(9);
@@ -799,7 +798,7 @@ export function JobProvider({ children }: JobProviderProps) {
     const handleRunTracking = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         try {
-            markJobStarted('tracking', 'Tracking & Gesichter starten …');
+            markJobStarted('tracking', 'Tracking starten …');
             const res = await fetch(`/api/jobs/${jobId}/person-analysis/tracking`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tracking_interval_seconds: personParams.tracking_interval_seconds }) });
             if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Tracking konnte nicht gestartet werden.'); }
         } catch (err) { setIsRunAllActive(false); void fetchJobData(jobId, true); alert((err as Error).message); }
@@ -808,9 +807,9 @@ export function JobProvider({ children }: JobProviderProps) {
     const handleRunPersons = useCallback(async (): Promise<void> => {
         if (!jobId) return;
         try {
-            markJobStarted('identities', 'Personen & Cluster starten …');
+            markJobStarted('identities', 'Personenzuordnung starten …');
             const res = await fetch(`/api/jobs/${jobId}/person-analysis/identities`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ similarity_threshold: personParams.similarity_threshold }) });
-            if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Personen & Cluster konnte nicht gestartet werden.'); }
+            if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Personenzuordnung konnte nicht gestartet werden.'); }
         } catch (err) { setIsRunAllActive(false); void fetchJobData(jobId, true); alert((err as Error).message); }
     }, [jobId, markJobStarted, fetchJobData, personParams]);
 

@@ -81,14 +81,13 @@ export function TrackRow({ track, change, jobId, analysisId, onChoose, onUndo, o
         : change?.action === 'assign' ? `${persons.find(p => p.person_id === change.person_id)?.name || `Person ${change.person_id}`} (ID ${change.person_id})` : '';
     return <section className={`p-3 border rounded-lg ${change ? 'border-violet-500 bg-violet-500/10' : 'border-border-subtle bg-bg-card'}`} aria-label={`Track ${track.track_id}`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-            <div><h4 className="font-medium">Track {track.track_id}{track.is_split && ` · Segment von Track ${track.source_track_id}`}</h4><p className="text-xs text-text-muted">{track.start_s.toFixed(2)}–{track.end_s.toFixed(2)} s · {track.review_observation_count} {track.review_mode === 'facemoe' ? 'FaceMoE-Vorschauen' : track.review_mode === 'retinaface' ? 'Face-Beobachtungen' : track.review_mode === 'fallback' ? 'Fallback-Crops' : 'Legacy-Beobachtungen'} · Szene {track.scene_id}</p></div>
+            <div><h4 className="font-medium">Track {track.track_id}{track.is_split && ` · Segment von Track ${track.source_track_id}`}</h4><p className="text-xs text-text-muted">{track.start_s.toFixed(2)}–{track.end_s.toFixed(2)} s · {track.review_observation_count} {track.review_mode === 'facemoe' ? 'FaceMoE-Vorschauen' : track.review_mode === 'retinaface' ? 'Face-Beobachtungen' : 'Fallback-Crops'} · Szene {track.scene_id}</p></div>
             {showAssignments && <div className="flex gap-3 text-sm">
                 <button disabled={disabled} onClick={onChoose} className="px-3 py-1.5 bg-violet-600 text-white rounded-lg disabled:opacity-50">Track zuweisen</button></div>}
         </div>
         {change && <div className="mt-3 text-sm text-violet-400 flex justify-between gap-2"><span>Vorgemerkt: Track {track.track_id} → {target}</span><button disabled={disabled} onClick={onUndo} className="underline">Zurücknehmen</button></div>}
         <div className="mt-3">
             {track.review_mode === 'fallback' && <p className="text-xs text-text-muted mb-2">Kein brauchbares Gesicht. Zeitlich verteilte Personencrops zur Track-Kontrolle.</p>}
-            {track.review_mode === 'legacy_unverified' && <p className="text-xs text-amber-600 mb-2">Altdaten: Qualität und Alignment bestanden; FaceMoE-Erfolg wurde damals nicht protokolliert.</p>}
             {loading && <p className="text-sm text-text-muted">Lade Vorschauen …</p>}{error && <p role="alert" className="text-red-400">{error}</p>}
             <div className="grid gap-3 items-start" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, var(--review-card-width, 160px)), 1fr))' }}>{visibleCrops.map(crop => {
                 const staged = crop.face_id !== null && Object.prototype.hasOwnProperty.call(exclusions, crop.face_id);
@@ -98,7 +97,7 @@ export function TrackRow({ track, change, jobId, analysisId, onChoose, onUndo, o
                         <div className={excluded ? 'opacity-40' : ''} style={{ maxWidth: `calc(var(--review-image-height, 180px) * ${crop.width / Math.max(1, crop.height)})`, margin: 'auto' }}><CropImage crop={crop} jobId={jobId} analysisId={analysisId} /></div>
                         <span className="block p-1 text-xs text-text-muted">Frame {crop.frame_number} · {crop.timestamp_s.toFixed(2)} s</span>
                     </button>
-                    <p className="px-2 text-xs">{excluded ? '✕ manuell ausgeschlossen' : crop.evidence_status === 'fallback' ? 'Fallback · keine Face-Evidenz' : crop.evidence_status === 'legacy_unverified' ? 'FaceMoE-Erfolg unbestätigt' : '✓ gültig'}{staged && ' · vorgemerkt'}</p>
+                    <p className="px-2 text-xs">{excluded ? '✕ manuell ausgeschlossen' : crop.evidence_status === 'fallback' ? 'Fallback · keine Face-Evidenz' : '✓ gültig'}{staged && ' · vorgemerkt'}</p>
                     {allowExclusions && crop.face_id !== null && <button disabled={disabled} onClick={() => onExclude(crop.face_id!, !excluded)} className="p-2 text-xs underline disabled:opacity-50"
                         aria-label={`Face ${crop.face_id} ${excluded ? 'wiederherstellen' : 'ausschließen'}`}>{excluded ? 'Ausschluss aufheben' : 'Beobachtung ausschließen'}</button>}
                     {onProfile && !excluded && <button disabled={disabled || profileDisabled || profileCropId === crop.crop_id} onClick={() => onProfile(crop.crop_id)} className="block p-2 text-xs underline disabled:opacity-50">{profileCropId === crop.crop_id ? 'Aktuelles Profilbild' : 'Als Profilbild verwenden'}</button>}

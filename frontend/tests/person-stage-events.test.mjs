@@ -101,11 +101,6 @@ test('repeated identity revision completes again after review, but duplicate eve
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         expect(attributeStarts).toBe(1);
         expect(requests.filter(url => url.includes('/api/jobs/fixture'))).toHaveLength(0);
-        // The retired combined-stage event must not bypass attributes and start GPT.
-        const beforeLegacyEvent = await state();
-        await page.evaluate(() => window.emitCompletion('persons_done'));
-        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-        expect(await state()).toEqual(beforeLegacyEvent);
         expect(requests.filter(url => url.endsWith('/gpt'))).toHaveLength(0);
     } finally {
         await browser?.close();

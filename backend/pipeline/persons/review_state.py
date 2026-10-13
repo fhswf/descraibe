@@ -161,7 +161,7 @@ def _payload(data: artifacts.Artifacts, persons: dict[int, dict], revision: int,
 def mutate(job_dir: str | Path, expected_version: str | None, operation: str, body: dict) -> dict:
     data = artifacts.load(job_dir)
     if data.identity_revision is None:
-        raise ReviewError("Bitte zuerst Personen & Cluster ausführen.", 409)
+        raise ReviewError("Bitte zuerst Personenzuordnung ausführen.", 409)
     if expected_version != _version(data):
         raise ReviewError("Der Personenstand wurde geändert. Bitte neu laden.", 409)
     persons = {pid: {**_metadata(person), "profile_crop_id": person.get("profile_crop_id"), "track_ids": list(person["track_ids"])} for pid, person in data.persons.items()}

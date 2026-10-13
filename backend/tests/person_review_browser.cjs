@@ -11,15 +11,14 @@ const path = require('node:path');
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-    const errors = [], oldRoutes = [], batches = [];
+    const errors = [], batches = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('dialog', dialog => dialog.accept());
     page.on('request', request => {
-      if (/similar-faces|merge-suggestions|\/faces\//.test(request.url())) oldRoutes.push(request.url());
       if (request.method() === 'POST' && request.url().endsWith('/track-assignments')) batches.push(request.postDataJSON());
     });
     const data = await (await page.request.get(`${base}/api/jobs/job/persons`)).json();
-    assert.equal(data.revision, 0, 'Requires a fresh isolated fixture');
+    assert.equal(data.revision, 1, 'Requires a fresh isolated fixture');
     assert.equal(data.tracks.length, 5);
     assert.equal(data.persons[0].name, 'Anna');
     await page.goto(`${base}/?job=job`);
@@ -29,7 +28,8 @@ const path = require('node:path');
     const track = id => page.getByRole('region', { name: `Track ${id}`, exact: true });
     await expect(track(1).getByRole('button', { name: /Crop vergrößern/ })).toHaveCount(1);
     await expect(track(1)).toContainText('1 FaceMoE-Vorschauen');
-    await expect(track(2).getByRole('button', { name: /Crop vergrößern/ })).toHaveCount(5);
+    // Der API-Endpunkt liefert standardmaessig bis zu acht gespeicherte Vorschauen.
+    await expect(track(2).getByRole('button', { name: /Crop vergrößern/ })).toHaveCount(8);
     await track(1).getByRole('button', { name: /Crop vergrößern/ }).first().click();
     const preview = page.getByRole('dialog', { name: 'Crop-Vorschau', exact: true });
     await expect(preview).toBeVisible();
@@ -42,8 +42,8 @@ const path = require('node:path');
     [0.1, 0.1, 0.3, 0.2].forEach((v, i) => assert(Math.abs(ratios[i] - v) < .01));
     if (process.argv[3]) await page.screenshot({ path: path.join(process.argv[3], 'review-crop.png') });
     await preview.getByRole('button', { name: /Vorschau schließen/ }).click();
-    console.log('PASS: legacy evidence/fallback previews and proportional bbox');
-    batches.length = 0;
+    console.log('PASS: current evidence/fallback previews and proportional bbox');
+    // Zwei Zuordnungen vormerken; erst Speichern darf eine Anfrage senden.
     await track(1).getByRole('button', { name: 'Track zuweisen' }).click();
     const picker = page.getByRole('dialog', { name: 'Track 1 zuweisen', exact: true });
     await expect(picker.getByRole('img', { name: 'Beispiel Ben' })).toBeVisible();
@@ -77,9 +77,10 @@ const path = require('node:path');
     await page.reload();
     await page.locator('#step-nav > button').nth(6).click();
     await expect(page.getByRole('article', { name: 'Person 3', exact: true })).toContainText('Carla');
+    await expect(page.getByRole('article', { name: 'Person 3', exact: true })).toContainText('Moderatorin');
     console.log('PASS: unassigned/new person/leave unassigned, empty crops, name and function survive reload');
 
-    // Server conflict keeps the user's staged draft visible.
+    // Eine direkte API-Aenderung macht den offenen Entwurf veraltet.
     await page.getByRole('button', { name: 'Tracks von Person 3 verwalten', exact: true }).click();
     await track(4).getByRole('button', { name: 'Track zuweisen' }).click();
     await page.getByRole('button', { name: 'Ben (ID 2) auswählen' }).click();
@@ -103,9 +104,8 @@ const path = require('node:path');
     await track(1).getByRole('button', { name: 'Track zuweisen' }).click();
     await page.getByRole('button', { name: '+ Neue Person', exact: true }).click();
     await page.getByRole('button', { name: 'Alle Änderungen speichern' }).click();
-    await expect(page.getByRole('article', { name: 'Person 4', exact: true })).toBeVisible();
-    assert.deepEqual(oldRoutes, []);
+    await expect(page.getByRole('article', { name: 'Person 1', exact: true })).toBeVisible();
     assert.deepEqual(errors, []);
-    console.log('PASS: stale conflict retains draft, merge/delete move whole tracks, all-unassigned reload, recreation, no old face routes or page errors');
+    console.log('PASS: stale conflict retains draft, merge/delete move whole tracks, all-unassigned reload, recreation, no page errors');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

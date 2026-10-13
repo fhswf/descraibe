@@ -308,7 +308,7 @@ restart the pod. The `GPT_PROMPTS_DIR=/app/config/prompts` env var is already se
 
 ## Person Analysis
 
-The Person Analysis stages (Tracking & Gesichter, Personen & Cluster, Attribute) automatically detects and tracks persons in video frames using computer vision:
+The Person Analysis stages (Tracking, Personenzuordnung, Attribute) automatically detects and tracks persons in video frames using computer vision:
 
 ### Features
 
@@ -333,23 +333,25 @@ The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICEN
 ### How It Works
 
 1. After scene images are extracted, RF-DETR and ByteTrack process video frames at a default stride of `max(1, round(fps * 0.233))`.
-2. Tracking reuses the full-video shot boundaries saved by the image extraction step and restarts tracks at each cut. Run image extraction first (also for older jobs without saved boundaries). Changed boundaries invalidate tracking, identities and attributes; unchanged boundaries preserve them.
+2. Tracking reuses the full-video shot boundaries saved by the image extraction step and restarts tracks at each cut. Run image extraction first. Changed boundaries invalidate tracking, identities and attributes; unchanged boundaries preserve them.
 3. RetinaFace runs on every second sampled frame; face metadata and person crops are saved.
 4. Optional review supports face/track exclusions and logical track splits.
 5. FaceMoE creates embeddings in RAM; clustering assigns tracks to persons. Assignments and names can be reviewed.
 6. Qwen extracts attributes from up to five selected existing crops per person; attributes can be edited manually.
 7. Current data is stored under `person_analysis/` in the job directory, without run history. Earlier changes invalidate dependent results.
-8. GPT prompts receive person names with Erstnennung/Folgebenennung flags. The free-text person description has been removed; Qwen attributes are not additionally included.
+8. GPT prompts receive person names with Erstnennung/Folgebenennung flags. Qwen attributes are not included in this person context.
+
+Person results are stored in `person_analysis/`. The job's in-memory person overview is rebuilt from these files when loaded.
 
 The existing settings dialog now includes **Personen**: tracking interval (default `0.233` seconds), clustering similarity threshold (default `0.214`; higher is stricter), and maximum attribute images per person (`1–5`, default `5`). Changes apply on the next execution of the respective stage; the dialog also shows the settings used for the current results.
 
-### AD Naming Conventions
+### Person Context for GPT
 
-The system enforces German AD naming rules:
-- **Erstnennung** (first mention): Full name + brief visual description
-  - Example: "Maria trägt ein blaues Oberteil."
-- **Folgebenennung** (subsequent mentions): Name only or pronoun
-  - Example: "Maria lächelt." or "Er nickt."
+The person context selects persons whose first-to-last appearance interval overlaps the AD slot and includes their names with a timing flag:
+- **ERSTNENNUNG**: The person's first appearance falls within the slot.
+- **FOLGEBENENNUNG**: The person's first appearance precedes the slot.
+
+For example, the context can contain `- **Maria** [ERSTNENNUNG]`. These flags describe appearance timing; they do not verify whether GPT has previously mentioned the person. The context does not supply Qwen attributes or enforce a particular generated description.
 
 ### API Endpoints
 
@@ -497,6 +499,3 @@ Additional person-review tests (from the repository root):
 cd frontend
 node --test --test-concurrency=1 tests/*.test.mjs
 ```
-
-The person-stage browser test `backend/tests/person_stages_browser.cjs` uses
-`backend/tests/person_review_server.py`; see those files for setup.

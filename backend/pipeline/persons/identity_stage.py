@@ -48,7 +48,7 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
     video_path = Path(video_path)
     base = stage_state.root(job_dir)
     if not (base / "tracks.json").is_file():
-        raise ReviewError("Bitte zuerst Tracking & Gesichter ausführen.", 409)
+        raise ReviewError("Bitte zuerst Tracking ausführen.", 409)
     metadata = stage_state.read_json(base / "tracks.json")
     tracking_revision = int(metadata["revision"])
     if stage_state.video_digest(video_path) != metadata.get("video_sha256"):
@@ -120,7 +120,7 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
                         row["embedding_created"] = "True"
                         records.append((face_id, track_id, frame_number, embedding))
                 if progress_cb and (frame_number % 30 == 0 or frame_number == last):
-                    progress_cb(f"Personen & Cluster: Frame {frame_number}/{last}", frame_number, last)
+                    progress_cb(f"Personenzuordnung: Frame {frame_number}/{last}", frame_number, last)
 
         vectors = np.stack([row[3] for row in records]).astype(np.float32) if records else np.empty((0, 512), np.float32)
         mapping = run_clustering(
@@ -144,7 +144,7 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
     needs_fallback = {
         track["track_id"] for track in tracks
         if not track["excluded"] and track["track_id"] not in logical_has_face
-        and (track["is_split"] or track["source_track_id"] in source_has_usable_face)
+        and track["source_track_id"] in source_has_usable_face
     }
     refresh_identity_fallbacks(video_path, base, tracks, needs_fallback, float(metadata["fps"]), progress_cb)
     stage_state.write_csv(base / "face_observations.csv", face_rows, face_fields)
