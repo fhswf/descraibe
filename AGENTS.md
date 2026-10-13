@@ -2,6 +2,39 @@
 
 Welcome to the repository! To maintain high code quality and ensure smooth deployments, all AI agents and human developers must strictly follow these rules.
 
+## Task management with `bd` - Beads Tracking & Versioning
+
+This repository uses **Beads** (`bd`) for coordinated tracking of AI tasks across multiple agent platforms (Codex, Open Hands, Antigravity). You must strictly document your progress and coordinate with other agents.
+
+### Available Tools
+- **MCP Server / Shell CLI:** Use the `bd` tool for all task management.
+- **Central Storage:** The `issues.jsonl` file in the project root holds the current global task state.
+
+### Workflow Rules (Multi-Agent Protocol)
+
+1. **Check Status (Before any action):**
+   - Always run `bd list` first to review open tasks and their current status.
+
+2. **Claim Tasks (Concurrency Protection):**
+   - Before starting work on any task (`<id>`), you must reserve it for yourself.
+   - Use the command: `bd claim <id>` (or alternatively `bd update <id> --status claimed`).
+   - **Strict Rule:** Never work on tasks that are already claimed or in progress by another agent!
+
+3. **Document New Subtasks:**
+   - If you discover new bugs, edge cases, or necessary next steps during your work, create a new bead immediately: `bd add "Task description"`.
+
+4. **Synchronization & Commits:**
+   - Beads stores its state locally in `issues.jsonl`.
+   - Whenever you create, claim, or complete a task, you must commit the `issues.jsonl` file **along with your code changes** to Git (`git add issues.jsonl`).
+
+5. **Complete Tasks:**
+   - Once a code component is fully implemented and successfully tested, mark the task as done: `bd finish <id>`.
+
+### Constraints
+- **Do not** create automatic Git commit hooks via Beads to preserve clean, manual Git logs.
+- Never overwrite another agent's claim unless explicitly instructed by the user (human).
+Verwende Code mit Vorsicht.Would you like to add any specific naming conventions for the task descriptions (e.g., prefixing with [Feature], [Bug], or [Refactor]) so your agents categorize their work consistently?KI-Antworten können Fehler enthalten. Weitere Informationen
+
 ## 1. Commit Messages & Releases (`release-please`)
 
 We use **`release-please`** to automate our versioning and changelogs. Because it parses commit history, all commit messages must strictly adhere to the **Conventional Commits** specification.
