@@ -7,6 +7,34 @@ authors:
   - given-names: Christian
     family-names: Gawron
     orcid: "https://orcid.org/0000-0001-7139-7920"
+  - given-names: Adrianna
+    family-names: Klaja
+  - given-names: Daniel
+    family-names: Sellerberg
+  - given-names: Dietmar
+    family-names: Ysop
+  - given-names: Dimitrij
+    family-names: Schulik
+  - given-names: Felicitas
+    family-names: Neuhalfen
+  - given-names: Hendrik
+    family-names: Grimm
+  - given-names: Claus-Peter
+    family-names: Koch
+  - given-names: Lars
+    family-names: Brebeck
+  - given-names: Luisa
+    family-names: Beer
+  - given-names: Marie
+    family-names: Heymann
+  - given-names: Marius
+    family-names: Wollburg
+  - given-names: Ricarda
+    family-names: Toppel
+  - given-names: Melina
+    family-names: Siebert
+  - given-names: Sven
+    family-names: Damitz
 version: 1.0.0
 license: MIT
 repository-code: 'https://github.com/fhswf/descraibe'

@@ -1,1 +1,2 @@
 {"id":"int-a699df4f","kind":"field_change","created_at":"2026-10-13T05:34:27.55273495Z","actor":"Christian Gawron","issue_id":"descraibe-9ld","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Added CITATION.cff with project citation metadata."}}
+{"id":"int-76752b52","kind":"field_change","created_at":"2026-10-13T05:38:06.807112931Z","actor":"Christian Gawron","issue_id":"descraibe-w18","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Added the requested contributors to CITATION.cff."}}
