@@ -20,9 +20,9 @@ resources:
 # Updated by release-please for versioned release deployments.
 images:
   - name: ghcr.io/fhswf/descraibe/audiodeskription-backend
-    newTag: v1.0.0 # x-release-please-version
+    newTag: v1.1.0 # x-release-please-version
   - name: ghcr.io/fhswf/descraibe/audiodeskription-frontend
-    newTag: v1.0.0 # x-release-please-version
+    newTag: v1.1.0 # x-release-please-version
 
 patches:
   - target:
