@@ -121,7 +121,15 @@ def test_face_review_preserves_times_and_removes_dependent_results(staged_job):
     clustered = run_identities(video, job)
     assert (1, 1) not in calls["recognition"]
     assert calls["clusters"][-1]["frame_numbers"].tolist() == [15, 43, 57]
-    assert len(calls["clusters"][-1]["rejected_track_ids"]) == 17
+    assert len(calls["clusters"][-1]["rejected_track_ids"]) == 16
+
+    rejected = set(zip(
+        calls["clusters"][-1]["rejected_track_ids"],
+        calls["clusters"][-1]["rejected_frame_numbers"],
+    ))
+    assert (1, 1) not in rejected
+    assert (1, 29) in rejected
+
     assert clustered["persons"][0]["track_ids"] == [1]
     assert clustered["persons"][0]["first_seen_ts"] == 0 and clustered["persons"][0]["last_seen_ts"] == 56/30
     assert not clustered["identities_stale"]

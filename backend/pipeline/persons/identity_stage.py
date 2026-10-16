@@ -74,7 +74,9 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
         usable = _true(row.get("face_usable"))
         if usable:
             source_has_usable_face.add(source)
-        if usable and not _true(row.get("excluded")):
+        if _true(row.get("excluded")):
+            continue
+        if usable:
             logical_has_face.add(track_id)
             selected.setdefault(frame, []).append((row, track_id))
         else:
