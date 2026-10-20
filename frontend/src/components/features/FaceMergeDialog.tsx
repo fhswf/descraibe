@@ -123,7 +123,7 @@ export function FaceMergeDialog({ person, snapshot, jobId, onClose, onSaved }: {
     const [enlarged, setEnlarged] = useState<PersonCrop | null>(null);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
-    const tracks = baseline.tracks.filter(t => t.person_id === (person?.person_id ?? null));
+    const tracks = baseline.tracks.filter(t => !t.excluded && t.person_id === (person?.person_id ?? null));
     const changes = Object.values(pending);
     const faceExclusions = Object.entries(exclusions).map(([faceId, excluded]) => ({ face_id: Number(faceId), excluded }));
     const hasChanges = changes.length + faceExclusions.length > 0;
