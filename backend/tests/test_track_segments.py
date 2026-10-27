@@ -167,27 +167,52 @@ def test_faceless_repeated_split_undo_and_restart_keep_original_images(staged_jo
     assert hash_outputs(stage_state.root(job) / "person_crops") == before
 
 
-def test_segment_without_saved_images_has_no_preview_or_split_options(staged_job):
+@pytest.mark.parametrize("tid", [1, 5])
+@pytest.mark.parametrize("frame", [1, 8])
+def test_split_rejects_first_or_invisible_observation_without_saving(staged_job, tid, frame):
     job, video, _ = staged_job
     first = run_tracking(video, job)
-    # API/older states can split at tracking frames not offered by the UI.
-    changed = split(job, first, tid=5, frame=8)
-    right = next(t for t in changed["tracks"] if t["source_track_id"] == 5 and t["start_frame"] == 8)
-    changed = split(job, changed, tid=right["track_id"], frame=15)
-    empty = next(t for t in changed["tracks"] if t["source_track_id"] == 5 and t["start_frame"] == 8)
-    assert empty["observations"] == []
-    assert empty["split_options"] == []
+    root = stage_state.root(job)
+    before = hash_outputs(root)
+    with pytest.raises(review_artifacts.ReviewError):
+        stage_state.save_faces(job, {
+            "version": first["version"],
+            "face_exclusions": [{"face_id": 1, "excluded": True}],
+            "track_changes": [{"action": "split", "track_id": tid, "before_frame": frame}],
+        })
+    assert stage_state.face_snapshot(job) == first
+    assert hash_outputs(root) == before
+
+
+@pytest.mark.parametrize("second_frame,valid", [(15, False), (29, True)])
+def test_batch_split_validates_observations_of_pending_segment(staged_job, second_frame, valid):
+    job, video, _ = staged_job
+    first = run_tracking(video, job)
+    root = stage_state.root(job)
+    before = hash_outputs(root)
+    body = {"version": first["version"], "track_changes": [
+        {"action": "split", "track_id": 5, "before_frame": 15},
+        {"action": "split", "track_id": 7, "before_frame": second_frame},
+    ]}
+    if not valid:
+        with pytest.raises(review_artifacts.ReviewError):
+            stage_state.save_faces(job, body)
+        assert hash_outputs(root) == before
+    else:
+        result = stage_state.save_faces(job, body)
+        parts = [t for t in result["tracks"] if t["source_track_id"] == 5]
+        assert [len(t["observations"]) for t in parts] == [1, 1, 3]
 
 
 def test_split_can_leave_child_without_saved_face(staged_job):
     job, video, _ = staged_job
     first = run_tracking(video, job)
-    # Only one tracking frame in the first child; keep one rather than duplicate five.
-    changed = split(job, first, tid=1, frame=8)
+    # One visible face and two tracking frames precede the second visible face.
+    changed = split(job, first, tid=1, frame=15)
     changed = stage_state.save_faces(job, {"version": changed["version"], "face_exclusions": [{"face_id": 1, "excluded": True}]})
     result = run_identities(video, job)
     data = review_artifacts.load(job)
-    assert len(data.review_crops(6)) == 1
+    assert len(data.review_crops(6)) == 2
     assert data.review_crops(6)[0]["evidence_status"] == "fallback"
     assert next(t for t in result["tracks"] if t["track_id"] == 6)["start_s"] == 0
 

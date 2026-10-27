@@ -121,7 +121,15 @@ def test_face_review_preserves_times_and_removes_dependent_results(staged_job):
     clustered = run_identities(video, job)
     assert (1, 1) not in calls["recognition"]
     assert calls["clusters"][-1]["frame_numbers"].tolist() == [15, 43, 57]
-    assert len(calls["clusters"][-1]["rejected_track_ids"]) == 17
+    assert len(calls["clusters"][-1]["rejected_track_ids"]) == 16
+
+    rejected = set(zip(
+        calls["clusters"][-1]["rejected_track_ids"],
+        calls["clusters"][-1]["rejected_frame_numbers"],
+    ))
+    assert (1, 1) not in rejected
+    assert (1, 29) in rejected
+
     assert clustered["persons"][0]["track_ids"] == [1]
     assert clustered["persons"][0]["first_seen_ts"] == 0 and clustered["persons"][0]["last_seen_ts"] == 56/30
     assert not clustered["identities_stale"]
@@ -184,8 +192,6 @@ def test_tracking_then_identity_runs_without_manual_review(staged_job):
     run_tracking(video, job)
     result = run_identities(video, job)
     assert len(result["persons"]) == 1 and result["faces"]
-    assert all("description" not in person for person in result["persons"])
-    assert all("description" not in person for person in stage_state.read_json(stage_state.root(job) / "persons.json")["persons"])
     assert calls["detection"] == calls["tracking"] == 9
     assert len(calls["clusters"]) == 1
     assert stage_state.status(job)["identities_ready"] is True

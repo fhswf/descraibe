@@ -186,12 +186,23 @@ class Artifacts:
 
     def tracking_crops(self, track_id: int) -> list[dict]:
         """All quality-usable faces, including exclusions, independent of Identity."""
-        evidence = self.evidence_by_track[track_id]
+        return self.tracking_crops_for_segment(self.tracks[track_id])
+
+    def tracking_crops_for_segment(self, track: dict) -> list[dict]:
+        """Use the same visible observations for saved and pending segments."""
+        source_ids = [t["track_id"] for t in self._tracks_by_source[track["source_track_id"]]]
+        def belongs(row):
+            return track["start_frame"] <= row["frame_number"] <= track["end_frame"]
+
+        evidence = sorted((row for tid in source_ids for row in self.evidence_by_track[tid] if belongs(row)),
+                          key=lambda row: (row["frame_number"], row["face_id"]))
         if evidence:
             return [{**row, "evidence_status": "retinaface"} for row in evidence]
         # Keep the original tracking images stable across splits and identity runs.
         return [{**crop, "face_id": None, "excluded": False, "evidence_status": "fallback"}
-                for crop in self.by_track[track_id] if crop["crop_type"] == "tracking_fallback"]
+                for crop in sorted((row for tid in source_ids for row in self.by_track[tid] if belongs(row)),
+                                   key=lambda row: (row["frame_number"], row["crop_id"]))
+                if crop["crop_type"] == "tracking_fallback"]
 
 
 def load(job_dir: str | Path) -> Artifacts:
