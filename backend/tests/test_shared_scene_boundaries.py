@@ -74,6 +74,9 @@ def test_no_cuts_means_one_continuous_tracking_pass(staged_job):
 def test_saved_cuts_and_invalidation_survive_restart(staged_job, monkeypatch):
     from backend import session_manager as sm
     job, video, _ = staged_job
+    payload = json.loads((job / 'job.json').read_text())
+    payload['scene_cut_frames'] = [31]
+    (job / 'job.json').write_text(json.dumps(payload))
     run_tracking(video, job)
     monkeypatch.setattr(sm, '_BASE_DIR', job.parent)
     monkeypatch.setattr(sm, '_STORE', {})
@@ -98,6 +101,9 @@ def test_saved_cuts_and_invalidation_survive_restart(staged_job, monkeypatch):
 def test_changed_cuts_cannot_replace_a_running_person_stage(staged_job, monkeypatch):
     from backend import session_manager as sm
     job, video, _ = staged_job
+    payload = json.loads((job / 'job.json').read_text())
+    payload['scene_cut_frames'] = [31]
+    (job / 'job.json').write_text(json.dumps(payload))
     run_tracking(video, job)
     monkeypatch.setattr(sm, '_BASE_DIR', job.parent)
     monkeypatch.setattr(sm, '_STORE', {})
@@ -121,6 +127,7 @@ def test_api_reserves_images_and_publishes_cuts(staged_job, monkeypatch):
     sm.update_job('job', slots_df=pd.DataFrame([{'slot': 1, 'start_s': 0, 'end_s': 1}]))
     queued = []
     monkeypatch.setattr(app, '_start_worker', lambda *args: queued.append(args))
+    monkeypatch.setattr(app, '_start_person_worker', lambda *args: queued.append(args) or True)
     class Extractor:
         def __init__(self, **kw): pass
         def process_video(self, *args, **kw):

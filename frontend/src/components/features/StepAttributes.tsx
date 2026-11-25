@@ -94,7 +94,15 @@ function AttributesPanel({ jobId }: { jobId: string }) {
         <h2 className="text-[1.4rem] font-bold">Attribute</h2>
         <p className="text-sm text-text-secondary">Ausgewählte Personenbilder und automatisch erkannte Attribute. Korrekturen ersetzen die aktuell gespeicherten Werte.</p>
         {stale && <p role="status" className="p-3 border border-amber-500 rounded-lg">Veraltet: Personenstand geändert. Diese Attribute gehören zum bisherigen Lauf. Bitte Attribute nach aktuellem Clustering erneut ausführen.</p>}
-        {running && <p role="status">{progressData.attributes?.msg || 'Verarbeitung läuft …'}</p>}
+        {running && <div className="max-w-2xl" role="status">
+            <p>{progressData.attributes?.msg || 'Verarbeitung läuft …'}</p>
+            {progressData.attributes && <>
+                <progress aria-label="Attributfortschritt" max={100} value={progressData.attributes.percent} className="w-full" />
+                {progressData.attributes.workers && <p className="text-xs text-text-muted">
+                    {progressData.attributes.workers.completed ?? 0} Personen abgeschlossen · {progressData.attributes.workers.running ?? 0} aktiv · {progressData.attributes.workers.queued ?? 0} wartend
+                </p>}
+            </>}
+        </div>}
         {error && <p role="alert" className="text-red-400">{error}</p>}
         <button disabled={running || saving || dirty || !jobData?.person_stages?.identities_ready || jobData?.person_stages?.identities_stale} onClick={() => void handleRunAttributes()}
             className="w-fit px-4 py-2 bg-violet-600 text-white rounded-lg disabled:opacity-50">Attribute ausführen</button>

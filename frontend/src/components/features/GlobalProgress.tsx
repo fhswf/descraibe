@@ -1,4 +1,5 @@
 import { useJob } from '../../hooks/useJob.jsx';
+import type { ProgressEntry } from '../../types';
 
 type StepName = keyof typeof stepLabels;
 
@@ -8,19 +9,34 @@ const stepLabels = {
     transcribe: 'Transkription',
     slots: 'AD-Slots generieren',
     images: 'Bilder extrahieren',
-    gpt: 'Beschreibungen generieren'
+    gpt: 'Beschreibungen generieren',
+    tracking: 'Personen tracken',
+    identities: 'Personen zuordnen',
+    attributes: 'Personenattribute'
 } as const;
+
+const phaseLabels: Record<string, string> = {
+    models: 'Modelle laden', scenes: 'Szenen verarbeiten', decode: 'Videoframes lesen',
+    embeddings: 'Gesichter erkennen', distance_matrix: 'Track-Ähnlichkeiten',
+    cluster_merges: 'Personen gruppieren', clustering: 'Clustering',
+    fallback: 'Fallback-Bilder', person_attributes: 'Personen auswerten',
+    merge: 'Ergebnisse zusammenführen', publishing: 'Ergebnisse speichern', complete: 'Abgeschlossen'
+};
 
 export function GlobalProgress() {
     const { progressData } = useJob();
 
-    const activeEntries = Object.entries(progressData ?? {}).filter(([, data]) => data !== null) as [StepName, { msg: string; percent: number }][];
+    const activeEntries = Object.entries(progressData ?? {}).filter(([, data]) => data !== null) as [string, ProgressEntry][];
 
     if (activeEntries.length === 0) return null;
 
     const [stepName, progress] = activeEntries[0] ?? ['gpt', { msg: '', percent: 0 }];
 
-    const label = stepLabels[stepName] ?? 'Fortschritt';
+    const label = stepLabels[stepName as StepName] ?? 'Fortschritt';
+    const workers = progress.workers;
+    const workerSummary = workers && (workers.queued || workers.running || workers.completed || workers.failed)
+        ? `${workers.completed ?? 0} abgeschlossen · ${workers.running ?? 0} aktiv · ${workers.queued ?? 0} wartend${workers.failed ? ` · ${workers.failed} fehlgeschlagen` : ''}`
+        : '';
 
     return (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-full max-w-md z-50 animate-in fade-in slide-in-from-bottom-4 duration-300">
@@ -39,6 +55,9 @@ export function GlobalProgress() {
                         </div>
                     </div>
                     <span className="text-xs text-text-secondary truncate">{progress.msg}</span>
+                    {(progress.phase || workerSummary) && <span className="text-[11px] text-text-muted truncate">
+                        {[progress.phase ? phaseLabels[progress.phase] ?? progress.phase : '', workerSummary].filter(Boolean).join(' · ')}
+                    </span>}
                 </div>
             </div>
         </div>

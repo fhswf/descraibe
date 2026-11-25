@@ -17,9 +17,9 @@ This is an in-process worker-pool design for the current single-backend-worker d
 
 ## Target design
 
-Add a `PersonWorkManager` and typed work items behind the existing stage endpoints. The manager owns stage coordination and submits bounded sub-tasks to application-lifetime pools. Keep each stage coordinator outside the sub-task pool so it can wait for child work without deadlocking a saturated pool.
+Add bounded stage-coordinator and task pools behind the existing stage endpoints. Stage coordinators use `backend/pipeline/persons/work_pool.py` to submit bounded sub-tasks to an application-lifetime executor. Keep each stage coordinator outside the sub-task pool so it can wait for child work without deadlocking a saturated pool.
 
-Use separate capacity controls for media/CPU work and model inference. Start with conservative defaults and environment-configurable limits, for example `AD_PERSON_CPU_WORKERS` and `AD_PERSON_GPU_WORKERS`; the GPU inference limit should default to one. Apply a bounded submission queue and per-job outstanding-task limit so many large videos cannot create unbounded futures or frame buffers. Add fair scheduling across jobs after the single-job behavior is stable.
+Use separate capacity controls for task execution, stage coordination, and model-heavy stage sets. Configure them with `AD_PERSON_CPU_WORKERS`, `AD_PERSON_MAX_PENDING`, `AD_PERSON_STAGE_WORKERS`, `AD_PERSON_STAGE_PENDING`, and `AD_PERSON_MODEL_SLOTS`; the model-slot default is one. Apply a bounded submission queue and global outstanding-task limit so many large videos cannot create unbounded futures or frame buffers. Add fair scheduling across jobs after the single-job behavior is stable.
 
 Workers return results and write only into task-specific staging locations. A stage coordinator is the sole writer of final manifests and revision files. Publish only after every required task succeeds and the existing tracking/video or assignment revision checks still pass. On failure, cancel work that has not started, wait for active workers to close their captures/models, remove that run's staging directory, and retain the last complete published result.
 
@@ -27,7 +27,7 @@ Workers return results and write only into task-specific staging locations. A st
 stage endpoint
      |
      v
-PersonWorkManager ---- stage coordinator ---- aggregate + validate ---- atomic publish
+bounded coordinator pool -- stage coordinator -- aggregate + validate -- atomic publish
      |                         |
      +---- bounded CPU pool ---+---- per-scene / frame-range / per-person tasks
      +---- bounded inference lane(s) -------- model-owned inference

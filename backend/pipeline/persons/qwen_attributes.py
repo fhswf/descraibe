@@ -1,5 +1,6 @@
 """Reference prompt and parser; model dependencies are loaded only for inference."""
 import gc
+import threading
 import json
 
 MODEL_ID = "Qwen/Qwen3.5-4B"
@@ -181,6 +182,10 @@ GENERATION = {
     'top_p': 0.8, 'top_k': 20, 'min_p': 0.0, 'repetition_penalty': 1.0,
 }
 
+# transformers.set_seed updates process-global RNG state. Keep model generation
+# serialized across instances until the runtime provides isolated generators.
+_PREDICT_LOCK = threading.Lock()
+
 
 class QwenAttributes:
     def __enter__(self):
@@ -199,19 +204,20 @@ class QwenAttributes:
 
     def predict(self, person_id, paths):
         from transformers import set_seed
-        set_seed(SEED + person_id)
-        inputs = outputs = None
-        try:
-            inputs = self.processor.apply_chat_template(
-                build_messages([{'image_path': path} for path in paths]),
-                add_generation_prompt=True, tokenize=True, return_dict=True,
-                return_tensors='pt', enable_thinking=False,
-            ).to(self.model.device)
-            with self.torch.inference_mode():
-                outputs = self.model.generate(**inputs, **GENERATION)
-            return self.processor.decode(outputs[0][inputs['input_ids'].shape[-1]:], skip_special_tokens=True).strip()
-        finally:
-            del inputs, outputs
+        with _PREDICT_LOCK:
+            set_seed(SEED + person_id)
+            inputs = outputs = None
+            try:
+                inputs = self.processor.apply_chat_template(
+                    build_messages([{'image_path': path} for path in paths]),
+                    add_generation_prompt=True, tokenize=True, return_dict=True,
+                    return_tensors='pt', enable_thinking=False,
+                ).to(self.model.device)
+                with self.torch.inference_mode():
+                    outputs = self.model.generate(**inputs, **GENERATION)
+                return self.processor.decode(outputs[0][inputs['input_ids'].shape[-1]:], skip_special_tokens=True).strip()
+            finally:
+                del inputs, outputs
 
     def __exit__(self, *args):
         self.model = self.processor = None

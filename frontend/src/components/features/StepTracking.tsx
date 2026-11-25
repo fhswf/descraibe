@@ -58,7 +58,15 @@ function TrackingPanel({ jobId }: { jobId: string }) {
     return <div className="flex flex-col gap-5" data-review-size="tracking">
         <h2 className="text-[1.4rem] font-bold">Tracking</h2>
         <p className="text-sm text-text-secondary">Die Review ist optional. Face- und Track-Ausschlüsse bleiben umkehrbar. Gespeicherte Änderungen erfordern eine neue Personen- und Attributberechnung. Für einen dauerhaften Personenwechsel kann ein Track zeitlich geteilt werden.</p>
-        {running && <p role="status">{progressData.tracking?.msg || 'Verarbeitung läuft …'}</p>}
+        {running && <div className="max-w-2xl" role="status">
+            <p>{progressData.tracking?.msg || 'Verarbeitung läuft …'}</p>
+            {progressData.tracking && <>
+                <progress aria-label="Tracking Fortschritt" max={100} value={progressData.tracking.percent} className="w-full" />
+                {progressData.tracking.workers && <p className="text-xs text-text-muted">
+                    {progressData.tracking.workers.completed ?? 0} Szenen abgeschlossen · {progressData.tracking.workers.running ?? 0} aktiv · {progressData.tracking.workers.queued ?? 0} wartend
+                </p>}
+            </>}
+        </div>}
         {!open && error && <p role="alert" className="text-amber-600">{error}</p>}
         {stale && !open && <p role="status" className="p-3 border border-amber-500 rounded-lg">Personenzuordnung ist veraltet. Vorhandene Personen bleiben bis zum erneuten Ausführen von Schritt 2 unverändert.</p>}
         {snapshot && !running && <div className="p-4 border border-border-subtle rounded-lg flex flex-wrap justify-between items-center gap-4"><span>{summary}</span>

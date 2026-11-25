@@ -588,13 +588,13 @@ export function JobProvider({ children }: JobProviderProps) {
                 if (data.status === 'running' && latestProgress) {
                     const progressStep = (latestProgress as { step?: string }).step;
                     if (progressStep) {
+                        const restored = latestProgress as ProgressInfo;
                         setProgressData(prev => ({
                             ...prev,
                             [progressStep]: {
+                                ...restored,
                                 msg: (latestProgress as { message?: string }).message ?? '',
-                                percent: (latestProgress as { total?: number; current?: number }).total
-                                    ? Math.round(((latestProgress as { current?: number }).current ?? 0) / (latestProgress as { total?: number }).total! * 100)
-                                    : 100
+                                percent: progressPercent(restored) ?? 100
                             }
                         }));
                     }
@@ -910,7 +910,8 @@ export function JobProvider({ children }: JobProviderProps) {
 
         if (event === 'progress') {
             const step = String(data.step);
-            const percent = progressPercent(data as ProgressInfo);
+            const info = data as ProgressInfo;
+            const percent = progressPercent(info);
             updateSavedJobMeta(jobId, {
                 status: 'running',
                 progressPercent: percent,
@@ -919,7 +920,8 @@ export function JobProvider({ children }: JobProviderProps) {
             setProgressData(prev => ({
                 ...prev,
                 [step]: {
-                    msg: data.message as string,
+                    ...info,
+                    msg: String(data.message ?? ''),
                     percent: percent ?? 100
                 }
             }));
