@@ -11,6 +11,7 @@ import hashlib
 import shutil
 import threading
 import time
+import uuid
 import urllib.request
 
 from dotenv import load_dotenv
@@ -115,6 +116,7 @@ def _progress_payload(
     message: str,
     current: int | float | None = None,
     total: int | float | None = None,
+    details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "step": step,
@@ -124,6 +126,9 @@ def _progress_payload(
         payload["current"] = current
     if total is not None:
         payload["total"] = total
+    if details:
+        payload["schema_version"] = 2
+        payload.update(details)
     return payload
 
 
@@ -133,8 +138,9 @@ def _push_progress(
     message: str,
     current: int | float | None = None,
     total: int | float | None = None,
+    details: dict[str, Any] | None = None,
 ) -> None:
-    _push(job_id, "progress", _progress_payload(step, message, current, total))
+    _push(job_id, "progress", _progress_payload(step, message, current, total, details))
     _touch_worker_progress(job_id, message, current, total)
 
 
@@ -200,6 +206,38 @@ def _start_worker(job_id: str, step: str, target) -> None:
     thread.start()
 
 
+def _start_person_worker(job_id: str, step: str, target) -> bool:
+    """Run person-stage coordinators through a bounded application pool."""
+    from backend.pipeline.persons.work_pool import submit_stage
+
+    _ensure_worker_monitor()
+    now = time.monotonic()
+    worker = {
+        "thread": None, "future": None, "step": step,
+        "started_at": now, "last_progress_at": now, "last_notice_at": now,
+        "last_message": "queued", "last_current": 0, "last_total": 100,
+        "finished_at": None,
+    }
+
+    def supervised_target():
+        try:
+            target()
+        finally:
+            with _WORKER_LOCK:
+                if _WORKERS.get(job_id) is worker:
+                    worker["finished_at"] = time.monotonic()
+
+    with _WORKER_LOCK:
+        _WORKERS[job_id] = worker
+        future = submit_stage(supervised_target)
+        if future is None:
+            if _WORKERS.get(job_id) is worker:
+                _WORKERS.pop(job_id, None)
+            return False
+        worker["future"] = future
+    return True
+
+
 def _worker_monitor_loop() -> None:
     while True:
         time.sleep(_WORKER_MONITOR_INTERVAL_SECONDS)
@@ -209,6 +247,7 @@ def _worker_monitor_loop() -> None:
 
         for job_id, worker in items:
             thread = worker.get("thread")
+            future = worker.get("future")
             step = worker.get("step")
             job = sm.get_job(job_id)
             status = job.get("status") if job else None
@@ -220,7 +259,8 @@ def _worker_monitor_loop() -> None:
                         _WORKERS.pop(job_id, None)
                 continue
 
-            if thread is not None and not thread.is_alive():
+            if ((thread is not None and not thread.is_alive())
+                    or (future is not None and future.done())):
                 sm.set_status(job_id, "error", f"{step} worker stopped unexpectedly")
                 _push(job_id, "error", {
                     "step": step,
@@ -1347,7 +1387,7 @@ def run_attribute_stage(job_id: str, body: dict = Body(default={})):
         try:
             from backend.pipeline.persons.attribute_stage import run_attributes
             result = run_attributes(job['video_path'], job['job_dir'],
-                lambda msg, cur, total: _push_progress(job_id, 'attributes', msg, cur, total), max_images=max_images)
+                _PersonStageProgress(job_id, 'attributes'), max_images=max_images)
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, 'idle')
             _push(job_id, 'attributes_done', {'stage_version': result['version']})
@@ -1356,7 +1396,10 @@ def run_attribute_stage(job_id: str, body: dict = Body(default={})):
             sm.set_status(job_id, 'error', str(exc))
             _push(job_id, 'error', {'step': 'attributes', 'message': str(exc)})
     _mark_step_running(job_id, 'attributes', 'Attribute starten …')
-    _start_worker(job_id, 'attributes', run)
+    if not _start_person_worker(job_id, 'attributes', run):
+        sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
+        sm.set_status(job_id, 'idle', 'Personenanalyse-Warteschlange ist ausgelastet.')
+        return JSONResponse({'error': 'Personenanalyse-Warteschlange ist ausgelastet.'}, status_code=429)
     return {'status': 'started'}
 
 
@@ -1396,6 +1439,41 @@ def get_attribute_image(job_id: str, version: str, crop_id: int):
 
 # ── Person Analysis ─────────────────────────────────────────────────────────────
 
+class _PersonStageProgress:
+    """Throttle and persist aggregate person-task progress for SSE clients."""
+
+    def __init__(self, job_id: str, phase: str):
+        self.job_id = job_id
+        self.phase = phase
+        self.run_id = str(uuid.uuid4())
+        self._lock = threading.Lock()
+        self._last_emit = 0.0
+        self._last_phase = None
+
+    def __call__(self, message, current=None, total=None):
+        _push_progress(self.job_id, self.phase, message, current, total)
+
+    def with_details(self, message, current=None, total=None, details=None):
+        details = dict(details or {})
+        details.setdefault("run_id", self.run_id)
+        details.setdefault("status", "running")
+        phase = details.get("phase")
+        workers = details.get("workers") or {}
+        now = time.monotonic()
+        with self._lock:
+            force = (
+                phase != self._last_phase
+                or bool(workers.get("failed"))
+                or details.get("status") in {"complete", "failed", "interrupted"}
+                or (total is not None and current is not None and current >= total)
+            )
+            if not force and now - self._last_emit < 0.25:
+                return
+            self._last_emit = now
+            self._last_phase = phase
+        _push_progress(self.job_id, self.phase, message, current, total, details)
+
+
 def _start_person_stage(job_id: str, phase: str, body: dict | None = None):
     body = body or {}
     parameter = "tracking_interval_seconds" if phase == "tracking" else "similarity_threshold"
@@ -1421,8 +1499,7 @@ def _start_person_stage(job_id: str, phase: str, body: dict | None = None):
         try:
             from backend.pipeline.persons.tracking_stage import run_tracking
             from backend.pipeline.persons.identity_stage import run_identities
-            def progress(message, current=None, total=None):
-                _push_progress(job_id, phase, message, current or 0, total or 100)
+            progress = _PersonStageProgress(job_id, phase)
             (run_tracking if phase == "tracking" else run_identities)(job["video_path"], job["job_dir"], progress, **{parameter: value})
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, "idle")
@@ -1432,7 +1509,10 @@ def _start_person_stage(job_id: str, phase: str, body: dict | None = None):
             sm.set_status(job_id, "error", str(exc))
             _push(job_id, "error", {"step": phase, "message": str(exc)})
     _mark_step_running(job_id, phase, "Personenschritt gestartet …")
-    _start_worker(job_id, phase, run)
+    if not _start_person_worker(job_id, phase, run):
+        sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
+        sm.set_status(job_id, "idle", "Personenanalyse-Warteschlange ist ausgelastet.")
+        return JSONResponse({"error": "Personenanalyse-Warteschlange ist ausgelastet."}, status_code=429)
     return {"status": "started"}
 
 

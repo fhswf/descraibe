@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from pathlib import Path
 
 from . import stage_state, track_segments
 from .review_artifacts import ReviewError
 from .config import SIMILARITY_THRESHOLD, validate_parameter
+from .work_pool import map_bounded, model_slot, report_progress
 
 
 def _true(value) -> bool:
@@ -84,13 +87,68 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
             rejected_frames.append(frame)
 
     records = []
-    capture = recognizer = None
-    try:
-        if selected:
-            capture = cv2.VideoCapture(str(video_path))
-            if not capture.isOpened():
-                raise RuntimeError("Originalvideo nicht verfügbar.")
-            recognizer = FaceMoERecognizer(model_root=Path(__file__).resolve().parents[3] / "models" / "facemoe")
+    if selected:
+        capture = cv2.VideoCapture(str(video_path))
+        if not capture.isOpened():
+            capture.release()
+            raise RuntimeError("Originalvideo nicht verfügbar.")
+        recognizer = None
+        recognition_lock = threading.Lock()
+        total_faces = sum(len(rows) for rows in selected.values())
+        state_lock = threading.Lock()
+        state = {"queued": 0, "running": 0, "completed": 0, "failed": 0,
+                 "completed_faces": 0, "current_task": None, "last_emit": 0.0}
+        started = time.monotonic()
+        rows_by_id = {int(row["face_id"]): row for row in face_rows}
+        rejected_records = []
+
+        def publish(force=False):
+            now = time.monotonic()
+            with state_lock:
+                if not force and now - state["last_emit"] < 0.25:
+                    return
+                state["last_emit"] = now
+                current = state["completed_faces"]
+                workers = {key: state[key] for key in ("queued", "running", "completed", "failed")}
+                current_task = state["current_task"]
+            report_progress(progress_cb, f"Gesichter verarbeitet: {current}/{total_faces}", current, total_faces, {
+                "phase": "embeddings", "completed": current, "total": total_faces, "unit": "faces",
+                "workers": workers, "current_task": current_task,
+                "elapsed_seconds": round(now - started, 1),
+            })
+
+        def task_event(event, item):
+            frame_number = item[0]
+            with state_lock:
+                if event == "queued":
+                    state["queued"] += 1
+                elif event == "started":
+                    state["queued"] = max(0, state["queued"] - 1)
+                    state["running"] += 1
+                    state["current_task"] = {"id": f"frame-{frame_number}", "frame_number": frame_number}
+                elif event == "cancelled":
+                    state["queued"] = max(0, state["queued"] - 1)
+                elif event in {"completed", "failed"}:
+                    state["running"] = max(0, state["running"] - 1)
+                    state[event] += 1
+                    state["current_task"] = {"id": f"frame-{frame_number}", "status": event}
+            publish(force=event in {"completed", "failed"})
+
+        def on_result(item, result):
+            for face_id, track_id, frame_number, alignment_ok, embedding_created, embedding in result:
+                row = rows_by_id[face_id]
+                row["alignment_ok"] = str(bool(alignment_ok))
+                row["embedding_created"] = str(bool(embedding_created))
+                if embedding_created:
+                    records.append((face_id, track_id, frame_number, embedding))
+                else:
+                    rejected_records.append((face_id, track_id, frame_number))
+            with state_lock:
+                state["completed_faces"] += len(result)
+                completed_faces = state["completed_faces"]
+            publish(force=completed_faces >= total_faces)
+
+        def frame_batches():
             last = max(selected)
             for frame_number in range(1, last + 1):
                 if not capture.grab():
@@ -99,45 +157,70 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
                     ok, frame = capture.retrieve()
                     if not ok:
                         raise RuntimeError(f"Originalframe {frame_number} konnte nicht dekodiert werden.")
-                    for row, track_id in selected[frame_number]:
-                        face_id = int(row["face_id"])
-                        try:
-                            x1, y1, x2, y2 = json.loads(row["face_crop_box"])
-                            points = np.asarray(json.loads(row["landmarks"]), dtype=np.float32)
-                            points -= np.asarray([x1, y1], dtype=np.float32)
-                            aligned = align_face(frame[y1:y2, x1:x2].copy(), points)
-                        except Exception:
-                            aligned = None
-                        if aligned is None:
-                            row["alignment_ok"] = "False"
-                            rejected_tracks.append(track_id); rejected_frames.append(frame_number)
-                            continue
-                        row["alignment_ok"] = "True"
-                        try:
-                            embedding = recognizer.extract_embedding(aligned)
-                        except Exception as exc:
-                            print(f"FaceMoE-Fehler | Track {track_id} | Frame {frame_number} | {type(exc).__name__}: {exc}")
-                            rejected_tracks.append(track_id); rejected_frames.append(frame_number)
-                            continue
-                        row["embedding_created"] = "True"
-                        records.append((face_id, track_id, frame_number, embedding))
-                if progress_cb and (frame_number % 30 == 0 or frame_number == last):
-                    progress_cb(f"Personenzuordnung: Frame {frame_number}/{last}", frame_number, last)
+                    yield (frame_number, frame.copy(), selected[frame_number])
+                if frame_number % 30 == 0 or frame_number == last:
+                    report_progress(progress_cb, f"Videoframes gelesen: {frame_number}/{last}", frame_number, last, {
+                        "phase": "decode", "unit": "frames",
+                        "workers": {key: state[key] for key in ("queued", "running", "completed", "failed")},
+                    })
 
-        vectors = np.stack([row[3] for row in records]).astype(np.float32) if records else np.empty((0, 512), np.float32)
+        def process_frame(item):
+            frame_number, frame, observations = item
+            results = []
+            for row, track_id in observations:
+                face_id = int(row["face_id"])
+                try:
+                    x1, y1, x2, y2 = json.loads(row["face_crop_box"])
+                    points = np.asarray(json.loads(row["landmarks"]), dtype=np.float32)
+                    points -= np.asarray([x1, y1], dtype=np.float32)
+                    aligned = align_face(frame[y1:y2, x1:x2].copy(), points)
+                except Exception:
+                    aligned = None
+                if aligned is None:
+                    results.append((face_id, track_id, frame_number, False, False, None))
+                    continue
+                try:
+                    with recognition_lock:
+                        embedding = recognizer.extract_embedding(aligned)
+                except Exception as exc:
+                    print(f"FaceMoE-Fehler | Track {track_id} | Frame {frame_number} | {type(exc).__name__}: {exc}")
+                    results.append((face_id, track_id, frame_number, True, False, None))
+                    continue
+                results.append((face_id, track_id, frame_number, True, True, embedding))
+            return results
+
+        try:
+            with model_slot():
+                recognizer = FaceMoERecognizer(model_root=Path(__file__).resolve().parents[3] / "models" / "facemoe")
+                map_bounded(
+                    frame_batches(), process_frame,
+                    on_task_event=task_event, on_result=on_result,
+                    collect_results=False,
+                )
+        finally:
+            capture.release()
+            if recognizer is not None:
+                recognizer.close()
+
+        records.sort(key=lambda record: record[0])
+        rejected_records.sort(key=lambda record: record[0])
+        rejected_tracks.extend(track_id for _face_id, track_id, _frame_number in rejected_records)
+        rejected_frames.extend(frame_number for _face_id, _track_id, frame_number in rejected_records)
+
+    vectors = np.stack([row[3] for row in records]).astype(np.float32) if records else np.empty((0, 512), np.float32)
+    try:
+        report_progress(progress_cb, "Personen werden global geclustert …", 0, 1, {
+            "phase": "clustering", "completed": 0, "total": 1, "unit": "clustering",
+        })
         mapping = run_clustering(
             embeddings=vectors, frame_numbers=np.asarray([row[2] for row in records], np.int32),
             track_ids=np.asarray([row[1] for row in records], np.int32),
             rejected_track_ids=np.asarray(rejected_tracks, np.int32),
             rejected_frame_numbers=np.asarray(rejected_frames, np.int32),
-            similarity_threshold=similarity_threshold,
+            similarity_threshold=similarity_threshold, progress_cb=progress_cb,
         )
     finally:
         records.clear()
-        if capture is not None:
-            capture.release()
-        if recognizer is not None:
-            recognizer.close()
 
     current = stage_state.read_json(base / "tracks.json")
     if current.get("revision") != tracking_revision or current.get("video_sha256") != metadata.get("video_sha256"):
@@ -148,7 +231,15 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
         if not track["excluded"] and track["track_id"] not in logical_has_face
         and track["source_track_id"] in source_has_usable_face
     }
-    refresh_identity_fallbacks(video_path, base, tracks, needs_fallback, float(metadata["fps"]), progress_cb)
+    refresh_identity_fallbacks(
+        video_path, base, tracks, needs_fallback, float(metadata["fps"]),
+        lambda message, current, total: report_progress(
+            progress_cb, message, current, total, {"phase": "fallback", "unit": "frames"},
+        ),
+    )
+    report_progress(progress_cb, "Personenzuordnung wird gespeichert …", 0, 1, {
+        "phase": "publishing", "completed": 0, "total": 1, "unit": "publish",
+    })
     stage_state.write_csv(base / "face_observations.csv", face_rows, face_fields)
     revision, assignment_revision = _next_revisions(base)
     stage_state.atomic_write(base / "persons.json", {
@@ -156,6 +247,9 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
         "similarity_threshold": similarity_threshold,
     })
     (base / "attributes.json").unlink(missing_ok=True)
+    report_progress(progress_cb, "Personenzuordnung abgeschlossen", 1, 1, {
+        "phase": "complete", "completed": 1, "total": 1, "unit": "publish",
+    })
 
     from .review_state import current as current_review
     return current_review(job_dir)

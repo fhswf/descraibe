@@ -4,10 +4,23 @@ import React from 'react';
 export type JobStatus = 'idle' | 'created' | 'uploading' | 'running' | 'error' | 'complete';
 
 export interface ProgressInfo {
+  schema_version?: number;
+  run_id?: string;
   step?: string;
+  phase?: string;
   current?: number;
   total?: number;
+  completed?: number;
+  unit?: string;
   message?: string;
+  elapsed_seconds?: number;
+  workers?: { queued?: number; running?: number; completed?: number; failed?: number };
+  current_task?: { id?: string; status?: string; current?: number; total?: number; unit?: string; frame_number?: number; person_id?: number };
+}
+
+export interface ProgressEntry extends ProgressInfo {
+  msg: string;
+  percent: number;
 }
 
 export interface JobData {
@@ -156,7 +169,7 @@ export interface TTSResult {
 }
 
 export interface ProgressData {
-  [step: string]: { msg: string; percent: number } | null;
+  [step: string]: ProgressEntry | null;
 }
 
 // Saved job metadata

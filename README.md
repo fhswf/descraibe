@@ -182,6 +182,11 @@ git push
 | `OIDC_ID_TOKEN_COOKIE_NAME` | `oidc_id_token` | No | Cookie name used to store the OIDC ID token (JWT). |
 | `AD_DATABASE_URL` | *(unset)* | No | PostgreSQL DSN for relational metadata storage (users, user config, presets). Example: `postgresql://user:pass@host:5432/descraibe`. If unset, the app uses file-based fallback for user config/presets. |
 | `AD_USER_CONFIG_DIR` | `${AD_JOBS_DIR}/users` | No | Directory for per-user config storage (`jobs`, `saved metadata`, and pipeline settings) for logged-in users. |
+| `AD_PERSON_CPU_WORKERS` | `1` | No | Maximum number of person-analysis scene/frame/person tasks active in the shared thread pool. Increase after benchmarking the target hardware. Each task returns its result to the stage coordinator; model inference is serialized per loaded model. |
+| `AD_PERSON_MAX_PENDING` | `2 × AD_PERSON_CPU_WORKERS` | No | Additional person-analysis tasks allowed to wait in the bounded task queue across all jobs. |
+| `AD_PERSON_MODEL_SLOTS` | `1` | No | Maximum number of model-heavy person stages allowed to hold their model set at once. Raise only after measuring GPU/host memory. |
+| `AD_PERSON_STAGE_WORKERS` | `2` | No | Number of person-stage coordinators that can run at once. Coordinators submit bounded work to the task pool. |
+| `AD_PERSON_STAGE_PENDING` | `4` | No | Additional person-stage coordinators allowed to queue. Further requests receive HTTP `429` until a slot opens. |
 
 > [!IMPORTANT]
 > `OPENAI_API_KEY` is the only **required** environment variable. The container will start without it, but calls to `/api/run/gpt` will return a `400` error until it is provided.
@@ -332,12 +337,12 @@ The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICEN
 
 ### How It Works
 
-1. After scene images are extracted, RF-DETR and ByteTrack process video frames at a default stride of `max(1, round(fps * 0.233))`.
+1. After scene images are extracted, RF-DETR and ByteTrack process video frames at a default stride of `max(1, round(fps * 0.233))`. Tracking scenes run as independent bounded tasks; each scene keeps its own sequential ByteTrack state.
 2. Tracking reuses the full-video shot boundaries saved by the image extraction step and restarts tracks at each cut. Run image extraction first. Changed boundaries invalidate tracking, identities and attributes; unchanged boundaries preserve them.
 3. RetinaFace runs on every second sampled frame; face metadata and person crops are saved.
 4. Optional review supports face/track exclusions and logical track splits.
-5. FaceMoE creates embeddings in RAM; clustering assigns tracks to persons. Assignments and names can be reviewed.
-6. Qwen extracts attributes from up to five selected existing crops per person; attributes can be edited manually.
+5. FaceMoE creates embeddings in RAM while frame decoding and alignment run through bounded tasks; track-pair distances are computed concurrently, then a deterministic global clustering pass assigns tracks to persons. Assignments and names can be reviewed.
+6. Qwen extracts attributes from up to five selected existing crops per person. Per-person tasks are bounded, and generation uses one serialized model/RNG lane by default; attributes can be edited manually.
 7. Current data is stored under `person_analysis/` in the job directory, without run history. Earlier changes invalidate dependent results.
 8. GPT prompts receive person names with Erstnennung/Folgebenennung flags. Qwen attributes are not included in this person context.
 

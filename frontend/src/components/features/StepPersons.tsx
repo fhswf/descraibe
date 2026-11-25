@@ -98,7 +98,12 @@ function PersonsPanel({ jobId }: { jobId: string }) {
             <p className="text-sm text-text-secondary">Personen und ihre Auftritte im Video. Track-Zuordnungen können bei Bedarf manuell korrigiert werden.</p></div></div>
         {(snapshot?.identities_stale || jobData?.person_stages?.identities_stale) && <p role="status" className="p-3 border border-amber-500 rounded-lg">Veraltet: Gesichtsbereinigung wurde geändert. Angezeigt wird der bisherige Personenstand. Schritt 2 erneut ausführen, um neu zu clustern.</p>}
         {running && <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg"><p className="text-sm">{progressData.identities?.msg || 'Verarbeitung läuft …'}</p>
-            {progressData.identities && <progress aria-label="Personenanalyse Fortschritt" max={100} value={progressData.identities.percent} className="w-full" />}</div>}
+            {progressData.identities && <>
+                <progress aria-label="Personenanalyse Fortschritt" max={100} value={progressData.identities.percent} className="w-full" />
+                {progressData.identities.workers && <p className="text-xs text-text-muted">
+                    {progressData.identities.workers.completed ?? 0} abgeschlossen · {progressData.identities.workers.running ?? 0} aktiv · {progressData.identities.workers.queued ?? 0} wartend
+                </p>}
+            </>}</div>}
         {error && <div role="alert" className="p-3 text-red-400 border border-red-500/30 rounded-lg">{error} <button onClick={() => { setLoading(true); setRefresh(n => n + 1); }} className="underline">Neu laden</button></div>}
         {(notice || snapshot?.warning) && <p role="status" className="text-sm text-text-secondary">{notice || snapshot?.warning}</p>}
         {loading && !running && <p className="text-sm text-text-muted">Lade Personendaten …</p>}

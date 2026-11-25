@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import numpy as np
+import time
 
 from .config import SIMILARITY_THRESHOLD, validate_parameter
+from .work_pool import map_bounded, report_progress
 
 
 TRACK_REFERENCE_SIZE = 5
@@ -136,6 +138,7 @@ def create_track_distance_matrix(
         int,
         np.ndarray,
     ],
+    progress_cb=None,
 ) -> np.ndarray:
 
     track_count = len(
@@ -150,55 +153,40 @@ def create_track_distance_matrix(
         dtype=np.float32,
     )
 
-    for i in range(
-        track_count
-    ):
+    def calculate_row(i: int):
+        track_id_a = int(unique_track_ids[i])
+        embeddings_a = track_references[track_id_a]
+        for j in range(i + 1, track_count):
+            track_id_b = int(unique_track_ids[j])
+            similarity = calculate_track_similarity(embeddings_a, track_references[track_id_b])
+            distance = 1.0 - similarity
+            # Each row owns its upper-triangle pairs, so these symmetric cells
+            # are disjoint from every other worker's writes.
+            distance_matrix[i, j] = distance
+            distance_matrix[j, i] = distance
+        return i
 
-        track_id_a = int(
-            unique_track_ids[i]
-        )
+    completed_rows = 0
+    started = time.monotonic()
+    last_emit = 0.0
 
-        embeddings_a = (
-            track_references[
-                track_id_a
-            ]
-        )
+    def row_complete(_item, _result):
+        nonlocal completed_rows, last_emit
+        completed_rows += 1
+        now = time.monotonic()
+        if progress_cb and (now - last_emit >= 0.25 or completed_rows == track_count - 1):
+            last_emit = now
+            report_progress(progress_cb, f"Track-Ähnlichkeiten: {completed_rows}/{track_count - 1}",
+                            completed_rows, max(1, track_count - 1), {
+                                "phase": "distance_matrix", "completed": completed_rows,
+                                "total": track_count - 1, "unit": "track_rows",
+                                "elapsed_seconds": round(now - started, 1),
+                            })
 
-        for j in range(
-            i + 1,
-            track_count,
-        ):
-
-            track_id_b = int(
-                unique_track_ids[j]
-            )
-
-            embeddings_b = (
-                track_references[
-                    track_id_b
-                ]
-            )
-
-            similarity = (
-                calculate_track_similarity(
-                    embeddings_a,
-                    embeddings_b,
-                )
-            )
-
-            distance = (
-                1.0 - similarity
-            )
-
-            distance_matrix[
-                i,
-                j,
-            ] = distance
-
-            distance_matrix[
-                j,
-                i,
-            ] = distance
+    map_bounded(
+        range(max(0, track_count - 1)), calculate_row,
+        on_result=row_complete, collect_results=False,
+    )
 
     return distance_matrix
 
@@ -397,6 +385,7 @@ def cluster_tracks(
         frozenset[int]
     ],
     similarity_threshold: float = SIMILARITY_THRESHOLD,
+    progress_cb=None,
 ) -> np.ndarray:
     """
     Hierarchisches agglomeratives Clustering
@@ -443,6 +432,8 @@ def cluster_tracks(
         in unique_track_ids
     ]
 
+    merge_count = 0
+    maximum_merges = max(1, len(unique_track_ids) - 1)
     while True:
 
         best_pair = None
@@ -524,6 +515,12 @@ def cluster_tracks(
         clusters.append(
             merged_cluster
         )
+        merge_count += 1
+        report_progress(progress_cb, f"Cluster zusammengeführt: {merge_count}/{maximum_merges}",
+                        merge_count, maximum_merges, {
+                            "phase": "cluster_merges", "completed": merge_count,
+                            "total": maximum_merges, "unit": "merges",
+                        })
 
     # stabile IDs:
     # Cluster mit kleinstem Track zuerst
@@ -624,6 +621,7 @@ def run_clustering(
     rejected_track_ids: np.ndarray,
     rejected_frame_numbers: np.ndarray,
     similarity_threshold: float = SIMILARITY_THRESHOLD,
+    progress_cb=None,
 ) -> dict[int, int]:
     """
     Führt das getestete FaceMoE-
@@ -677,6 +675,9 @@ def run_clustering(
             "vorhanden."
         )
 
+        report_progress(progress_cb, "Keine Embeddings zum Clustern", 1, 1, {
+            "phase": "clustering", "completed": 1, "total": 1, "unit": "clustering",
+        })
         return {}
 
     (
@@ -691,6 +692,7 @@ def run_clustering(
         create_track_distance_matrix(
             unique_track_ids,
             track_references,
+            progress_cb,
         )
     )
 
@@ -722,6 +724,7 @@ def run_clustering(
                 cannot_link_pairs
             ),
             similarity_threshold=similarity_threshold,
+            progress_cb=progress_cb,
         )
     )
 
@@ -814,4 +817,7 @@ def run_clustering(
         f"{len(np.unique(identity_labels))}"
     )
 
+    report_progress(progress_cb, "Clustering abgeschlossen", 1, 1, {
+        "phase": "cluster_complete", "completed": 1, "total": 1, "unit": "clustering",
+    })
     return track_to_identity
