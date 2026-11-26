@@ -206,7 +206,7 @@ def _start_worker(job_id: str, step: str, target) -> None:
     thread.start()
 
 
-def _start_person_worker(job_id: str, step: str, target) -> bool:
+def _start_person_worker(job_id: str, step: str, target, *, cancel_token=None, progress=None) -> bool:
     """Run person-stage coordinators through a bounded application pool."""
     from backend.pipeline.persons.work_pool import submit_stage
 
@@ -214,6 +214,7 @@ def _start_person_worker(job_id: str, step: str, target) -> bool:
     now = time.monotonic()
     worker = {
         "thread": None, "future": None, "step": step,
+        "cancel_token": cancel_token, "progress": progress,
         "started_at": now, "last_progress_at": now, "last_notice_at": now,
         "last_message": "queued", "last_current": 0, "last_total": 100,
         "finished_at": None,
@@ -1382,21 +1383,27 @@ def run_attribute_stage(job_id: str, body: dict = Body(default={})):
     except review_artifacts.ReviewError as exc:
         return JSONResponse({'error': str(exc)}, status_code=exc.status)
 
+    from backend.pipeline.persons.work_pool import CancellationToken, WorkCancelled
+    cancel_token = CancellationToken()
+    progress = _PersonStageProgress(job_id, 'attributes')
+
     def run():
         sm.job_id_var.set(job_id)
         try:
             from backend.pipeline.persons.attribute_stage import run_attributes
             result = run_attributes(job['video_path'], job['job_dir'],
-                _PersonStageProgress(job_id, 'attributes'), max_images=max_images)
+                progress, max_images=max_images, cancel_token=cancel_token)
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, 'idle')
             _push(job_id, 'attributes_done', {'stage_version': result['version']})
+        except WorkCancelled:
+            _finish_person_cancellation(job_id, 'attributes', progress)
         except Exception as exc:
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, 'error', str(exc))
             _push(job_id, 'error', {'step': 'attributes', 'message': str(exc)})
     _mark_step_running(job_id, 'attributes', 'Attribute starten …')
-    if not _start_person_worker(job_id, 'attributes', run):
+    if not _start_person_worker(job_id, 'attributes', run, cancel_token=cancel_token, progress=progress):
         sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
         sm.set_status(job_id, 'idle', 'Personenanalyse-Warteschlange ist ausgelastet.')
         return JSONResponse({'error': 'Personenanalyse-Warteschlange ist ausgelastet.'}, status_code=429)
@@ -1449,6 +1456,8 @@ class _PersonStageProgress:
         self._lock = threading.Lock()
         self._last_emit = 0.0
         self._last_phase = None
+        self._status = "running"
+        self._last_progress = None
 
     def __call__(self, message, current=None, total=None):
         _push_progress(self.job_id, self.phase, message, current, total)
@@ -1456,22 +1465,100 @@ class _PersonStageProgress:
     def with_details(self, message, current=None, total=None, details=None):
         details = dict(details or {})
         details.setdefault("run_id", self.run_id)
-        details.setdefault("status", "running")
         phase = details.get("phase")
         workers = details.get("workers") or {}
         now = time.monotonic()
         with self._lock:
+            details["status"] = self._status
+            self._last_progress = (message, current, total, dict(details))
             force = (
+                self._status != "running"
+                or
                 phase != self._last_phase
                 or bool(workers.get("failed"))
-                or details.get("status") in {"complete", "failed", "interrupted"}
                 or (total is not None and current is not None and current >= total)
             )
             if not force and now - self._last_emit < 0.25:
                 return
             self._last_emit = now
             self._last_phase = phase
-        _push_progress(self.job_id, self.phase, message, current, total, details)
+            _push_progress(self.job_id, self.phase, message, current, total, details)
+
+    def request_cancellation(self):
+        with self._lock:
+            if self._status == "cancelled":
+                return
+            self._status = "cancelling"
+            message, current, total, details = self._last_progress or (
+                "Abbrechen wird ausgeführt …", 0, 1, {"phase": "cancelling"},
+            )
+            details = dict(details)
+            details["run_id"] = self.run_id
+            details["status"] = "cancelling"
+            self._last_progress = ("Abbrechen wird ausgeführt …", current, total, details)
+            self._last_emit = time.monotonic()
+            _push_progress(
+                self.job_id, self.phase, "Abbrechen wird ausgeführt …", current, total, details,
+            )
+
+    def finish_cancellation(self):
+        with self._lock:
+            self._status = "cancelled"
+            message, current, total, details = self._last_progress or (
+                "Personenschritt abgebrochen.", 0, 1, {"phase": "cancelled"},
+            )
+            details = dict(details)
+            details.update({"run_id": self.run_id, "status": "cancelled", "phase": "cancelled"})
+            self._last_progress = ("Personenschritt abgebrochen.", current, total, details)
+            self._last_emit = time.monotonic()
+            _push_progress(
+                self.job_id, self.phase, "Personenschritt abgebrochen.", current, total, details,
+            )
+
+
+def _finish_person_cancellation(job_id: str, step: str, progress: _PersonStageProgress | None) -> None:
+    message = "Personenschritt abgebrochen. Vorherige Ergebnisse bleiben erhalten."
+    sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
+    sm.set_status(job_id, "idle", message)
+    if progress is not None:
+        progress.finish_cancellation()
+    _push(job_id, "cancelled", {"step": step, "message": message})
+
+
+@app.post("/api/jobs/{job_id}/person-analysis/cancel")
+def cancel_person_stage(job_id: str):
+    from backend.pipeline.persons.work_pool import CancellationToken
+
+    job = sm.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": ERR_UNKNOWN_JOB}, status_code=404)
+    if job.get("status") != "running":
+        return JSONResponse({"error": "Kein Personenschritt läuft gerade."}, status_code=409)
+
+    with _WORKER_LOCK:
+        worker = _WORKERS.get(job_id)
+        if not worker or worker.get("step") not in {"tracking", "identities", "attributes"}:
+            return JSONResponse({"error": "Kein abbrechbarer Personenschritt gefunden."}, status_code=409)
+        cancel_token = worker.get("cancel_token")
+        if not isinstance(cancel_token, CancellationToken):
+            return JSONResponse({"error": "Dieser Prozessschritt kann nicht abgebrochen werden."}, status_code=409)
+        if not cancel_token.request_cancel():
+            return JSONResponse({"error": "Der Prozessschritt veröffentlicht bereits seine Ergebnisse."}, status_code=409)
+
+        step = worker["step"]
+        progress = worker.get("progress")
+        future = worker.get("future")
+        cancelled_before_start = future is not None and future.cancel()
+        if cancelled_before_start and _WORKERS.get(job_id) is worker:
+            _WORKERS.pop(job_id, None)
+
+    if cancelled_before_start:
+        _finish_person_cancellation(job_id, step, progress)
+        return {"status": "cancelled"}
+
+    if progress is not None:
+        progress.request_cancellation()
+    return JSONResponse({"status": "cancelling"}, status_code=202)
 
 
 def _start_person_stage(job_id: str, phase: str, body: dict | None = None):
@@ -1494,22 +1581,30 @@ def _start_person_stage(job_id: str, phase: str, body: dict | None = None):
     except review_artifacts.ReviewError as exc:
         return JSONResponse({"error": str(exc)}, status_code=exc.status)
 
+    from backend.pipeline.persons.work_pool import CancellationToken, WorkCancelled
+    cancel_token = CancellationToken()
+    progress = _PersonStageProgress(job_id, phase)
+
     def run():
         sm.job_id_var.set(job_id)
         try:
             from backend.pipeline.persons.tracking_stage import run_tracking
             from backend.pipeline.persons.identity_stage import run_identities
-            progress = _PersonStageProgress(job_id, phase)
-            (run_tracking if phase == "tracking" else run_identities)(job["video_path"], job["job_dir"], progress, **{parameter: value})
+            (run_tracking if phase == "tracking" else run_identities)(
+                job["video_path"], job["job_dir"], progress,
+                **{parameter: value}, cancel_token=cancel_token,
+            )
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, "idle")
             _push(job_id, f"{phase}_done", {"stage_version": stage_state.status(job["job_dir"])["tracking_revision" if phase == "tracking" else "identity_revision"]})
+        except WorkCancelled:
+            _finish_person_cancellation(job_id, phase, progress)
         except Exception as exc:
             sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
             sm.set_status(job_id, "error", str(exc))
             _push(job_id, "error", {"step": phase, "message": str(exc)})
     _mark_step_running(job_id, phase, "Personenschritt gestartet …")
-    if not _start_person_worker(job_id, phase, run):
+    if not _start_person_worker(job_id, phase, run, cancel_token=cancel_token, progress=progress):
         sm.update_job(job_id, persons_analysis_running=False, persons_phase=None)
         sm.set_status(job_id, "idle", "Personenanalyse-Warteschlange ist ausgelastet.")
         return JSONResponse({"error": "Personenanalyse-Warteschlange ist ausgelastet."}, status_code=429)

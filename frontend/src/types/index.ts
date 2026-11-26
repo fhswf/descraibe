@@ -13,6 +13,7 @@ export interface ProgressInfo {
   completed?: number;
   unit?: string;
   message?: string;
+  status?: 'running' | 'cancelling' | 'cancelled';
   elapsed_seconds?: number;
   workers?: { queued?: number; running?: number; completed?: number; failed?: number };
   current_task?: { id?: string; status?: string; current?: number; total?: number; unit?: string; frame_number?: number; person_id?: number };

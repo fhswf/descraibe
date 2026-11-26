@@ -11,6 +11,7 @@ import { StepTranscribe } from './components/features/StepTranscribe';
 import { StepSlots } from './components/features/StepSlots';
 import { StepImages } from './components/features/StepImages';
 import { StepTracking } from './components/features/StepTracking';
+import { GlobalProgress } from './components/features/GlobalProgress';
 import { StepAttributes } from './components/features/StepAttributes';
 import { StepPersons } from './components/features/StepPersons';
 import { ConfigModal } from './components/features/ConfigModal';
@@ -507,6 +508,7 @@ function App(): React.ReactElement {
         </main>
       </div>
 
+      <GlobalProgress />
       <StorageQuotaFooter />
       <ConfigModal />
     </div>
