@@ -123,6 +123,7 @@ export interface PersonSimilarity {
   person_a: number;
   person_b: number;
   distance: number;
+  metric: 'cosine';
   suggested: boolean;
 }
 

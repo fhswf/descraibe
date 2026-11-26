@@ -356,7 +356,7 @@ The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICEN
 2. Tracking reuses the full-video shot boundaries saved by the image extraction step and restarts tracks at each cut. Run image extraction first. Changed boundaries invalidate tracking, identities and attributes; unchanged boundaries preserve them.
 3. RetinaFace runs on every second sampled frame; face metadata and person crops are saved.
 4. Optional review supports face/track exclusions and logical track splits.
-5. FaceMoE creates embeddings in RAM while frame decoding and alignment run through bounded tasks; track-pair distances are computed concurrently, then a deterministic global clustering pass assigns tracks to persons. Assignments and names can be reviewed.
+5. FaceMoE creates embeddings in RAM while frame decoding and alignment run through bounded tasks; track-pair cosine distances drive a deterministic global clustering pass. Up to five normalized reference vectors per track are retained in compact float16 form so person similarities can be recalculated during review. Assignments and names can be reviewed.
 6. Qwen extracts attributes from up to five selected existing crops per person. Per-person tasks are bounded, and generation uses one serialized model/RNG lane by default; attributes can be edited manually.
 7. Current data is stored under `person_analysis/` in the job directory, without run history. Earlier changes invalidate dependent results.
 8. GPT prompts receive person names with Erstnennung/Folgebenennung flags. Qwen attributes are not included in this person context.

@@ -150,7 +150,7 @@ def save_faces(job_dir, body):
 
     write_csv(data.root / "face_observations.csv", rows, fields)
     atomic_write(data.root / "tracks.json", updated)
-    for name in ("persons.json", "attributes.json"):
+    for name in ("persons.json", "attributes.json", "track_references.f16"):
         (data.root / name).unlink(missing_ok=True)
     person_crops.remove_identity_fallbacks(data.root)
     track_segments.timeline.cache_clear()
