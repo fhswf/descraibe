@@ -83,7 +83,7 @@ def _open_at_frame(cv2, video_path: Path, first_frame: int):
 
 def _process_scene(
     *, cv2, video_path: Path, scene_dir: Path, spec: dict, fps: float, total_frames: int,
-    stride: int, detector, detector_lock, faces, faces_lock, progress_task,
+    stride: int, detector, detector_lock, faces, faces_lock, progress_task, cancel_token=None,
 ):
     from . import track_segments
     from .appearances import TrackIntervalAccumulator
@@ -108,6 +108,8 @@ def _process_scene(
         }
         frame_number = spec["first_sample"]
         while frame_number <= spec["end_frame"]:
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             while last_grabbed < frame_number:
                 if not capture.grab():
                     raise RuntimeError(f"Tracking-Frame {frame_number} konnte nicht gelesen werden.")
@@ -116,7 +118,11 @@ def _process_scene(
             if not ok:
                 raise RuntimeError(f"Tracking-Frame {frame_number} konnte nicht dekodiert werden.")
 
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             with detector_lock:
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 detections = detector.detect(frame)
             tracked = [
                 {**person, "scene_id": spec["scene_id"]}
@@ -133,9 +139,13 @@ def _process_scene(
             tracking_ordinal = (frame_number - 1) // stride
             if tracking_ordinal % 2 == 0 and tracked:
                 with faces_lock:
+                    if cancel_token is not None:
+                        cancel_token.raise_if_cancelled()
                     detected_faces = faces.detect(frame)
                 counts["faces_detected"] += len(detected_faces)
                 for index, person in assign_faces_to_tracks(detected_faces, tracked).items():
+                    if cancel_token is not None:
+                        cancel_token.raise_if_cancelled()
                     face = detected_faces[index]
                     usable, quality = check_face_quality(face["crop"], float(face["confidence"]))
                     counts["faces_assigned"] += 1
@@ -183,7 +193,8 @@ def _process_scene(
                 writer.close()
 
 
-def _merge_scenes(scene_results: list[dict], staged: Path, video_path: Path, fps: float, progress_cb, total_frames: int):
+def _merge_scenes(scene_results: list[dict], staged: Path, video_path: Path, fps: float, progress_cb,
+                  total_frames: int, cancel_token=None):
     from .face_observations import FaceObservationWriter
     from .person_crops import FallbackCropCollector, PersonCropWriter, read_manifest, write_manifest
     from .track_segments import TIMELINE, initial_state
@@ -206,12 +217,16 @@ def _merge_scenes(scene_results: list[dict], staged: Path, video_path: Path, fps
     fallback_count = 0
     try:
         for result in scene_results:
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             scene_id = result["scene_id"]
             for local_track in result["tracks"]:
                 global_id = track_ids[(scene_id, int(local_track["track_id"]))]
                 tracks.append({**local_track, "track_id": global_id, "scene_id": scene_id})
 
             for row in result["timeline_rows"]:
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 copied = dict(row)
                 local_id = int(copied["source_track_id"])
                 copied["source_track_id"] = track_ids[(scene_id, local_id)]
@@ -219,6 +234,8 @@ def _merge_scenes(scene_results: list[dict], staged: Path, video_path: Path, fps
                 timeline_rows.append(copied)
 
             for row in result["crop_rows"]:
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 copied = dict(row)
                 local_id = int(copied["source_track_id"])
                 global_id = track_ids[(scene_id, local_id)]
@@ -237,6 +254,8 @@ def _merge_scenes(scene_results: list[dict], staged: Path, video_path: Path, fps
                 crop_rows.append(copied)
 
             for row in result["face_rows"]:
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 copied = dict(row)
                 local_id = int(copied["source_track_id"])
                 old_face_crop = str(copied.get("person_crop_path", ""))
@@ -267,6 +286,7 @@ def _merge_scenes(scene_results: list[dict], staged: Path, video_path: Path, fps
                 progress_cb, message, current, total,
                 {"phase": "fallback", "unit": "frames"},
             ),
+            cancel_token=cancel_token,
         )
         staged_crops.close()
         staged_crops = None
@@ -293,8 +313,11 @@ def _merge_scenes(scene_results: list[dict], staged: Path, video_path: Path, fps
     return tracks, stats
 
 
-def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_seconds=TRACKING_INTERVAL_SECONDS):
+def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_seconds=TRACKING_INTERVAL_SECONDS,
+                 cancel_token=None):
     validate_parameter("tracking_interval_seconds", tracking_interval_seconds)
+    if cancel_token is not None:
+        cancel_token.raise_if_cancelled()
     cuts = stage_state.scene_cuts(job_dir)
     import cv2
 
@@ -369,11 +392,14 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
                     state["current_task"] = {"id": f"scene-{spec['scene_id']}", "unit": "tracking_frames"}
                 elif event == "cancelled":
                     state["queued"] = max(0, state["queued"] - 1)
+                elif event == "cancelled_running":
+                    state["running"] = max(0, state["running"] - 1)
+                    state["current_task"] = {"id": f"scene-{spec['scene_id']}", "status": "cancelled"}
                 elif event in {"completed", "failed"}:
                     state["running"] = max(0, state["running"] - 1)
                     state[event] += 1
                     state["current_task"] = {"id": f"scene-{spec['scene_id']}", "status": event}
-            publish_progress(force=event in {"completed", "failed"})
+            publish_progress(force=event in {"completed", "failed", "cancelled_running"})
 
         def task_progress(spec, completed, frame_number, _total_frames):
             with task_lock:
@@ -385,7 +411,7 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
                 }
             publish_progress()
 
-        with model_slot():
+        with model_slot(cancel_token):
             detector = RFDETRPersonDetector()
             faces = RetinaFaceDetector(model_cache_dir=Path(__file__).resolve().parents[3] / "models" / "retinaface")
             detector_lock, faces_lock = threading.Lock(), threading.Lock()
@@ -397,16 +423,22 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
                     spec=spec, fps=fps, total_frames=total_frames, stride=stride,
                     detector=detector, detector_lock=detector_lock,
                     faces=faces, faces_lock=faces_lock, progress_task=task_progress,
+                    cancel_token=cancel_token,
                 ),
                 on_task_event=task_event,
+                cancel_token=cancel_token,
             )
 
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             report_progress(progress_cb, "Tracking-Ergebnisse werden zusammengeführt …", 0, 1, {
                 "phase": "merge", "completed": len(scene_results), "total": len(scene_results),
                 "unit": "scenes", "workers": {"queued": 0, "running": 0,
                                                   "completed": len(scene_results), "failed": 0},
             })
-            tracks, stats = _merge_scenes(scene_results, staged, video_path, fps, progress_cb, total_frames)
+            tracks, stats = _merge_scenes(
+                scene_results, staged, video_path, fps, progress_cb, total_frames, cancel_token,
+            )
             stats.update({"tracking_stride": stride})
             state = initial_state(tracks, fps, stage_state.video_digest(video_path), stats)
             state["revision"] = next_revision
@@ -416,6 +448,8 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
             report_progress(progress_cb, "Tracking-Ergebnisse werden veröffentlicht …", 0, 1, {
                 "phase": "publishing", "completed": 0, "total": 1, "unit": "publish",
             })
+            if cancel_token is not None:
+                cancel_token.begin_commit()
             _publish(staged, target)
             timeline.cache_clear()
 

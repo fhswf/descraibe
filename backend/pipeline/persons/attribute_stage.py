@@ -11,11 +11,14 @@ from .attribute_selection import select_existing
 from .qwen_attributes import FIELDS, GENERATION, MODEL_ID, PROMPT, QwenAttributes, parse_json
 from .review_artifacts import ReviewError
 from .config import MAX_IMAGES_PER_PERSON, validate_parameter
-from .work_pool import map_bounded, model_slot, report_progress
+from .work_pool import CancellationToken, map_bounded, model_slot, report_progress
 
 
-def run_attributes(video_path, job_dir, progress_cb=None, *, max_images=MAX_IMAGES_PER_PERSON):
+def run_attributes(video_path, job_dir, progress_cb=None, *, max_images=MAX_IMAGES_PER_PERSON,
+                   cancel_token: CancellationToken | None = None):
     validate_parameter("max_images", max_images)
+    if cancel_token is not None:
+        cancel_token.raise_if_cancelled()
     from ..video_utils import get_video_stats
 
     data = attribute_state.source(job_dir)
@@ -61,13 +64,18 @@ def run_attributes(video_path, job_dir, progress_cb=None, *, max_images=MAX_IMAG
                 state["current_task"] = {"id": f"person-{person_id}", "person_id": person_id}
             elif event == "cancelled":
                 state["queued"] = max(0, state["queued"] - 1)
+            elif event == "cancelled_running":
+                state["running"] = max(0, state["running"] - 1)
+                state["current_task"] = {"id": f"person-{person_id}", "status": "cancelled"}
             elif event in {"completed", "failed"}:
                 state["running"] = max(0, state["running"] - 1)
                 state[event] += 1
                 state["current_task"] = {"id": f"person-{person_id}", "status": event}
-        publish(force=event in {"completed", "failed"})
+        publish(force=event in {"completed", "failed", "cancelled_running"})
 
     def process_person(item):
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
         person_id, images = item
         start, error = time.perf_counter(), None
         parsed = {field: "" for field in FIELDS}
@@ -75,6 +83,8 @@ def run_attributes(video_path, job_dir, progress_cb=None, *, max_images=MAX_IMAG
         if images:
             status = "generation_error"
             try:
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 parsed = parse_json(model.predict(person_id, [data.crop_file(image["crop_id"]) for image in images]))
                 status = "ok"
             except Exception as exc:
@@ -86,12 +96,15 @@ def run_attributes(video_path, job_dir, progress_cb=None, *, max_images=MAX_IMAG
 
     has_images = any(selections.values())
     context = QwenAttributes() if has_images else nullcontext(None)
-    slot = model_slot() if has_images else nullcontext()
+    slot = model_slot(cancel_token) if has_images else nullcontext()
     with slot:
         with context as model:
             persons = {
                 str(result["person_id"]): result
-                for result in map_bounded(ordered_selections, process_person, on_task_event=task_event)
+                for result in map_bounded(
+                    ordered_selections, process_person, on_task_event=task_event,
+                    cancel_token=cancel_token,
+                )
             }
 
     current = review_artifacts.load(job_dir)
@@ -102,6 +115,8 @@ def run_attributes(video_path, job_dir, progress_cb=None, *, max_images=MAX_IMAG
     report_progress(progress_cb, "Attribute werden gespeichert …", 0, 1, {
         "phase": "publishing", "completed": 0, "total": 1, "unit": "publish",
     })
+    if cancel_token is not None:
+        cancel_token.begin_commit()
     stage_state.atomic_write(path, {
         "schema_version": 1, "revision": revision, "tracking_revision": data.tracking_revision, "assignment_revision": data.assignment_revision,
         "model_id": MODEL_ID, "prompt_sha256": hashlib.sha256(PROMPT.encode()).hexdigest(),

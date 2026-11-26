@@ -147,7 +147,7 @@ class FallbackCropCollector:
                 by_frame[number].append((track_id, scene, bbox, confidence))
         return by_frame
 
-    def save(self, video_path: Path, writer: PersonCropWriter, progress_cb=None) -> int:
+    def save(self, video_path: Path, writer: PersonCropWriter, progress_cb=None, cancel_token=None) -> int:
         selected = self.selected()
         self.observations.clear()
         if not selected:
@@ -159,6 +159,8 @@ class FallbackCropCollector:
                 raise RuntimeError("Video konnte für Fallback-Crops nicht geöffnet werden.")
             last = max(selected)
             for number in range(1, last + 1):
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 if not capture.grab():
                     raise RuntimeError(f"Fallback-Frame {number} konnte nicht gelesen werden.")
                 if number in selected:
@@ -175,7 +177,8 @@ class FallbackCropCollector:
 
 
 def refresh_identity_fallbacks(video_path: str | Path, root: str | Path, tracks: list[dict],
-                               track_ids: set[int], fps: float, progress_cb=None) -> int:
+                               track_ids: set[int], fps: float, progress_cb=None,
+                               cancel_token=None, commit_cb=None) -> int:
     """Ersetzt nur die aktuell benötigten Identity-Fallback-Crops."""
     from .track_segments import spaced, timeline
 
@@ -202,6 +205,8 @@ def refresh_identity_fallbacks(video_path: str | Path, root: str | Path, tracks:
             raise RuntimeError("Video konnte für Identity-Fallback-Crops nicht geöffnet werden.")
         last = max(selected, default=0)
         for number in range(1, last + 1):
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             if not capture.grab():
                 raise RuntimeError(f"Fallback-Frame {number} konnte nicht gelesen werden.")
             if number not in selected:
@@ -230,6 +235,10 @@ def refresh_identity_fallbacks(video_path: str | Path, root: str | Path, tracks:
             if progress_cb and (number % 300 == 0 or number == last):
                 progress_cb("Identity-Fallback-Crops werden gespeichert ...", number, last)
 
+        if commit_cb:
+            commit_cb()
+        if cancel_token is not None:
+            cancel_token.begin_commit()
         for row in generated:
             source = temp / row["crop_path"]
             target = root / row["crop_path"]

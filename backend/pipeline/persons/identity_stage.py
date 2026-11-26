@@ -9,7 +9,7 @@ from pathlib import Path
 from . import stage_state, track_segments
 from .review_artifacts import ReviewError
 from .config import SIMILARITY_THRESHOLD, validate_parameter
-from .work_pool import map_bounded, model_slot, report_progress
+from .work_pool import CancellationToken, map_bounded, model_slot, report_progress
 
 
 def _true(value) -> bool:
@@ -38,8 +38,11 @@ def _persons(mapping: dict[int, int], tracking_revision: int, revision: int, ass
     }
 
 
-def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshold=SIMILARITY_THRESHOLD):
+def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshold=SIMILARITY_THRESHOLD,
+                   cancel_token: CancellationToken | None = None):
     validate_parameter("similarity_threshold", similarity_threshold)
+    if cancel_token is not None:
+        cancel_token.raise_if_cancelled()
     import cv2
     import numpy as np
 
@@ -128,11 +131,14 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
                     state["current_task"] = {"id": f"frame-{frame_number}", "frame_number": frame_number}
                 elif event == "cancelled":
                     state["queued"] = max(0, state["queued"] - 1)
+                elif event == "cancelled_running":
+                    state["running"] = max(0, state["running"] - 1)
+                    state["current_task"] = {"id": f"frame-{frame_number}", "status": "cancelled"}
                 elif event in {"completed", "failed"}:
                     state["running"] = max(0, state["running"] - 1)
                     state[event] += 1
                     state["current_task"] = {"id": f"frame-{frame_number}", "status": event}
-            publish(force=event in {"completed", "failed"})
+            publish(force=event in {"completed", "failed", "cancelled_running"})
 
         def on_result(item, result):
             for face_id, track_id, frame_number, alignment_ok, embedding_created, embedding in result:
@@ -151,6 +157,8 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
         def frame_batches():
             last = max(selected)
             for frame_number in range(1, last + 1):
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 if not capture.grab():
                     raise RuntimeError(f"Originalframe {frame_number} nicht verfügbar.")
                 if frame_number in selected:
@@ -168,6 +176,8 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
             frame_number, frame, observations = item
             results = []
             for row, track_id in observations:
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 face_id = int(row["face_id"])
                 try:
                     x1, y1, x2, y2 = json.loads(row["face_crop_box"])
@@ -181,6 +191,8 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
                     continue
                 try:
                     with recognition_lock:
+                        if cancel_token is not None:
+                            cancel_token.raise_if_cancelled()
                         embedding = recognizer.extract_embedding(aligned)
                 except Exception as exc:
                     print(f"FaceMoE-Fehler | Track {track_id} | Frame {frame_number} | {type(exc).__name__}: {exc}")
@@ -190,12 +202,13 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
             return results
 
         try:
-            with model_slot():
+            with model_slot(cancel_token):
                 recognizer = FaceMoERecognizer(model_root=Path(__file__).resolve().parents[3] / "models" / "facemoe")
                 map_bounded(
                     frame_batches(), process_frame,
                     on_task_event=task_event, on_result=on_result,
                     collect_results=False,
+                    cancel_token=cancel_token,
                 )
         finally:
             capture.release()
@@ -209,6 +222,8 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
 
     vectors = np.stack([row[3] for row in records]).astype(np.float32) if records else np.empty((0, 512), np.float32)
     try:
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
         report_progress(progress_cb, "Personen werden global geclustert …", 0, 1, {
             "phase": "clustering", "completed": 0, "total": 1, "unit": "clustering",
         })
@@ -218,6 +233,7 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
             rejected_track_ids=np.asarray(rejected_tracks, np.int32),
             rejected_frame_numbers=np.asarray(rejected_frames, np.int32),
             similarity_threshold=similarity_threshold, progress_cb=progress_cb,
+            cancel_token=cancel_token,
         )
     finally:
         records.clear()
@@ -231,15 +247,23 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
         if not track["excluded"] and track["track_id"] not in logical_has_face
         and track["source_track_id"] in source_has_usable_face
     }
+    if cancel_token is not None:
+        cancel_token.raise_if_cancelled()
     refresh_identity_fallbacks(
         video_path, base, tracks, needs_fallback, float(metadata["fps"]),
         lambda message, current, total: report_progress(
             progress_cb, message, current, total, {"phase": "fallback", "unit": "frames"},
         ),
+        cancel_token=cancel_token,
+        commit_cb=lambda: report_progress(progress_cb, "Identity-Fallback-Crops werden veröffentlicht …", 0, 1, {
+            "phase": "publishing", "completed": 0, "total": 1, "unit": "publish",
+        }),
     )
     report_progress(progress_cb, "Personenzuordnung wird gespeichert …", 0, 1, {
         "phase": "publishing", "completed": 0, "total": 1, "unit": "publish",
     })
+    if cancel_token is not None:
+        cancel_token.begin_commit()
     stage_state.write_csv(base / "face_observations.csv", face_rows, face_fields)
     revision, assignment_revision = _next_revisions(base)
     stage_state.atomic_write(base / "persons.json", {

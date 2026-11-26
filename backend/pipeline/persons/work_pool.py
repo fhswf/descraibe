@@ -40,6 +40,47 @@ _stage_admission = threading.BoundedSemaphore(STAGE_WORKERS + STAGE_PENDING)
 _model_slots = threading.BoundedSemaphore(MODEL_SLOTS)
 
 
+class WorkCancelled(Exception):
+    """Raised when a person-analysis stage is cancelled before publication."""
+
+
+class CancellationToken:
+    """Cooperative cancellation with a one-way transition into publication."""
+
+    def __init__(self):
+        self._event = threading.Event()
+        self._lock = threading.Lock()
+        self._commit_started = False
+
+    @property
+    def cancelled(self) -> bool:
+        return self._event.is_set()
+
+    @property
+    def commit_started(self) -> bool:
+        with self._lock:
+            return self._commit_started
+
+    def request_cancel(self) -> bool:
+        """Request cancellation, returning false once publication has begun."""
+        with self._lock:
+            if self._commit_started:
+                return False
+            self._event.set()
+            return True
+
+    def raise_if_cancelled(self) -> None:
+        if self._event.is_set():
+            raise WorkCancelled("Personenschritt wurde abgebrochen.")
+
+    def begin_commit(self) -> None:
+        """Atomically close the cancellation window before writing final state."""
+        with self._lock:
+            if self._event.is_set():
+                raise WorkCancelled("Personenschritt wurde abgebrochen.")
+            self._commit_started = True
+
+
 def worker_count() -> int:
     return MAX_WORKERS
 
@@ -58,10 +99,16 @@ def submit_stage(function: Callable[[], R]) -> Future[R] | None:
 
 
 @contextmanager
-def model_slot():
+def model_slot(cancel_token: CancellationToken | None = None):
     """Limit concurrently loaded person-analysis model sets across jobs."""
-    _model_slots.acquire()
+    acquired = False
+    while not acquired:
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
+        acquired = _model_slots.acquire(timeout=0.1)
     try:
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
         yield
     finally:
         _model_slots.release()
@@ -85,6 +132,7 @@ def map_bounded(
     on_task_event: Callable[[str, T], None] | None = None,
     on_result: Callable[[T, R], None] | None = None,
     collect_results: bool = True,
+    cancel_token: CancellationToken | None = None,
 ) -> list[R]:
     """Map an iterable with a globally bounded number of submitted tasks.
 
@@ -102,9 +150,17 @@ def map_bounded(
     first_error: BaseException | None = None
 
     def invoke(item: T) -> R:
+        if cancel_token is not None and cancel_token.cancelled:
+            _notify(on_task_event, "cancelled", item)
+            raise WorkCancelled("Personenschritt wurde abgebrochen.")
         _notify(on_task_event, "started", item)
         try:
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             result = function(item)
+        except WorkCancelled:
+            _notify(on_task_event, "cancelled_running", item)
+            raise
         except BaseException:
             _notify(on_task_event, "failed", item)
             raise
@@ -114,12 +170,19 @@ def map_bounded(
     def submit_available() -> None:
         nonlocal next_index, exhausted
         while not exhausted and len(pending) < MAX_WORKERS + MAX_OUTSTANDING:
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             try:
                 item = next(iterator)
             except StopIteration:
                 exhausted = True
                 return
-            _outstanding.acquire()
+            while not _outstanding.acquire(timeout=0.1):
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
+            if cancel_token is not None and cancel_token.cancelled:
+                _outstanding.release()
+                cancel_token.raise_if_cancelled()
             _notify(on_task_event, "queued", item)
             try:
                 future = _executor.submit(invoke, item)
@@ -163,6 +226,8 @@ def map_bounded(
         cancel_pending()
         raise
 
+    if cancel_token is not None:
+        cancel_token.raise_if_cancelled()
     return [results[index] for index in range(next_index)] if collect_results else []
 
 

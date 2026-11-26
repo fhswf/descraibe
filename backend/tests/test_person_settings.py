@@ -46,12 +46,14 @@ def test_api_passes_custom_and_default_settings_and_rejects_invalid(monkeypatch,
     monkeypatch.setattr(tracking_stage, 'run_tracking', run)
     monkeypatch.setattr(identity_stage, 'run_identities', run)
     monkeypatch.setattr(attribute_stage, 'run_attributes', run)
-    monkeypatch.setattr(app, '_start_person_worker', lambda job, stage, worker: (worker(), True)[1])
+    monkeypatch.setattr(app, '_start_person_worker', lambda job, stage, worker, **kwargs: (worker(), True)[1])
     client = TestClient(app.app)
     url = f'/api/jobs/fixture/person-analysis/{phase}'
     assert client.post(url, json={key: custom}).status_code == 200
-    assert calls[-1] == {key: custom}
+    assert calls[-1][key] == custom
+    assert 'cancel_token' in calls[-1]
     assert client.post(url).status_code == 200
-    assert calls[-1] == {key: default}
+    assert calls[-1][key] == default
+    assert 'cancel_token' in calls[-1]
     assert client.post(url, json={key: None}).status_code == 400
     assert len(calls) == 2

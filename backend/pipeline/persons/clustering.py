@@ -4,7 +4,7 @@ import numpy as np
 import time
 
 from .config import SIMILARITY_THRESHOLD, validate_parameter
-from .work_pool import map_bounded, report_progress
+from .work_pool import CancellationToken, map_bounded, report_progress
 
 
 TRACK_REFERENCE_SIZE = 5
@@ -139,6 +139,7 @@ def create_track_distance_matrix(
         np.ndarray,
     ],
     progress_cb=None,
+    cancel_token: CancellationToken | None = None,
 ) -> np.ndarray:
 
     track_count = len(
@@ -157,6 +158,8 @@ def create_track_distance_matrix(
         track_id_a = int(unique_track_ids[i])
         embeddings_a = track_references[track_id_a]
         for j in range(i + 1, track_count):
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             track_id_b = int(unique_track_ids[j])
             similarity = calculate_track_similarity(embeddings_a, track_references[track_id_b])
             distance = 1.0 - similarity
@@ -185,7 +188,7 @@ def create_track_distance_matrix(
 
     map_bounded(
         range(max(0, track_count - 1)), calculate_row,
-        on_result=row_complete, collect_results=False,
+        on_result=row_complete, collect_results=False, cancel_token=cancel_token,
     )
 
     return distance_matrix
@@ -197,6 +200,7 @@ def create_cannot_link_pairs(
     rejected_track_ids: np.ndarray,
     rejected_frame_numbers: np.ndarray,
     clustered_track_ids: np.ndarray,
+    cancel_token: CancellationToken | None = None,
 ) -> set[frozenset[int]]:
     """
     Erzeugt Cannot-Link-Beziehungen für Tracks,
@@ -239,6 +243,8 @@ def create_cannot_link_pairs(
         all_track_ids,
         all_frame_numbers,
     ):
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
 
         track_id = int(
             track_id
@@ -268,6 +274,8 @@ def create_cannot_link_pairs(
     for tracks in (
         frame_to_tracks.values()
     ):
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
 
         tracks = sorted(
             tracks
@@ -386,11 +394,15 @@ def cluster_tracks(
     ],
     similarity_threshold: float = SIMILARITY_THRESHOLD,
     progress_cb=None,
+    cancel_token: CancellationToken | None = None,
 ) -> np.ndarray:
     """
     Hierarchisches agglomeratives Clustering
     mit harter Same-Frame-Cannot-Link-Regel.
     """
+
+    if cancel_token is not None:
+        cancel_token.raise_if_cancelled()
 
     if len(
         unique_track_ids
@@ -408,6 +420,8 @@ def cluster_tracks(
             dtype=np.int32,
         )
 
+    if cancel_token is not None:
+        cancel_token.raise_if_cancelled()
     validate_parameter("similarity_threshold", similarity_threshold)
     distance_threshold = (
         1.0
@@ -435,6 +449,8 @@ def cluster_tracks(
     merge_count = 0
     maximum_merges = max(1, len(unique_track_ids) - 1)
     while True:
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
 
         best_pair = None
         best_distance = None
@@ -442,11 +458,15 @@ def cluster_tracks(
         for i in range(
             len(clusters)
         ):
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
 
             for j in range(
                 i + 1,
                 len(clusters),
             ):
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
 
                 cluster_a = (
                     clusters[i]
@@ -622,6 +642,7 @@ def run_clustering(
     rejected_frame_numbers: np.ndarray,
     similarity_threshold: float = SIMILARITY_THRESHOLD,
     progress_cb=None,
+    cancel_token: CancellationToken | None = None,
 ) -> dict[int, int]:
     """
     Führt das getestete FaceMoE-
@@ -637,6 +658,8 @@ def run_clustering(
     Es werden keine Embeddings gespeichert.
     """
 
+    if cancel_token is not None:
+        cancel_token.raise_if_cancelled()
     validate_parameter("similarity_threshold", similarity_threshold)
     if not (
         len(embeddings)
@@ -662,6 +685,8 @@ def run_clustering(
         )
 
     if len(embeddings) == 0:
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
 
         print()
         print(
@@ -693,6 +718,7 @@ def run_clustering(
             unique_track_ids,
             track_references,
             progress_cb,
+            cancel_token,
         )
     )
 
@@ -706,6 +732,7 @@ def run_clustering(
             rejected_frame_numbers=(
                 rejected_frame_numbers
             ),
+            cancel_token=cancel_token,
             clustered_track_ids=(
                 unique_track_ids
             ),
@@ -725,6 +752,7 @@ def run_clustering(
             ),
             similarity_threshold=similarity_threshold,
             progress_cb=progress_cb,
+            cancel_token=cancel_token,
         )
     )
 

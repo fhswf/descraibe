@@ -908,6 +908,30 @@ export function JobProvider({ children }: JobProviderProps) {
             return;
         }
 
+        if (event === 'cancelled') {
+            const step = String(data.step);
+            setIsRunAllActive(false);
+            updateSavedJobMeta(jobId, {
+                status: 'idle',
+                progressPercent: null,
+                progressMessage: (data.message as string) || 'Personenschritt abgebrochen.'
+            });
+            setProgressData(prev => {
+                const current = prev[step];
+                return {
+                    ...prev,
+                    [step]: {
+                        ...(current ?? { msg: '', percent: 0 }),
+                        step,
+                        status: 'cancelled',
+                        msg: (data.message as string) || 'Personenschritt abgebrochen.',
+                    }
+                };
+            });
+            void fetchJobData(jobId, true);
+            return;
+        }
+
         if (event === 'progress') {
             const step = String(data.step);
             const info = data as ProgressInfo;
