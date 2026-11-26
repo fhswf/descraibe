@@ -119,6 +119,13 @@ export interface PersonData {
   profile_crop_id?: number | null;
 }
 
+export interface PersonSimilarity {
+  person_a: number;
+  person_b: number;
+  distance: number;
+  suggested: boolean;
+}
+
 export interface PersonTrack {
   excluded?: boolean;
   source_track_id?: number; is_split?: boolean;
@@ -139,6 +146,7 @@ export interface PersonCrop {
 
 export interface PersonReview {
   persons: PersonData[]; tracks: PersonTrack[]; unassigned_tracks: PersonTrack[];
+  person_similarities?: PersonSimilarity[];
   version: string; analysis_id: string; revision: number; review_available: boolean; warning?: string;
   excluded_face_observations: number[];
   tracking_ready?: boolean; identities_ready?: boolean; identities_stale?: boolean;

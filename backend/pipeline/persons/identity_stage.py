@@ -6,7 +6,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import stage_state, track_segments
+from . import embedding_store, stage_state, track_segments
 from .review_artifacts import ReviewError
 from .config import SIMILARITY_THRESHOLD, validate_parameter
 from .work_pool import CancellationToken, map_bounded, model_slot, report_progress
@@ -221,6 +221,13 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
         rejected_frames.extend(frame_number for _face_id, _track_id, frame_number in rejected_records)
 
     vectors = np.stack([row[3] for row in records]).astype(np.float32) if records else np.empty((0, 512), np.float32)
+    reference_state = {"track_references": None, "track_ids": None, "distance_matrix": None}
+
+    def retain_track_references(track_references, track_ids, distance_matrix):
+        reference_state["track_references"] = track_references
+        reference_state["track_ids"] = track_ids
+        reference_state["distance_matrix"] = distance_matrix
+
     try:
         if cancel_token is not None:
             cancel_token.raise_if_cancelled()
@@ -233,7 +240,7 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
             rejected_track_ids=np.asarray(rejected_tracks, np.int32),
             rejected_frame_numbers=np.asarray(rejected_frames, np.int32),
             similarity_threshold=similarity_threshold, progress_cb=progress_cb,
-            cancel_token=cancel_token,
+            cancel_token=cancel_token, track_references_cb=retain_track_references,
         )
     finally:
         records.clear()
@@ -265,6 +272,8 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
     if cancel_token is not None:
         cancel_token.begin_commit()
     stage_state.write_csv(base / "face_observations.csv", face_rows, face_fields)
+    embedding_store.write(base / "track_references.f16", reference_state["track_references"] or {})
+    (base / "track_distances.csv").unlink(missing_ok=True)
     revision, assignment_revision = _next_revisions(base)
     stage_state.atomic_write(base / "persons.json", {
         **_persons(mapping, tracking_revision, revision, assignment_revision),
@@ -276,4 +285,7 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
     })
 
     from .review_state import current as current_review
-    return current_review(job_dir)
+    distance_data = None
+    if reference_state["track_ids"] is not None:
+        distance_data = (reference_state["track_ids"], reference_state["distance_matrix"])
+    return current_review(job_dir, distance_data=distance_data)
