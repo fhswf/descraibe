@@ -6,9 +6,10 @@ import math
 from collections import OrderedDict
 from pathlib import Path
 from threading import RLock
+from typing import Any
 
 TRACKING_FILES = ("tracks.json", "tracking_frames.csv", "person_crops.csv", "face_observations.csv")
-FILES = (*TRACKING_FILES, "persons.json", "attributes.json")
+FILES = (*TRACKING_FILES, "persons.json", "attributes.json", "track_references.f16")
 
 
 class ReviewError(ValueError):
@@ -65,6 +66,7 @@ class Artifacts:
         self.evidence_by_track = {track_id: [] for track_id in self.tracks}
         self._load_crops()
         self._load_faces()
+        self.track_references = self._load_track_references()
 
     def _load_persons(self, payload: dict) -> None:
         if payload.get("tracking_revision") != self.tracking_revision or not isinstance(payload.get("persons"), list):
@@ -146,6 +148,20 @@ class Artifacts:
             self.evidence_by_track[track_id].append(observation)
         for rows in self.evidence_by_track.values():
             rows.sort(key=lambda row: (row["frame_number"], row["face_id"]))
+
+    def _load_track_references(self) -> dict[int, Any]:
+        from . import embedding_store
+
+        path = self.root / "track_references.f16"
+        if not path.is_file():
+            return {}
+        try:
+            references = embedding_store.read(path)
+        except (OSError, ValueError) as exc:
+            raise ReviewError("Referenz-Embeddings sind ungültig.", 409) from exc
+        if any(track_id not in self.tracks for track_id in references):
+            raise ReviewError("Referenz-Embeddings passen nicht zum aktuellen Tracking.", 409)
+        return references
 
     def crop_file(self, crop_id: int) -> Path:
         crop = self.crops.get(int(crop_id))
