@@ -56,6 +56,12 @@ spec:
                   name: descraibe-db-app
                   key: uri
                   optional: true
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: huggingface-token
+                  key: HF_TOKEN
+                  optional: true
           # OpenAI API key and base URL injected from Secret.
           # OPENAI_API_KEY  – bearer token for the LLM endpoint
           # OPENAI_BASE_URL – OpenAI-compatible endpoint (e.g. https://hub.ki.fh-swf.de/v1)
