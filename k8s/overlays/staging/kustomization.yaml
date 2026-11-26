@@ -18,14 +18,15 @@ resources:
   - openai-sealedsecret.yaml
   - cnpg-sealedsecret.yaml
   - oidc-sealedsecret.yaml
+  - huggingface-sealedsecret.yaml
 
 # Bootstrap values. After every successful push to main, CI replaces both tags
 # with the immutable sha-* tag that it just built and commits the change.
 images:
   - name: ghcr.io/fhswf/descraibe/audiodeskription-backend
-    newTag: sha-ba794e8
+    newTag: sha-885df2a
   - name: ghcr.io/fhswf/descraibe/audiodeskription-frontend
-    newTag: sha-ba794e8
+    newTag: sha-885df2a
 
 patches:
   - target:
@@ -71,6 +72,26 @@ patches:
                       secretKeyRef:
                         name: descraibe-db-staging-app
                         key: uri
+                        optional: true
+  - target:
+      kind: Deployment
+      name: audiodeskription-backend
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: audiodeskription-backend
+      spec:
+        template:
+          spec:
+            containers:
+              - name: backend
+                env:
+                  - name: HF_TOKEN
+                    valueFrom:
+                      secretKeyRef:
+                        name: huggingface-token-staging
+                        key: HF_TOKEN
                         optional: true
   - target:
       kind: Cluster

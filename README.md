@@ -93,6 +93,7 @@ Applications then deploy staging and release into their own target namespaces.
 | `base/configmap-gpt.yaml` | ConfigMap `gpt-config` | GPT model presets → `/app/config/gpt_config.yaml` |
 | `base/configmap-prompts.yaml` | ConfigMap `prompts-config` | Prompt `.txt` files → `/app/config/prompts/` |
 | `overlays/*/openai-sealedsecret.yaml` | SealedSecret | OpenAI API key for staging/release |
+| `overlays/*/huggingface-sealedsecret.yaml` | SealedSecret | Hugging Face model hub token for staging/release |
 | `base/pvc.yaml` | PVC `audiodeskription-jobs` | 50 Gi scratch space for `/app/jobs` |
 | `base/deployment.yaml` | Deployment | Single-replica Flask/Gunicorn app |
 | `base/service.yaml` | Service | ClusterIP, port 80 → 5000 |
@@ -147,6 +148,19 @@ by default.
 Paste the printed ciphertexts into the matching `encryptedData` keys.  
 Do not commit plain Kubernetes `Secret` manifests with raw passwords.
 
+### Hugging Face model hub token
+
+The backend passes the optional `HF_TOKEN` environment variable to
+`huggingface_hub` when downloading FaceMoE model weights. Staging and release
+use separate strict-scope SealedSecrets, because each encrypted value is bound
+to its Kubernetes Secret name and namespace:
+
+- `k8s/overlays/staging/huggingface-sealedsecret.yaml`
+- `k8s/overlays/release/huggingface-sealedsecret.yaml`
+
+Keep replacement tokens out of Git in plaintext; reseal a rotated token for
+each target name and namespace with the cluster's `kubeseal` certificate.
+
 ### Updating prompts or GPT config
 
 Edit the relevant ConfigMap file and push to `main` — ArgoCD syncs within ≈3 minutes and rolls the pod.
@@ -181,6 +195,7 @@ git push
 | `OIDC_COOKIE_SECURE` | `false` | No | Set to `true` when running behind HTTPS so session cookies are marked `Secure`. |
 | `OIDC_ID_TOKEN_COOKIE_NAME` | `oidc_id_token` | No | Cookie name used to store the OIDC ID token (JWT). |
 | `AD_DATABASE_URL` | *(unset)* | No | PostgreSQL DSN for relational metadata storage (users, user config, presets). Example: `postgresql://user:pass@host:5432/descraibe`. If unset, the app uses file-based fallback for user config/presets. |
+| `HF_TOKEN` | *(unset)* | No | Optional Hugging Face access token used by `huggingface_hub` when downloading FaceMoE model weights. In Kubernetes, it is injected from a SealedSecret. |
 | `AD_USER_CONFIG_DIR` | `${AD_JOBS_DIR}/users` | No | Directory for per-user config storage (`jobs`, `saved metadata`, and pipeline settings) for logged-in users. |
 | `AD_PERSON_CPU_WORKERS` | `1` | No | Maximum number of person-analysis scene/frame/person tasks active in the shared thread pool. Increase after benchmarking the target hardware. Each task returns its result to the stage coordinator; model inference is serialized per loaded model. |
 | `AD_PERSON_MAX_PENDING` | `2 × AD_PERSON_CPU_WORKERS` | No | Additional person-analysis tasks allowed to wait in the bounded task queue across all jobs. |

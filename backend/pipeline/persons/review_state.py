@@ -4,8 +4,11 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import numpy as np
+
 from . import review_artifacts as artifacts
 from . import stage_state
+from .clustering import calculate_cluster_distance, create_track_distance_matrix
 from .review_artifacts import ReviewError
 
 FILENAME = "persons.json"
@@ -49,12 +52,14 @@ def _representative(data: artifacts.Artifacts, track_ids: list[int]) -> dict | N
                 data.crop_file(crop["crop_id"])
             except ReviewError:
                 continue
-            faces.append((crop, min(1.0, number(crop.get("face_confidence"))), face_width * face_height))
+            faces.append((crop, min(1.0, number(crop.get("face_confidence"))), face_width * face_height,
+                          face_width / face_height))
     if faces:
         best_confidence = max(row[1] for row in faces)
-        # 0.01 percentage points: size only breaks near-ties in face confidence.
+        # Confidence chooses a usable detection; a wider face and larger face
+        # area favor a clear, front-facing representative among near-ties.
         close = [row for row in faces if best_confidence - row[1] <= 0.0001 + 1e-12]
-        return max(close, key=lambda row: (row[2], row[1], -row[0]["crop_id"]))[0]
+        return max(close, key=lambda row: (row[3], row[2], row[1], -row[0]["crop_id"]))[0]
     fallback = [crop for track_id in track_ids for crop in data.by_track[track_id]]
     for crop in sorted(fallback, key=lambda item: (item["width"] * item["height"], -item["crop_id"]), reverse=True):
         try:
@@ -91,7 +96,62 @@ def _attributes(data: artifacts.Artifacts) -> dict[int, dict]:
     return {int(pid): row.get("attributes", {}) for pid, row in payload.get("persons", {}).items()}
 
 
-def project(data: artifacts.Artifacts) -> dict:
+def _person_similarities(data: artifacts.Artifacts, persons: list[dict], distance_data=None) -> list[dict]:
+    if not data.track_references:
+        return []
+
+    if distance_data is None:
+        active_track_ids = sorted({track_id for person in persons for track_id in person["track_ids"]
+                                    if track_id in data.track_references})
+        if not active_track_ids:
+            return []
+        track_ids = np.asarray(active_track_ids, dtype=np.int32)
+        references = {track_id: data.track_references[track_id] for track_id in active_track_ids}
+        distance_matrix = create_track_distance_matrix(track_ids, references)
+    else:
+        track_ids, distance_matrix = distance_data
+    track_id_to_index = {int(track_id): index for index, track_id in enumerate(track_ids)}
+    embedded_track_ids = set(track_id_to_index)
+
+    cannot_link = set()
+    frame_tracks = {}
+    for face in data.faces:
+        if not face["excluded"]:
+            frame_tracks.setdefault(face["frame_number"], set()).add(face["track_id"])
+    for track_ids in frame_tracks.values():
+        track_ids = sorted(track_ids)
+        for index, left in enumerate(track_ids):
+            for right in track_ids[index + 1:]:
+                cannot_link.add((left, right))
+
+    similarities = []
+    threshold = data.similarity_threshold
+    try:
+        distance_threshold = 1.0 - float(threshold)
+    except (TypeError, ValueError):
+        distance_threshold = None
+    for index, left in enumerate(persons):
+        for right in persons[index + 1:]:
+            cluster_a = set(left["track_ids"]) & embedded_track_ids
+            cluster_b = set(right["track_ids"]) & embedded_track_ids
+            if not cluster_a or not cluster_b:
+                continue
+            blocked = False
+            for track_a in left["track_ids"]:
+                for track_b in right["track_ids"]:
+                    key = (min(track_a, track_b), max(track_a, track_b))
+                    if key in cannot_link:
+                        blocked = True
+            distance = calculate_cluster_distance(cluster_a, cluster_b, track_id_to_index, distance_matrix)
+            similarities.append({
+                "person_a": left["person_id"], "person_b": right["person_id"],
+                "distance": distance,
+                "suggested": not blocked and distance_threshold is not None and distance <= distance_threshold,
+            })
+    return sorted(similarities, key=lambda pair: (pair["distance"], pair["person_a"], pair["person_b"]))
+
+
+def project(data: artifacts.Artifacts, distance_data=None) -> dict:
     tracks, grouped = [], {}
     for track_id, original in sorted(data.tracks.items()):
         person_id = data.assignments[track_id]
@@ -131,9 +191,11 @@ def project(data: artifacts.Artifacts) -> dict:
             "face_ids": [face["face_id"] for face in data.faces if not face["excluded"] and data.assignments[face["track_id"]] == person_id],
         })
     persons.sort(key=lambda person: (person["first_seen_ts"], person["person_id"]))
+    person_similarities = _person_similarities(data, persons, distance_data)
     identity_ready = data.identity_revision is not None
     return {
         "persons": persons, "tracks": tracks,
+        "person_similarities": person_similarities,
         "unassigned_tracks": [track for track in tracks if track["person_id"] is None and not track["excluded"]],
         "version": _version(data), "analysis_id": data.analysis_id, "revision": data.identity_revision or 0,
         "review_available": identity_ready,
@@ -143,8 +205,8 @@ def project(data: artifacts.Artifacts) -> dict:
     }
 
 
-def current(job_dir: str | Path) -> dict:
-    return project(artifacts.load(job_dir))
+def current(job_dir: str | Path, distance_data=None) -> dict:
+    return project(artifacts.load(job_dir), distance_data)
 
 
 def _payload(data: artifacts.Artifacts, persons: dict[int, dict], revision: int, assignment_revision: int) -> dict:
@@ -211,6 +273,8 @@ def mutate(job_dir: str | Path, expected_version: str | None, operation: str, bo
         for field in ("name", "function"):
             if not persons[target][field]:
                 persons[target][field] = persons[source][field]
+        if not persons[target].get("profile_crop_id"):
+            persons[target]["profile_crop_id"] = persons[source].get("profile_crop_id")
         persons[target]["track_ids"] = sorted(set(persons[target]["track_ids"] + persons[source]["track_ids"]))
         del persons[source]
         assignments_changed = True

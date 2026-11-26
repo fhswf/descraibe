@@ -4,10 +4,10 @@ import numpy as np
 import time
 
 from .config import SIMILARITY_THRESHOLD, validate_parameter
+from .embedding_store import TRACK_REFERENCE_SIZE
 from .work_pool import CancellationToken, map_bounded, report_progress
 
 
-TRACK_REFERENCE_SIZE = 5
 LINKAGE_METHOD = "average"
 
 
@@ -643,6 +643,7 @@ def run_clustering(
     similarity_threshold: float = SIMILARITY_THRESHOLD,
     progress_cb=None,
     cancel_token: CancellationToken | None = None,
+    track_references_cb=None,
 ) -> dict[int, int]:
     """
     Führt das getestete FaceMoE-
@@ -655,7 +656,8 @@ def run_clustering(
             ...
         }
 
-    Es werden keine Embeddings gespeichert.
+    Der Callback erhält optional höchstens fünf normalisierte
+    Referenz-Embeddings pro Track; Roh-Embeddings werden verworfen.
     """
 
     if cancel_token is not None:
@@ -721,6 +723,9 @@ def run_clustering(
             cancel_token,
         )
     )
+
+    if track_references_cb is not None:
+        track_references_cb(track_references, unique_track_ids, distance_matrix)
 
     cannot_link_pairs = (
         create_cannot_link_pairs(

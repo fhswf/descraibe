@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useJob } from '../../hooks/useJob';
-import { FaceMergeDialog, PersonExample, PersonPicker } from './FaceMergeDialog';
+import { FaceMergeDialog, PersonExample } from './FaceMergeDialog';
+import { PersonManagerDialog } from './PersonManagerDialog';
 import type { PersonData, PersonReview } from '../../types';
 export type { PersonData } from '../../types';
 
@@ -47,7 +48,7 @@ function PersonsPanel({ jobId }: { jobId: string }) {
     const [busy, setBusy] = useState(false);
     const [editing, setEditing] = useState<{ person: PersonData; version: string } | null>(null);
     const [managing, setManaging] = useState<{ person: PersonData | null; snapshot: PersonReview } | null>(null);
-    const [merging, setMerging] = useState<{ source: PersonData; snapshot: PersonReview } | null>(null);
+    const [managingAll, setManagingAll] = useState(false);
     const running = jobData?.status === 'running';
     useEffect(() => {
         if (running) return;
@@ -81,13 +82,11 @@ function PersonsPanel({ jobId }: { jobId: string }) {
         catch (err) { setError(err instanceof Error ? err.message : 'Löschen fehlgeschlagen.'); }
         finally { setBusy(false); }
     };
-    const merge = async (target: number | 'new' | null) => {
-        if (!merging || typeof target !== 'number') return;
-        const source = merging.source;
-        if (!window.confirm(`Alle Tracks von Person ${source.person_id} zu Person ${target} verschieben und Person ${source.person_id} zusammenführen?`)) return;
+    const mergePeople = async (source: number, target: number) => {
+        if (!snapshot) return;
         setBusy(true); setError('');
-        try { await mutate('persons/merge', 'POST', { version: merging.snapshot.version, source_person_id: source.person_id, target_person_id: target }); setMerging(null); }
-        catch (err) { setError(err instanceof Error ? err.message : 'Zusammenführen fehlgeschlagen.'); setMerging(null); }
+        try { await mutate('persons/merge', 'POST', { version: snapshot.version, source_person_id: source, target_person_id: target }); }
+        catch (err) { setError(err instanceof Error ? err.message : 'Zusammenführen fehlgeschlagen.'); throw err; }
         finally { setBusy(false); }
     };
     const persons = snapshot?.persons || [];
@@ -109,8 +108,12 @@ function PersonsPanel({ jobId }: { jobId: string }) {
         {loading && !running && <p className="text-sm text-text-muted">Lade Personendaten …</p>}
         {snapshot && !running && <>
             <div className="flex items-center justify-between flex-wrap gap-3"><span className="text-sm font-medium">{persons.length} Personen · {snapshot.tracks.length} Tracks</span>
+                <div className="flex flex-wrap gap-2">
+                <button onClick={() => setManagingAll(true)} disabled={disabled || !snapshot.review_available || persons.length === 0}
+                    className="flex items-center gap-2 px-3 py-2 bg-violet-600 text-white rounded-lg text-sm disabled:opacity-50"><span className="material-icons-round text-base">dashboard</span>Personen verwalten</button>
                 {snapshot.review_available && <button onClick={() => setManaging({ person: null, snapshot })} disabled={disabled}
-                    className="px-3 py-2 bg-bg-card border border-border-subtle rounded-lg text-sm disabled:opacity-50">Nicht zugeordnete Tracks ({snapshot.unassigned_tracks.length})</button>}</div>
+                    className="px-3 py-2 bg-bg-card border border-border-subtle rounded-lg text-sm disabled:opacity-50">Nicht zugeordnete Tracks ({snapshot.unassigned_tracks.length})</button>}
+                </div></div>
             <p className="text-sm font-medium">Zugeordnete Personen ({persons.length})</p>
             <div className="flex flex-col gap-2 max-h-[60vh] overflow-y-auto pr-1">
                 {[...filtered].sort((a, b) => b.appearances_count - a.appearances_count).map(person => <article key={person.person_id} aria-label={`Person ${person.person_id}`}
@@ -122,7 +125,6 @@ function PersonsPanel({ jobId }: { jobId: string }) {
                             <div>{timestamp(person.first_seen_ts)}–{timestamp(person.last_seen_ts)}</div></div>
                             <button disabled={disabled} onClick={() => setEditing({ person, version: snapshot.version })} title="Bearbeiten" aria-label={`Person ${person.person_id} bearbeiten`} className="p-1.5 rounded-lg hover:bg-bg-surface"><span className="material-icons-round text-sm">edit</span></button>
                             <button disabled={disabled || !snapshot.review_available} onClick={() => setManaging({ person, snapshot })} title="Tracks verwalten" aria-label={`Tracks von Person ${person.person_id} verwalten`} className="p-1.5 rounded-lg hover:bg-bg-surface"><span className="material-icons-round text-sm">view_list</span></button>
-                            <button disabled={disabled || persons.length < 2} onClick={() => setMerging({ source: person, snapshot })} title="Person zusammenführen" aria-label={`Person ${person.person_id} zusammenführen`} className="p-1.5 rounded-lg hover:bg-bg-surface"><span className="material-icons-round text-sm">call_merge</span></button>
                             <button disabled={disabled} onClick={() => void remove(person)} title="Person löschen" aria-label={`Person ${person.person_id} löschen`} className="p-1.5 rounded-lg hover:bg-bg-surface"><span className="material-icons-round text-sm">delete</span></button>
                         </div>
                     </div>
@@ -134,8 +136,11 @@ function PersonsPanel({ jobId }: { jobId: string }) {
         <div className="p-4 bg-bg-card border border-border-subtle rounded-lg text-xs text-text-secondary">Ein Auftritt entspricht dem Zeitintervall eines Tracks. Die automatische Zuordnung ist sofort nutzbar; manuelle Korrekturen sind optional.</div>
         {editing && <EditPersonDialog person={editing.person} onClose={() => setEditing(null)} onSave={updates => mutate(`persons/${editing.person.person_id}`, 'POST', { ...updates, version: editing.version })} />}
         {managing && <FaceMergeDialog person={managing.person} snapshot={managing.snapshot} jobId={jobId} onClose={() => setManaging(null)} onSaved={accept} />}
-        {merging && !busy && <PersonPicker persons={merging.snapshot.persons.filter(p => p.person_id !== merging.source.person_id)} jobId={jobId} analysisId={merging.snapshot.analysis_id}
-            title={`Person ${merging.source.person_id} zusammenführen mit …`} allowSpecial={false} onChoose={target => void merge(target)} onClose={() => setMerging(null)} />}
+        {managingAll && snapshot && <PersonManagerDialog snapshot={snapshot} jobId={jobId} disabled={busy || Boolean(error)}
+            onClose={() => setManagingAll(false)} onMerge={mergePeople} onDetails={person => {
+                setManagingAll(false);
+                setManaging({ person, snapshot });
+            }} />}
     </div>;
 }
 

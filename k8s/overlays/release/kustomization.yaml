@@ -16,6 +16,7 @@ resources:
   - openai-sealedsecret.yaml
   - cnpg-sealedsecret.yaml
   - oidc-sealedsecret.yaml
+  - huggingface-sealedsecret.yaml
 
 # Updated by release-please for versioned release deployments.
 images:
