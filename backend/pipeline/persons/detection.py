@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import cv2
 import torch
 from rfdetr import RFDETRNano
@@ -10,9 +12,30 @@ from .config import (
 )
 
 
+def _resolve_device() -> str:
+    requested_device = os.environ.get("AD_PERSON_DEVICE", "auto").strip().lower()
+    if requested_device not in {"auto", "cpu", "cuda"}:
+        raise ValueError("AD_PERSON_DEVICE must be 'auto', 'cpu', or 'cuda'.")
+    if requested_device == "cpu":
+        return "cpu"
+
+    cuda_available = torch.cuda.is_available()
+    if requested_device == "cuda" and not cuda_available:
+        raise RuntimeError(
+            "AD_PERSON_DEVICE=cuda, but PyTorch cannot access CUDA "
+            f"(torch CUDA build: {torch.version.cuda or 'CPU-only'}, "
+            f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')}). "
+            "Expose a GPU to the container or set AD_PERSON_DEVICE=auto."
+        )
+
+    if requested_device == "cuda" or cuda_available:
+        return "cuda"
+    return "cpu"
+
+
 class RFDETRPersonDetector:
     def __init__(self) -> None:
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = _resolve_device()
 
         self.model = RFDETRNano(
             device=self.device,
