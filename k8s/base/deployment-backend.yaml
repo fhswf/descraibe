@@ -46,6 +46,9 @@ spec:
               value: /app/jobs
             - name: MAX_UPLOAD_MB
               value: "4096"
+            # GPU is required for RF-DETR; fail clearly instead of silently falling back to CPU.
+            - name: AD_PERSON_DEVICE
+              value: cuda
             - name: UVICORN_WORKERS
               value: "1"
             # Decode scenes concurrently while batching shared RF-DETR inference.
