@@ -26,6 +26,7 @@ dependencies = [
     "pyyaml",
     "python-dotenv>=1.2.2",
     "authlib>=1.4.0",
+    "joserfc>=1.8.0",
     "itsdangerous>=2.2.0",
     "psycopg[binary]>=3.2.0",
 
@@ -36,7 +37,6 @@ dependencies = [
     "onnxruntime-gpu==1.26.0",
     "torchvision==0.28.0",
     "timm==0.4.12",
-
     # Attribute analysis
     "transformers==5.17.0",
     "accelerate==1.12.0",

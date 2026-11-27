@@ -28,7 +28,8 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from authlib.integrations.starlette_client import OAuth, OAuthError
-from authlib.jose import JsonWebKey, jwt
+from joserfc import jwt
+from joserfc.jwk import KeySet
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -474,7 +475,7 @@ def _oidc_jwks() -> Any:
 
     with urllib.request.urlopen(jwks_uri, timeout=10) as response:
         jwks_payload = json.loads(response.read().decode("utf-8"))
-    key_set = JsonWebKey.import_key_set(jwks_payload)
+    key_set = KeySet.import_key_set(jwks_payload)
     _JWKS_CACHE["key_set"] = key_set
     _JWKS_CACHE["expires_at"] = now + _JWKS_CACHE_TTL_SECONDS
     return key_set
@@ -502,16 +503,16 @@ def _validate_id_token(id_token: str) -> Optional[dict[str, Any]]:
     claims = jwt.decode(
         id_token,
         key_set,
-        claims_options={
-            "iss": {"essential": True, "value": _OIDC_ISSUER_URL},
-            "aud": {"essential": True, "value": _OIDC_CLIENT_ID},
-            "exp": {"essential": True},
-            "iat": {"essential": True},
-            "sub": {"essential": True},
-        },
-    )
-    claims.validate(leeway=60)
-    return _claims_to_user(dict(claims))
+    ).claims
+    jwt.JWTClaimsRegistry(
+        leeway=60,
+        iss={"essential": True, "value": _OIDC_ISSUER_URL},
+        aud={"essential": True, "value": _OIDC_CLIENT_ID},
+        exp={"essential": True},
+        iat={"essential": True},
+        sub={"essential": True},
+    ).validate(claims)
+    return _claims_to_user(claims)
 
 
 def _current_user(request: Request) -> Optional[dict[str, Any]]:
@@ -770,7 +771,7 @@ async def auth_callback(request: Request):
 
     max_age: Optional[int] = None
     try:
-        claims = jwt.decode(id_token, _oidc_jwks(), claims_options={})
+        claims = jwt.decode(id_token, _oidc_jwks()).claims
         exp = int(claims.get("exp", 0))
         now = int(time.time())
         if exp > now:
