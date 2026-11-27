@@ -506,19 +506,13 @@ uv run pytest backend/tests/test_person_stages.py -v  # Person analysis tests
 uv run pytest backend/tests/test_attribute_pipeline.py -v   # Pipeline integration tests
 ```
 
-End-to-end UI tests use [Playwright](https://playwright.dev/):
-
-```bash
-cd webapp
-npm install          # install Playwright
-npm run test         # or: npx playwright test
-```
-
-The backend must be running on `http://localhost:5000` before executing UI tests.
-
-Additional person-review tests (from the repository root):
+Frontend unit and end-to-end UI tests use Node.js and [Playwright](https://playwright.dev/):
 
 ```bash
 cd frontend
-node --test --test-concurrency=1 tests/*.test.mjs
+npm ci
+npm test             # frontend unit tests
+npm run test:e2e     # browser tests; starts the Vite frontend server
 ```
+
+From the repository root, `npm run test:ci` runs the same Playwright browser suite in CI mode.

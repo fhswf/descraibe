@@ -4,14 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "npx playwright test",
-    "test:ci": "CI=1 npx playwright test"
+    "test": "npm --prefix frontend run test:e2e",
+    "test:ci": "CI=1 npm --prefix frontend run test:e2e"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "module",
-  "devDependencies": {
-    "@playwright/test": "^1.58.2"
-  }
+  "type": "module"
 }

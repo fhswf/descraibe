@@ -100,52 +100,13 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
-      - name: Run frontend UI tests
-        run: npm run test:e2e
-
-
-  backend-e2e:
-    needs: backend-tests
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install dependencies
-        run: |
-          uv sync --group dev --frozen
-          npm ci
-
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
-
-      - name: Run backend UI tests
-        run: npm run test:ci
+      - name: Run Playwright CI tests
+        run: npm --prefix .. run test:ci
 
 
   # ── Backend image (PyTorch / FastAPI) ─────────────────────────────────────────
   build-backend:
-    needs: [backend-tests, frontend-tests, backend-e2e]
+    needs: [backend-tests, frontend-tests]
     if: |
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))) ||
       (github.event_name == 'workflow_dispatch') ||
@@ -197,7 +158,7 @@ jobs:
 
   # ── Frontend image (nginx / React) ────────────────────────────────────────────
   build-frontend:
-    needs: [backend-tests, frontend-tests, backend-e2e]
+    needs: [backend-tests, frontend-tests]
     if: |
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))) ||
       (github.event_name == 'workflow_dispatch') ||
