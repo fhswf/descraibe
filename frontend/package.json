@@ -8,6 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "lint": "eslint .",
     "type-check": "tsc --noEmit",
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "test:e2e": "playwright test",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -8,6 +8,9 @@ on:
       - "v*.*.*"          # e.g. v1.2.3  → triggers a versioned release build
     paths:
       - "**"
+  pull_request:
+    branches:
+      - main
   workflow_call:
     inputs:
       release_tag:
@@ -33,8 +36,116 @@ env:
 
 jobs:
 
+  backend-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev --frozen
+
+      - name: Run backend tests
+        run: uv run pytest backend/tests/ -v
+
+
+  frontend-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run type-check
+
+      - name: Build
+        run: npm run build
+
+      - name: Run frontend unit tests
+        run: node --test --test-concurrency=1 tests/*.test.mjs
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run frontend UI tests
+        run: npm run test:e2e
+
+
+  backend-e2e:
+    needs: backend-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: |
+          uv sync --group dev --frozen
+          npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run backend UI tests
+        run: npm run test:ci
+
+
   # ── Backend image (PyTorch / FastAPI) ─────────────────────────────────────────
   build-backend:
+    needs: [backend-tests, frontend-tests, backend-e2e]
     if: |
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))) ||
       (github.event_name == 'workflow_dispatch') ||
@@ -86,6 +197,7 @@ jobs:
 
   # ── Frontend image (nginx / React) ────────────────────────────────────────────
   build-frontend:
+    needs: [backend-tests, frontend-tests, backend-e2e]
     if: |
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))) ||
       (github.event_name == 'workflow_dispatch') ||
