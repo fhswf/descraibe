@@ -1,9 +1,27 @@
 import { ReviewImageSizeControl } from './ReviewImageSizeControl';
 import { useEffect, useState } from 'react';
 import { useJob } from '../../hooks/useJob';
-import type { FaceReview, PersonCrop, TrackingChange } from '../../types';
+import type { FaceReview, PersonCrop, TrackingChange, TrackingPipelineMetrics } from '../../types';
 import { TrackRow } from './FaceMergeDialog';
 import { CropDetailDialog } from './CropDetailDialog';
+
+function PipelineMetrics({ metrics }: { metrics?: TrackingPipelineMetrics }) {
+    if (!metrics) return null;
+    const gpu = metrics.gpu_utilization_latest_pct;
+    const averageGpu = metrics.gpu_utilization_average_pct;
+    const lowGpuSamples = metrics.gpu_low_utilization_samples_pct;
+    const gpuText = gpu != null
+        ? `GPU ${gpu.toFixed(0)}% aktuell · ${averageGpu != null ? `${averageGpu.toFixed(0)}% im Mittel` : 'Mittelwert nicht verfügbar'}${lowGpuSamples != null ? ` · ${lowGpuSamples.toFixed(0)}% der Messungen unter 20%` : ''}`
+        : metrics.gpu_utilization_status === 'model_on_cpu'
+            ? 'GPU-Auslastung nicht verfügbar · Modell läuft auf CPU'
+            : `GPU-Auslastung nicht verfügbar (${metrics.gpu_utilization_status || 'noch keine Messung'})`;
+    return <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted" aria-label="Tracking-Pipeline-Messwerte">
+        <span>{gpuText}</span>
+        <span>RF-DETR: {metrics.rfdetr_waiting_batches ?? 0} Batches warten ({metrics.rfdetr_peak_waiting_batches ?? 0} max.) · {metrics.rfdetr_waiting_frames ?? 0} Frames warten · Batch Ø {metrics.rfdetr_average_batch_size?.toFixed(1) ?? '0.0'}</span>
+        <span>Gepufferte Frames: {metrics.queued_frames ?? 0} aktuell · {metrics.peak_queued_frames ?? 0} Spitzenwert</span>
+        <span>Detektor-Lane ohne Arbeit: {metrics.rfdetr_lane_idle_seconds?.toFixed(1) ?? '0.0'} s</span>
+    </div>;
+}
 
 function TrackingPanel({ jobId }: { jobId: string }) {
     const { jobData, progressData, handleRunTracking, fetchJobData } = useJob();
@@ -65,11 +83,16 @@ function TrackingPanel({ jobId }: { jobId: string }) {
                 {progressData.tracking.workers && <p className="text-xs text-text-muted">
                     {progressData.tracking.workers.completed ?? 0} Szenen abgeschlossen · {progressData.tracking.workers.running ?? 0} aktiv · {progressData.tracking.workers.queued ?? 0} wartend
                 </p>}
+                <PipelineMetrics metrics={progressData.tracking.pipeline} />
             </>}
         </div>}
         {!open && error && <p role="alert" className="text-amber-600">{error}</p>}
         {stale && !open && <p role="status" className="p-3 border border-amber-500 rounded-lg">Personenzuordnung ist veraltet. Vorhandene Personen bleiben bis zum erneuten Ausführen von Schritt 2 unverändert.</p>}
         {snapshot && !running && <div className="p-4 border border-border-subtle rounded-lg flex flex-wrap justify-between items-center gap-4"><span>{summary}</span>
+            <div className="w-full">
+                <p className="text-xs text-text-muted">Lauf mit {snapshot.cpu_workers ?? 'unbekannt'} CPU-Workern · RF-DETR Batchgröße {snapshot.rfdetr_batch_size ?? 'unbekannt'}</p>
+                <PipelineMetrics metrics={snapshot.tracking_metrics} />
+            </div>
             <button onClick={() => setOpen(true)} className="px-4 py-2 bg-violet-600 text-white rounded-lg">Tracks prüfen</button></div>}
         <button disabled={running || saving || !jobData?.video_path} onClick={() => void handleRunTracking()} className="w-fit px-4 py-2 bg-violet-600 text-white rounded-lg disabled:opacity-50">Tracking ausführen</button>
         {open && snapshot && <div role="dialog" aria-modal="true" aria-label="Tracking-Review" className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-2 sm:p-4"

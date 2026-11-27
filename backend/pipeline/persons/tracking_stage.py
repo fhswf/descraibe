@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import queue
 import shutil
 import tempfile
 import threading
@@ -10,7 +11,8 @@ from pathlib import Path
 
 from . import stage_state
 from .config import TRACKING_INTERVAL_SECONDS, validate_parameter
-from .work_pool import map_bounded, model_slot, report_progress
+from .tracking_telemetry import TrackingTelemetry
+from .work_pool import RFDETR_BATCH_SIZE, map_bounded, model_slot, report_progress, worker_count
 
 
 TIMELINE_FIELDS = ["source_track_id", "frame_number", "scene_id", "x1", "y1", "x2", "y2", "confidence"]
@@ -83,22 +85,78 @@ def _open_at_frame(cv2, video_path: Path, first_frame: int):
 
 def _process_scene(
     *, cv2, video_path: Path, scene_dir: Path, spec: dict, fps: float, total_frames: int,
-    stride: int, detector, detector_lock, faces, faces_lock, progress_task, cancel_token=None,
+    stride: int, detector, detector_lock, faces, faces_lock, progress_task, telemetry,
+    batch_size=RFDETR_BATCH_SIZE, cancel_token=None,
 ):
     from . import track_segments
     from .appearances import TrackIntervalAccumulator
     from .face_assignment import assign_faces_to_tracks
     from .face_observations import FaceObservationWriter
     from .face_quality import check_face_quality
+    from .face_samples import TrackingFaceSampleCollector
     from .person_crops import FallbackCropCollector, PersonCropWriter, read_manifest
     from .tracking import BytePersonTracker
 
     scene_dir.mkdir(parents=True, exist_ok=True)
-    capture, last_grabbed = _open_at_frame(cv2, video_path, spec["first_sample"])
     crop_writer = face_writer = timeline_writer = None
+    reader_stop = threading.Event()
+    supports_batch = callable(getattr(detector, "detect_batch", None)) or (
+        callable(getattr(detector, "prepare_batch", None))
+        and callable(getattr(detector, "detect_prepared_batch", None))
+    )
+    if not supports_batch:
+        # Simple detector adapters keep the historical detect/update interleave.
+        # Production RF-DETR exposes native batching and takes the batch path.
+        batch_size = 1
+    # Bound each scene to one prefetched batch to keep high-resolution videos
+    # from multiplying memory use across all active scene workers.
+    frame_queue = queue.Queue(maxsize=max(1, batch_size))
+    reader_error = []
+    end_of_scene = object()
+
+    def put_frame(item):
+        while not reader_stop.is_set():
+            try:
+                frame_queue.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def read_scene_frames():
+        capture = None
+        try:
+            capture, last_grabbed = _open_at_frame(cv2, video_path, spec["first_sample"])
+            frame_number = spec["first_sample"]
+            while frame_number <= spec["end_frame"]:
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
+                decode_started = time.perf_counter()
+                while last_grabbed < frame_number:
+                    if not capture.grab():
+                        raise RuntimeError(f"Tracking-Frame {frame_number} konnte nicht gelesen werden.")
+                    last_grabbed += 1
+                ok, frame = capture.retrieve()
+                if not ok:
+                    raise RuntimeError(f"Tracking-Frame {frame_number} konnte nicht dekodiert werden.")
+                telemetry.record_decoded_frame(time.perf_counter() - decode_started)
+                telemetry.frame_enqueued()
+                if not put_frame((frame_number, frame)):
+                    telemetry.frame_dequeued()
+                    return
+                frame_number += stride
+        except BaseException as exc:
+            reader_error.append(exc)
+        finally:
+            if capture is not None:
+                capture.release()
+            put_frame(end_of_scene)
+
+    reader = threading.Thread(target=read_scene_frames, name=f"tracking-reader-{spec['scene_id']}", daemon=True)
     try:
         tracker = BytePersonTracker(frame_rate=fps / stride)
         accumulator, fallback = TrackIntervalAccumulator(fps), FallbackCropCollector()
+        face_sample_collector = TrackingFaceSampleCollector()
         crop_writer = PersonCropWriter(scene_dir, fps)
         face_writer = FaceObservationWriter(scene_dir, fps)
         timeline_writer = track_segments.TimelineWriter(scene_dir)
@@ -106,75 +164,115 @@ def _process_scene(
             "tracking_frames": 0, "faces_detected": 0,
             "faces_assigned": 0, "faces_usable": 0,
         }
-        frame_number = spec["first_sample"]
-        while frame_number <= spec["end_frame"]:
+        reader.start()
+        scene_finished = False
+        while not scene_finished:
             if cancel_token is not None:
                 cancel_token.raise_if_cancelled()
-            while last_grabbed < frame_number:
-                if not capture.grab():
-                    raise RuntimeError(f"Tracking-Frame {frame_number} konnte nicht gelesen werden.")
-                last_grabbed += 1
-            ok, frame = capture.retrieve()
-            if not ok:
-                raise RuntimeError(f"Tracking-Frame {frame_number} konnte nicht dekodiert werden.")
-
-            if cancel_token is not None:
-                cancel_token.raise_if_cancelled()
-            with detector_lock:
+            frame_batch = []
+            while len(frame_batch) < batch_size:
                 if cancel_token is not None:
                     cancel_token.raise_if_cancelled()
-                detections = detector.detect(frame)
-            tracked = [
-                {**person, "scene_id": spec["scene_id"]}
-                for person in tracker.update(detections)
-            ]
-            counts["tracking_frames"] += 1
-            for person in tracked:
-                timeline_writer.observe(person, frame_number, frame.shape[1], frame.shape[0])
-                accumulator.observe(person["track_id"], spec["scene_id"], frame_number)
-                fallback.observe(person, frame_number)
+                item = frame_queue.get()
+                if item is end_of_scene:
+                    scene_finished = True
+                    break
+                telemetry.frame_dequeued()
+                frame_batch.append(item)
 
-            # Keep the historical global cadence: every second sampled frame,
-            # including when a scene begins between those frames.
-            tracking_ordinal = (frame_number - 1) // stride
-            if tracking_ordinal % 2 == 0 and tracked:
-                with faces_lock:
-                    if cancel_token is not None:
-                        cancel_token.raise_if_cancelled()
-                    detected_faces = faces.detect(frame)
-                counts["faces_detected"] += len(detected_faces)
-                for index, person in assign_faces_to_tracks(detected_faces, tracked).items():
-                    if cancel_token is not None:
-                        cancel_token.raise_if_cancelled()
-                    face = detected_faces[index]
-                    usable, quality = check_face_quality(face["crop"], float(face["confidence"]))
-                    counts["faces_assigned"] += 1
-                    counts["faces_usable"] += int(usable)
-                    crop_path = None
-                    if usable:
-                        crop_path = crop_writer.save(
-                            frame, person["track_id"], spec["scene_id"], frame_number,
-                            person["bbox"], person.get("confidence"), "face_evidence",
-                        )
-                        if crop_path is None:
-                            raise RuntimeError("Personencrop einer verwendbaren Beobachtung fehlt.")
-                        fallback.face_succeeded(person["track_id"])
-                    face_writer.save(
-                        source_track_id=person["track_id"], scene_id=spec["scene_id"], frame_number=frame_number,
-                        person_bbox=person["bbox"], face_bbox=face["bbox"], person_crop_path=crop_path,
-                        frame_width=frame.shape[1], frame_height=frame.shape[0], face_confidence=face["confidence"],
-                        face_usable=usable, blur_score=quality.get("blur_score"), landmarks=face["landmarks"],
-                        face_crop_box=face["face_crop_box"],
+            if frame_batch:
+                frames = [frame for _frame_number, frame in frame_batch]
+                prepare_batch = getattr(detector, "prepare_batch", None)
+                detect_prepared_batch = getattr(detector, "detect_prepared_batch", None)
+                if callable(prepare_batch) and callable(detect_prepared_batch):
+                    preprocess_started = time.perf_counter()
+                    prepared_frames = prepare_batch(frames)
+                    telemetry.record_detector_preprocess(time.perf_counter() - preprocess_started)
+                    batch_detections = telemetry.run_inference(
+                        "rfdetr", detector_lock, len(frames),
+                        lambda: detect_prepared_batch(prepared_frames), cancel_token,
                     )
+                elif callable(getattr(detector, "detect_batch", None)):
+                    batch_detections = telemetry.run_inference(
+                        "rfdetr", detector_lock, len(frames),
+                        lambda: detector.detect_batch(frames), cancel_token,
+                    )
+                else:
+                    # Keep compatibility with simple detector adapters while
+                    # production RF-DETR uses its native list/batch API.
+                    batch_detections = telemetry.run_inference(
+                        "rfdetr", detector_lock, len(frames),
+                        lambda: [detector.detect(frame) for frame in frames], cancel_token,
+                    )
+                if len(batch_detections) != len(frame_batch):
+                    raise RuntimeError("RF-DETR gab nicht für jedes Batch-Bild Detektionen zurück.")
 
-            progress_task(spec, counts["tracking_frames"], frame_number, total_frames)
-            frame_number += stride
+                # Detection is batched; ByteTrack still receives every result
+                # in its original scene order to preserve association state.
+                for (frame_number, frame), detections in zip(frame_batch, batch_detections):
+                    if cancel_token is not None:
+                        cancel_token.raise_if_cancelled()
+                    tracker_started = time.perf_counter()
+                    tracked = [
+                        {**person, "scene_id": spec["scene_id"]}
+                        for person in tracker.update(detections)
+                    ]
+                    telemetry.record_tracker_update(time.perf_counter() - tracker_started)
+                    counts["tracking_frames"] += 1
+                    for person in tracked:
+                        timeline_writer.observe(person, frame_number, frame.shape[1], frame.shape[0])
+                        accumulator.observe(person["track_id"], spec["scene_id"], frame_number)
+                        fallback.observe(person, frame_number)
+
+                    # Preserve the global cadence even when a scene starts
+                    # between sampled frames.
+                    tracking_ordinal = (frame_number - 1) // stride
+                    if tracking_ordinal % 2 == 0 and tracked:
+                        detected_faces = telemetry.run_inference(
+                            "retinaface", faces_lock, 1, lambda: faces.detect(frame), cancel_token,
+                        )
+                        counts["faces_detected"] += len(detected_faces)
+                        for index, person in assign_faces_to_tracks(detected_faces, tracked).items():
+                            if cancel_token is not None:
+                                cancel_token.raise_if_cancelled()
+                            face = detected_faces[index]
+                            usable, quality = check_face_quality(face["crop"], float(face["confidence"]))
+                            counts["faces_assigned"] += 1
+                            counts["faces_usable"] += int(usable)
+                            crop_path = None
+                            if usable:
+                                crop_started = time.perf_counter()
+                                crop_path = crop_writer.save(
+                                    frame, person["track_id"], spec["scene_id"], frame_number,
+                                    person["bbox"], person.get("confidence"), "face_evidence",
+                                )
+                                telemetry.record_crop_write(time.perf_counter() - crop_started)
+                                if crop_path is None:
+                                    raise RuntimeError("Personencrop einer verwendbaren Beobachtung fehlt.")
+                                fallback.face_succeeded(person["track_id"])
+                            face_id = face_writer.save(
+                                source_track_id=person["track_id"], scene_id=spec["scene_id"], frame_number=frame_number,
+                                person_bbox=person["bbox"], face_bbox=face["bbox"], person_crop_path=crop_path,
+                                frame_width=frame.shape[1], frame_height=frame.shape[0], face_confidence=face["confidence"],
+                                face_usable=usable, blur_score=quality.get("blur_score"), landmarks=face["landmarks"],
+                                face_crop_box=face["face_crop_box"],
+                            )
+                            if usable:
+                                face_sample_collector.observe(person["track_id"], frame_number, face_id, face["crop"])
+
+                    progress_task(spec, counts["tracking_frames"], frame_number, total_frames)
+
+            if scene_finished and reader_error:
+                raise reader_error[0]
 
         for writer in (crop_writer, face_writer, timeline_writer):
             writer.close()
         crop_writer = face_writer = timeline_writer = None
         timeline_rows, _ = stage_state.read_csv(scene_dir / track_segments.TIMELINE)
         face_rows, _ = stage_state.read_csv(scene_dir / "face_observations.csv")
+        face_sample_paths = face_sample_collector.save(scene_dir)
+        for row in face_rows:
+            row["face_sample_path"] = face_sample_paths.get(int(row["face_id"]), "")
         crop_rows = read_manifest(scene_dir)
         return {
             **spec,
@@ -184,10 +282,13 @@ def _process_scene(
             "timeline_rows": timeline_rows,
             "face_rows": face_rows,
             "crop_rows": crop_rows,
+            "scene_dir": scene_dir,
             "crop_dir": scene_dir / "person_crops",
         }
     finally:
-        capture.release()
+        reader_stop.set()
+        if reader.is_alive():
+            reader.join()
         for writer in (crop_writer, face_writer, timeline_writer):
             if writer is not None:
                 writer.close()
@@ -264,6 +365,18 @@ def _merge_scenes(scene_results: list[dict], staged: Path, video_path: Path, fps
                     "source_track_id": track_ids[(scene_id, local_id)],
                     "scene_id": scene_id,
                 })
+                old_sample_path = str(copied.get("face_sample_path") or "").replace("\\", "/")
+                if old_sample_path:
+                    scene_root = Path(result["scene_dir"]).resolve()
+                    source_sample = (scene_root / old_sample_path).resolve()
+                    if not source_sample.is_relative_to((scene_root / "person_crops" / ".face_samples").resolve()):
+                        raise RuntimeError("Ungültiger Pfad für gespeicherte Gesichtsprobe.")
+                    global_id = track_ids[(scene_id, local_id)]
+                    sample_relative = Path("person_crops") / ".face_samples" / f"track_{global_id:04d}" / source_sample.name
+                    sample_target = staged / sample_relative
+                    sample_target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source_sample, sample_target)
+                    copied["face_sample_path"] = sample_relative.as_posix()
                 if old_face_crop:
                     copied["person_crop_path"] = crop_path_map[(scene_id, old_face_crop)]
                 face_rows.append(copied)
@@ -295,6 +408,7 @@ def _merge_scenes(scene_results: list[dict], staged: Path, video_path: Path, fps
             row["crop_id"] = index
         evidence_count = len(crop_rows)
         write_manifest(staged, crop_rows + fallback_rows)
+        face_sample_count = sum(bool(row.get("face_sample_path")) for row in face_rows)
     finally:
         if staged_crops is not None:
             staged_crops.close()
@@ -309,6 +423,7 @@ def _merge_scenes(scene_results: list[dict], staged: Path, video_path: Path, fps
         "faces_usable": sum(result["counts"]["faces_usable"] for result in scene_results),
         "person_crops": evidence_count + fallback_count,
         "fallback_crops": fallback_count,
+        "face_samples": face_sample_count,
     }
     return tracks, stats
 
@@ -332,6 +447,7 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
     staged = Path(tempfile.mkdtemp(prefix=".person_analysis_new_", dir=job_dir))
     scene_root = staged / "scenes"
     scene_root.mkdir()
+    telemetry = TrackingTelemetry()
     probe = cv2.VideoCapture(str(video_path))
     detector = faces = None
     try:
@@ -378,7 +494,7 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
                 {
                     "phase": "scenes", "completed": completed_frames, "total": total_samples,
                     "unit": "tracking_frames", "workers": workers, "current_task": current_task,
-                    "elapsed_seconds": round(now - started, 1),
+                    "elapsed_seconds": round(now - started, 1), "pipeline": telemetry.snapshot(),
                 },
             )
 
@@ -415,19 +531,24 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
             detector = RFDETRPersonDetector()
             faces = RetinaFaceDetector(model_cache_dir=Path(__file__).resolve().parents[3] / "models" / "retinaface")
             detector_lock, faces_lock = threading.Lock(), threading.Lock()
-            scene_results = map_bounded(
-                specs,
-                lambda spec: _process_scene(
-                    cv2=cv2, video_path=video_path,
-                    scene_dir=scene_root / f"scene_{spec['scene_id']:04d}",
-                    spec=spec, fps=fps, total_frames=total_frames, stride=stride,
-                    detector=detector, detector_lock=detector_lock,
-                    faces=faces, faces_lock=faces_lock, progress_task=task_progress,
+            telemetry.start_gpu_sampling(getattr(detector, "device", None) == "cuda")
+            try:
+                scene_results = map_bounded(
+                    specs,
+                    lambda spec: _process_scene(
+                        cv2=cv2, video_path=video_path,
+                        scene_dir=scene_root / f"scene_{spec['scene_id']:04d}",
+                        spec=spec, fps=fps, total_frames=total_frames, stride=stride,
+                        detector=detector, detector_lock=detector_lock,
+                        faces=faces, faces_lock=faces_lock, progress_task=task_progress,
+                        telemetry=telemetry, batch_size=RFDETR_BATCH_SIZE,
+                        cancel_token=cancel_token,
+                    ),
+                    on_task_event=task_event,
                     cancel_token=cancel_token,
-                ),
-                on_task_event=task_event,
-                cancel_token=cancel_token,
-            )
+                )
+            finally:
+                telemetry.stop_gpu_sampling()
 
             if cancel_token is not None:
                 cancel_token.raise_if_cancelled()
@@ -439,8 +560,16 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
             tracks, stats = _merge_scenes(
                 scene_results, staged, video_path, fps, progress_cb, total_frames, cancel_token,
             )
-            stats.update({"tracking_stride": stride})
-            state = initial_state(tracks, fps, stage_state.video_digest(video_path), stats)
+            stats.update({
+                "tracking_stride": stride,
+                "cpu_workers": worker_count(),
+                "rfdetr_batch_size": RFDETR_BATCH_SIZE,
+                "tracking_pipeline": telemetry.snapshot(),
+            })
+            video_sha256 = stage_state.video_digest(video_path)
+            video_file_signature = stage_state.video_signature(video_path)
+            state = initial_state(tracks, fps, video_sha256, stats)
+            state["video_signature"] = video_file_signature
             state["revision"] = next_revision
             state["tracking_interval_seconds"] = tracking_interval_seconds
             stage_state.atomic_write(staged / "tracks.json", state)
@@ -455,7 +584,7 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
 
         report_progress(progress_cb, "Tracking abgeschlossen", 1, 1, {
             "phase": "complete", "completed": 1, "total": 1, "unit": "publish",
-            "elapsed_seconds": round(time.monotonic() - started, 1),
+            "elapsed_seconds": round(time.monotonic() - started, 1), "pipeline": telemetry.snapshot(),
         })
         return stage_state.face_snapshot(job_dir)
     except Exception:

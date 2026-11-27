@@ -127,7 +127,7 @@ def test_api_reserves_images_and_publishes_cuts(staged_job, monkeypatch):
     sm.update_job('job', slots_df=pd.DataFrame([{'slot': 1, 'start_s': 0, 'end_s': 1}]))
     queued = []
     monkeypatch.setattr(app, '_start_worker', lambda *args: queued.append(args))
-    monkeypatch.setattr(app, '_start_person_worker', lambda *args: queued.append(args) or True)
+    monkeypatch.setattr(app, '_start_person_worker', lambda *args, **kwargs: queued.append(args) or True)
     class Extractor:
         def __init__(self, **kw): pass
         def process_video(self, *args, **kw):

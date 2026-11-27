@@ -282,7 +282,7 @@ def test_stage_lock_rejects_overlapping_runs_and_reviews(staged_job, monkeypatch
     monkeypatch.setattr(sm, "_STORE", {})
     monkeypatch.setattr(app, "_DATASTORE", SimpleNamespace(enabled=False))
     queued = []
-    monkeypatch.setattr(app, "_start_person_worker", lambda *args: queued.append(args) or True)
+    monkeypatch.setattr(app, "_start_person_worker", lambda *args, **kwargs: queued.append(args) or True)
     client = TestClient(app.app)
     assert client.post("/api/jobs/job/person-analysis/identities").status_code == 200
     assert len(queued) == 1

@@ -15,8 +15,43 @@ export interface ProgressInfo {
   message?: string;
   status?: 'running' | 'cancelling' | 'cancelled';
   elapsed_seconds?: number;
+  pipeline?: TrackingPipelineMetrics;
   workers?: { queued?: number; running?: number; completed?: number; failed?: number };
   current_task?: { id?: string; status?: string; current?: number; total?: number; unit?: string; frame_number?: number; person_id?: number };
+}
+
+export interface TrackingPipelineMetrics {
+  queued_frames?: number;
+  peak_queued_frames?: number;
+  decoded_frames?: number;
+  decode_seconds?: number;
+  detector_preprocess_seconds?: number;
+  tracked_frames?: number;
+  bytetrack_seconds?: number;
+  crop_write_seconds?: number;
+  gpu_utilization_status?: string;
+  gpu_utilization_samples?: number;
+  gpu_utilization_average_pct?: number | null;
+  gpu_utilization_latest_pct?: number | null;
+  gpu_low_utilization_samples_pct?: number | null;
+  rfdetr_waiting_batches?: number;
+  rfdetr_waiting_frames?: number;
+  rfdetr_peak_waiting_batches?: number;
+  rfdetr_calls?: number;
+  rfdetr_frames?: number;
+  rfdetr_average_batch_size?: number;
+  rfdetr_queue_wait_seconds?: number;
+  rfdetr_inference_seconds?: number;
+  rfdetr_lane_idle_seconds?: number;
+  retinaface_waiting_batches?: number;
+  retinaface_waiting_frames?: number;
+  retinaface_peak_waiting_batches?: number;
+  retinaface_calls?: number;
+  retinaface_frames?: number;
+  retinaface_average_batch_size?: number;
+  retinaface_queue_wait_seconds?: number;
+  retinaface_inference_seconds?: number;
+  retinaface_lane_idle_seconds?: number;
 }
 
 export interface ProgressEntry extends ProgressInfo {
@@ -123,6 +158,7 @@ export interface PersonSimilarity {
   person_a: number;
   person_b: number;
   distance: number;
+  metric: 'cosine';
   suggested: boolean;
 }
 
@@ -156,6 +192,9 @@ export interface FaceReview {
   tracks: Array<PersonTrack & { observations: PersonCrop[]; quality_face_count: number; split_options: Array<{ before_frame: number; left_end_s: number; right_start_s: number }> }>;
   split_available: boolean; original_tracks_count: number;
   version: string; analysis_id: string; excluded_face_observations: number[]; identities_stale: boolean;
+  tracking_metrics?: TrackingPipelineMetrics;
+  rfdetr_batch_size?: number;
+  cpu_workers?: number;
 }
 
 export type TrackingChange = { action: 'split'; track_id: number; before_frame: number } | { action: 'undo_split'; source_track_id: number };

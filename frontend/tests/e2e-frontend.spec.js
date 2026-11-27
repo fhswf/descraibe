@@ -16,6 +16,7 @@ async function openApp(page) {
 
 /** Clear localStorage for a clean test state */
 async function clearLocalStorage(page) {
+    await page.goto('/');
     await page.evaluate(() => localStorage.clear());
 }
 

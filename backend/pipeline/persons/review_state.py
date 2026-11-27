@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import math
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +14,9 @@ from .clustering import calculate_cluster_distance, create_track_distance_matrix
 from .review_artifacts import ReviewError
 
 FILENAME = "persons.json"
+_DISTANCE_CACHE = OrderedDict()
+_DISTANCE_CACHE_LOCK = threading.RLock()
+_DISTANCE_CACHE_SIZE = 2
 
 
 def _metadata(person: dict) -> dict:
@@ -56,10 +61,10 @@ def _representative(data: artifacts.Artifacts, track_ids: list[int]) -> dict | N
                           face_width / face_height))
     if faces:
         best_confidence = max(row[1] for row in faces)
-        # Confidence chooses a usable detection; a wider face and larger face
-        # area favor a clear, front-facing representative among near-ties.
+        # Confidence chooses a usable detection; the largest face region wins
+        # among near-ties, with its width-to-height ratio as the next cue.
         close = [row for row in faces if best_confidence - row[1] <= 0.0001 + 1e-12]
-        return max(close, key=lambda row: (row[3], row[2], row[1], -row[0]["crop_id"]))[0]
+        return max(close, key=lambda row: (row[2], row[3], row[1], -row[0]["crop_id"]))[0]
     fallback = [crop for track_id in track_ids for crop in data.by_track[track_id]]
     for crop in sorted(fallback, key=lambda item: (item["width"] * item["height"], -item["crop_id"]), reverse=True):
         try:
@@ -96,20 +101,48 @@ def _attributes(data: artifacts.Artifacts) -> dict[int, dict]:
     return {int(pid): row.get("attributes", {}) for pid, row in payload.get("persons", {}).items()}
 
 
-def _person_similarities(data: artifacts.Artifacts, persons: list[dict], distance_data=None) -> list[dict]:
+def _track_distance_data(data: artifacts.Artifacts, distance_data=None):
     if not data.track_references:
-        return []
+        return None
+    path = data.root / "track_references.f16"
+    try:
+        stat = path.stat()
+        signature = (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino)
+    except OSError:
+        signature = None
+    key = str(data.root)
 
-    if distance_data is None:
-        active_track_ids = sorted({track_id for person in persons for track_id in person["track_ids"]
-                                    if track_id in data.track_references})
-        if not active_track_ids:
-            return []
-        track_ids = np.asarray(active_track_ids, dtype=np.int32)
-        references = {track_id: data.track_references[track_id] for track_id in active_track_ids}
-        distance_matrix = create_track_distance_matrix(track_ids, references)
-    else:
+    if distance_data is not None:
         track_ids, distance_matrix = distance_data
+        cached = (signature, track_ids, distance_matrix)
+        with _DISTANCE_CACHE_LOCK:
+            _DISTANCE_CACHE[key] = cached
+            _DISTANCE_CACHE.move_to_end(key)
+            while len(_DISTANCE_CACHE) > _DISTANCE_CACHE_SIZE:
+                _DISTANCE_CACHE.popitem(last=False)
+        return track_ids, distance_matrix
+
+    with _DISTANCE_CACHE_LOCK:
+        cached = _DISTANCE_CACHE.get(key)
+        if cached is not None and cached[0] == signature:
+            _DISTANCE_CACHE.move_to_end(key)
+            return cached[1], cached[2]
+
+    track_ids = np.asarray(sorted(data.track_references), dtype=np.int32)
+    distance_matrix = create_track_distance_matrix(track_ids, data.track_references)
+    with _DISTANCE_CACHE_LOCK:
+        _DISTANCE_CACHE[key] = (signature, track_ids, distance_matrix)
+        _DISTANCE_CACHE.move_to_end(key)
+        while len(_DISTANCE_CACHE) > _DISTANCE_CACHE_SIZE:
+            _DISTANCE_CACHE.popitem(last=False)
+    return track_ids, distance_matrix
+
+
+def _person_similarities(data: artifacts.Artifacts, persons: list[dict], distance_data=None) -> list[dict]:
+    distance_data = _track_distance_data(data, distance_data)
+    if distance_data is None:
+        return []
+    track_ids, distance_matrix = distance_data
     track_id_to_index = {int(track_id): index for index, track_id in enumerate(track_ids)}
     embedded_track_ids = set(track_id_to_index)
 
@@ -145,7 +178,7 @@ def _person_similarities(data: artifacts.Artifacts, persons: list[dict], distanc
             distance = calculate_cluster_distance(cluster_a, cluster_b, track_id_to_index, distance_matrix)
             similarities.append({
                 "person_a": left["person_id"], "person_b": right["person_id"],
-                "distance": distance,
+                "distance": distance, "metric": "cosine",
                 "suggested": not blocked and distance_threshold is not None and distance <= distance_threshold,
             })
     return sorted(similarities, key=lambda pair: (pair["distance"], pair["person_a"], pair["person_b"]))

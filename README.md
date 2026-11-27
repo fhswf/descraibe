@@ -197,7 +197,8 @@ git push
 | `AD_DATABASE_URL` | *(unset)* | No | PostgreSQL DSN for relational metadata storage (users, user config, presets). Example: `postgresql://user:pass@host:5432/descraibe`. If unset, the app uses file-based fallback for user config/presets. |
 | `HF_TOKEN` | *(unset)* | No | Optional Hugging Face access token used by `huggingface_hub` when downloading FaceMoE model weights. In Kubernetes, it is injected from a SealedSecret. |
 | `AD_USER_CONFIG_DIR` | `${AD_JOBS_DIR}/users` | No | Directory for per-user config storage (`jobs`, `saved metadata`, and pipeline settings) for logged-in users. |
-| `AD_PERSON_CPU_WORKERS` | `1` | No | Maximum number of person-analysis scene/frame/person tasks active in the shared thread pool. Increase after benchmarking the target hardware. Each task returns its result to the stage coordinator; model inference is serialized per loaded model. |
+| `AD_PERSON_CPU_WORKERS` | `1` | No | Maximum number of person-analysis scene/frame/person tasks active in the shared thread pool. Tracking uses this to decode independent scenes concurrently; in the Kubernetes backend it is set to `8`. RF-DETR uses one shared, serialized inference lane, so scene readers and CPU-side tracking overlap batched GPU inference without loading duplicate models. |
+| `AD_PERSON_RFDETR_BATCH_SIZE` | `8` | No | Number of sampled scene frames sent in one RF-DETR prediction call (maximum `16`). Each scene has a bounded one-batch prefetch queue. RetinaFace remains single-image because its current wrapper does not expose a batch API. |
 | `AD_PERSON_MAX_PENDING` | `2 × AD_PERSON_CPU_WORKERS` | No | Additional person-analysis tasks allowed to wait in the bounded task queue across all jobs. |
 | `AD_PERSON_MODEL_SLOTS` | `1` | No | Maximum number of model-heavy person stages allowed to hold their model set at once. Raise only after measuring GPU/host memory. |
 | `AD_PERSON_STAGE_WORKERS` | `2` | No | Number of person-stage coordinators that can run at once. Coordinators submit bounded work to the task pool. |
@@ -354,12 +355,14 @@ The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICEN
 
 1. After scene images are extracted, RF-DETR and ByteTrack process video frames at a default stride of `max(1, round(fps * 0.233))`. Tracking scenes run as independent bounded tasks; each scene keeps its own sequential ByteTrack state.
 2. Tracking reuses the full-video shot boundaries saved by the image extraction step and restarts tracks at each cut. Run image extraction first. Changed boundaries invalidate tracking, identities and attributes; unchanged boundaries preserve them.
-3. RetinaFace runs on every second sampled frame; face metadata and person crops are saved.
+3. RetinaFace runs on every second sampled frame; face metadata and person crops are saved. Tracking also keeps up to five lossless face crops per track for identity analysis.
 4. Optional review supports face/track exclusions and logical track splits.
-5. FaceMoE creates embeddings in RAM while frame decoding and alignment run through bounded tasks; track-pair distances are computed concurrently, then a deterministic global clustering pass assigns tracks to persons. Assignments and names can be reviewed.
+5. Identity analysis aligns saved face crops and creates embeddings in RAM without decoding the source video again. Track-pair cosine distances drive a deterministic global clustering pass. Up to five normalized reference vectors per track are retained in compact float16 form so person similarities can be recalculated during review. If a split or exclusion needs a fallback image absent from tracking crops, only those missing samples are decoded.
 6. Qwen extracts attributes from up to five selected existing crops per person. Per-person tasks are bounded, and generation uses one serialized model/RNG lane by default; attributes can be edited manually.
 7. Current data is stored under `person_analysis/` in the job directory, without run history. Earlier changes invalidate dependent results.
 8. GPT prompts receive person names with Erstnennung/Folgebenennung flags. Qwen attributes are not included in this person context.
+
+While tracking runs, the tracking panel reports scene workers, queued batches and frames, RF-DETR batch size, and sampled GPU utilization. GPU utilization is sampled once per second through PyTorch when the driver exposes it; RF-DETR lane idle time is a host-side proxy for gaps between inference calls, not a GPU measurement.
 
 Person results are stored in `person_analysis/`. The job's in-memory person overview is rebuilt from these files when loaded.
 
@@ -503,19 +506,13 @@ uv run pytest backend/tests/test_person_stages.py -v  # Person analysis tests
 uv run pytest backend/tests/test_attribute_pipeline.py -v   # Pipeline integration tests
 ```
 
-End-to-end UI tests use [Playwright](https://playwright.dev/):
-
-```bash
-cd webapp
-npm install          # install Playwright
-npm run test         # or: npx playwright test
-```
-
-The backend must be running on `http://localhost:5000` before executing UI tests.
-
-Additional person-review tests (from the repository root):
+Frontend unit and end-to-end UI tests use Node.js and [Playwright](https://playwright.dev/):
 
 ```bash
 cd frontend
-node --test --test-concurrency=1 tests/*.test.mjs
+npm ci
+npm test             # frontend unit tests
+npm run test:e2e     # browser tests; starts the Vite frontend server
 ```
+
+From the repository root, `npm run test:ci` runs the same Playwright browser suite in CI mode.

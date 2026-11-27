@@ -251,7 +251,7 @@ _preview_lock = RLock()
 
 def _preview_signature(root: Path) -> tuple:
     result = []
-    for name in (*TRACKING_FILES, "persons.json"):
+    for name in (*TRACKING_FILES, "persons.json", "track_references.f16"):
         try:
             stat = (root / name).stat()
             result.append((stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))

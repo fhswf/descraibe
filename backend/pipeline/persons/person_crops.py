@@ -179,61 +179,79 @@ class FallbackCropCollector:
 def refresh_identity_fallbacks(video_path: str | Path, root: str | Path, tracks: list[dict],
                                track_ids: set[int], fps: float, progress_cb=None,
                                cancel_token=None, commit_cb=None) -> int:
-    """Ersetzt nur die aktuell benötigten Identity-Fallback-Crops."""
+    """Create identity fallback crops, reusing tracked crops before decoding gaps."""
     from .track_segments import spaced, timeline
 
-    root, video_path = Path(root), Path(video_path)
+    root = Path(root)
     rows = read_manifest(root)
     kept = [row for row in rows if row.get("crop_type") != "identity_fallback"]
     old_paths = {row["crop_path"] for row in rows if row.get("crop_type") == "identity_fallback"}
     next_id = max((int(row["crop_id"]) for row in rows), default=0)
     by_id = {track["track_id"]: track for track in tracks}
-    frames = timeline(str(root))
-    selected = defaultdict(list)
+    candidate_crops = {}
+    for row in kept:
+        if row.get("crop_type") in {"face_evidence", "tracking_fallback"}:
+            candidate_crops[(int(row["source_track_id"]), int(row["frame_number"]))] = row
+
+    selected = []
+    frames_by_source = timeline(str(root))
     for track_id in sorted(track_ids):
         track = by_id[track_id]
-        candidates = [row for row in frames.get(track["source_track_id"], [])
-                      if track["start_frame"] <= row["frame_number"] <= track["end_frame"]]
-        for row in spaced(candidates):
-            selected[row["frame_number"]].append((track, row))
+        segment_frames = [row for row in frames_by_source.get(track["source_track_id"], [])
+                          if track["start_frame"] <= row["frame_number"] <= track["end_frame"]]
+        for frame in spaced(segment_frames):
+            existing = candidate_crops.get((track["source_track_id"], frame["frame_number"]))
+            selected.append((track, frame, existing))
+    selected.sort(key=lambda item: (item[1]["frame_number"], item[0]["track_id"]))
 
     temp = Path(tempfile.mkdtemp(prefix=".identity_crops_", dir=root))
     generated, new_paths = [], set()
-    capture = cv2.VideoCapture(str(video_path))
+    capture = None
+    last_grabbed = 0
     try:
-        if selected and not capture.isOpened():
-            raise RuntimeError("Video konnte für Identity-Fallback-Crops nicht geöffnet werden.")
-        last = max(selected, default=0)
-        for number in range(1, last + 1):
+        for index, (track, frame_row, existing) in enumerate(selected, start=1):
             if cancel_token is not None:
                 cancel_token.raise_if_cancelled()
-            if not capture.grab():
-                raise RuntimeError(f"Fallback-Frame {number} konnte nicht gelesen werden.")
-            if number not in selected:
-                continue
-            ok, frame = capture.retrieve()
-            if not ok:
-                raise RuntimeError(f"Fallback-Frame {number} konnte nicht dekodiert werden.")
-            for track, row in selected[number]:
-                encoded = _encode_crop(frame, row["bbox"], 95)
+            number = int(frame_row["frame_number"])
+            relative = Path("person_crops") / f"track_{track['source_track_id']:04d}" / f"identity_{track['track_id']:04d}_{number:08d}.jpg"
+            temp_path = temp / relative
+            temp_path.parent.mkdir(parents=True, exist_ok=True)
+            if existing is not None:
+                source_path = (root / existing["crop_path"]).resolve()
+                if not source_path.is_relative_to((root / "person_crops").resolve()) or not source_path.is_file():
+                    raise RuntimeError("Gespeicherter Tracking-Crop für Identity-Fallback fehlt.")
+                shutil.copyfile(source_path, temp_path)
+                x1, y1, x2, y2 = (int(existing[key]) for key in ("x1", "y1", "x2", "y2"))
+                confidence = existing.get("person_confidence", "")
+            else:
+                if capture is None:
+                    from .tracking_stage import _open_at_frame
+
+                    capture, last_grabbed = _open_at_frame(cv2, Path(video_path), number)
+                while last_grabbed < number:
+                    if not capture.grab():
+                        raise RuntimeError(f"Fallback-Frame {number} konnte nicht gelesen werden.")
+                    last_grabbed += 1
+                ok, image = capture.retrieve()
+                if not ok:
+                    raise RuntimeError(f"Fallback-Frame {number} konnte nicht dekodiert werden.")
+                encoded = _encode_crop(image, frame_row["bbox"], 95)
                 if encoded is None:
                     continue
-                image, (x1, y1, x2, y2) = encoded
-                relative = Path("person_crops") / f"track_{track['source_track_id']:04d}" / f"identity_{number:08d}.jpg"
-                temp_path = temp / relative
-                temp_path.parent.mkdir(parents=True, exist_ok=True)
-                temp_path.write_bytes(image)
-                next_id += 1
-                generated.append({
-                    "crop_id": next_id, "source_track_id": track["source_track_id"], "scene_id": row["scene_id"],
-                    "frame_number": number, "timestamp_s": (number - 1) / fps,
-                    "x1": x1, "y1": y1, "x2": x2, "y2": y2,
-                    "person_confidence": "" if row["confidence"] is None else row["confidence"],
-                    "crop_type": "identity_fallback", "crop_path": relative.as_posix(),
-                })
-                new_paths.add(relative.as_posix())
-            if progress_cb and (number % 300 == 0 or number == last):
-                progress_cb("Identity-Fallback-Crops werden gespeichert ...", number, last)
+                image_bytes, (x1, y1, x2, y2) = encoded
+                temp_path.write_bytes(image_bytes)
+                confidence = "" if frame_row["confidence"] is None else frame_row["confidence"]
+            next_id += 1
+            generated.append({
+                "crop_id": next_id, "source_track_id": track["source_track_id"], "scene_id": frame_row["scene_id"],
+                "frame_number": number, "timestamp_s": (number - 1) / fps,
+                "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                "person_confidence": confidence,
+                "crop_type": "identity_fallback", "crop_path": relative.as_posix(),
+            })
+            new_paths.add(relative.as_posix())
+            if progress_cb:
+                progress_cb("Identity-Fallback-Crops werden gespeichert ...", index, len(selected))
 
         if commit_cb:
             commit_cb()
@@ -249,7 +267,8 @@ def refresh_identity_fallbacks(video_path: str | Path, root: str | Path, tracks:
             (root / relative).unlink(missing_ok=True)
         return len(generated)
     finally:
-        capture.release()
+        if capture is not None:
+            capture.release()
         shutil.rmtree(temp, ignore_errors=True)
 
 

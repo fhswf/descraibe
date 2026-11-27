@@ -124,7 +124,7 @@ _JSON_FIELDS: List[str] = [
 
 # ── Persistence helpers ────────────────────────────────────────────────────────
 
-def _apply_person_review(job: Dict[str, Any], force: bool = False) -> None:
+def _apply_person_review(job: Dict[str, Any], force: bool = False, result: dict | None = None) -> None:
     """Refresh derived caches from the current person_analysis files."""
     if job.get("persons_analysis_running"):
         return
@@ -138,15 +138,16 @@ def _apply_person_review(job: Dict[str, Any], force: bool = False) -> None:
     signature = tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.is_file() else None for p in paths)
     if not force and job.get("_person_review_signature") == signature:
         return
-    try:
-        result = review_state.current(job["job_dir"])
-    except review_artifacts.ReviewError as exc:
-        job["person_review_error"] = str(exc)
-        job.pop("person_review", None)
-        job.pop("_person_review_signature", None)
-        job["persons_df"] = None
-        job["faces"] = []
-        return
+    if result is None:
+        try:
+            result = review_state.current(job["job_dir"])
+        except review_artifacts.ReviewError as exc:
+            job["person_review_error"] = str(exc)
+            job.pop("person_review", None)
+            job.pop("_person_review_signature", None)
+            job["persons_df"] = None
+            job["faces"] = []
+            return
     columns = ["person_id", "name", "function", "track_ids", "segments", "appearances",
                "appearances_count", "first_seen_ts", "last_seen_ts", "representative_crop",
                "representative_crop_id", "attributes", "face_ids", "valid_identity_crop_ids", "fallback_crop_ids"]
@@ -216,7 +217,7 @@ def mutate_person_review(job_id: str, expected_version: str | None, operation: s
         if job.get("status") == "running":
             raise review_artifacts.ReviewError("Bitte warten, bis die laufende Verarbeitung abgeschlossen ist.", 409)
         result = review_state.mutate(job["job_dir"], expected_version, operation, body)
-        _apply_person_review(job, force=True)
+        _apply_person_review(job, force=True, result=result)
         _persist_job(job)
         return {k: v for k, v in result.items() if k != "faces"}
 

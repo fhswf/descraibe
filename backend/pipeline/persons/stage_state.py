@@ -109,6 +109,9 @@ def face_snapshot(job_dir):
     return {
         "tracks": result, "split_available": bool(frames),
         "original_tracks_count": len({track["source_track_id"] for track in tracks}),
+        "tracking_metrics": (metadata.get("stats") or {}).get("tracking_pipeline", {}),
+        "rfdetr_batch_size": (metadata.get("stats") or {}).get("rfdetr_batch_size"),
+        "cpu_workers": (metadata.get("stats") or {}).get("cpu_workers"),
         "version": metadata["revision"], "analysis_id": f"tracking-{metadata['revision']}",
         "excluded_face_observations": sorted(face["face_id"] for face in data.faces if face["excluded"]),
         **status(job_dir),
@@ -150,7 +153,7 @@ def save_faces(job_dir, body):
 
     write_csv(data.root / "face_observations.csv", rows, fields)
     atomic_write(data.root / "tracks.json", updated)
-    for name in ("persons.json", "attributes.json"):
+    for name in ("persons.json", "attributes.json", "track_references.f16"):
         (data.root / name).unlink(missing_ok=True)
     person_crops.remove_identity_fallbacks(data.root)
     track_segments.timeline.cache_clear()
@@ -163,3 +166,19 @@ def video_digest(path):
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def video_signature(path):
+    """Return a cheap filesystem fingerprint for avoiding repeated video hashing."""
+    stat = Path(path).stat()
+    return {
+        "device": int(stat.st_dev), "inode": int(stat.st_ino), "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns), "ctime_ns": int(stat.st_ctime_ns),
+    }
+
+
+def video_matches(path, tracking_metadata):
+    """Use the tracking-time file signature before falling back to a full digest."""
+    if tracking_metadata.get("video_signature") == video_signature(path):
+        return True
+    return video_digest(path) == tracking_metadata.get("video_sha256")
