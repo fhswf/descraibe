@@ -63,7 +63,7 @@ jobs:
 
 
   frontend-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
 
@@ -106,7 +106,7 @@ jobs:
 
   backend-e2e:
     needs: backend-tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
 
