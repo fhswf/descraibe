@@ -23,7 +23,7 @@ def run_attributes(video_path, job_dir, progress_cb=None, *, max_images=MAX_IMAG
 
     data = attribute_state.source(job_dir)
     tracking = data.track_state
-    if stage_state.video_digest(video_path) != tracking["video_sha256"]:
+    if not stage_state.video_matches(video_path, tracking):
         raise ReviewError("Originalvideo wurde geändert. Bitte Tracking erneut ausführen.", 409)
     dimensions = get_video_stats(str(video_path))
     report_progress(progress_cb, "Attributbilder werden ausgewählt …", 0, 100, {

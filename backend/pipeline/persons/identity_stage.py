@@ -1,7 +1,6 @@
 """Stage 2: FaceMoE im RAM und Clustering der aktuellen logischen Tracks."""
 from __future__ import annotations
 
-import json
 import threading
 import time
 from pathlib import Path
@@ -43,11 +42,10 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
     validate_parameter("similarity_threshold", similarity_threshold)
     if cancel_token is not None:
         cancel_token.raise_if_cancelled()
-    import cv2
     import numpy as np
 
     from .clustering import run_clustering
-    from .face_detection import align_face
+    from .face_samples import MAX_FACE_SAMPLES_PER_TRACK, load_aligned_face, select_temporal_observations
     from .face_recognition import FaceMoERecognizer
     from .person_crops import refresh_identity_fallbacks
 
@@ -57,20 +55,21 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
         raise ReviewError("Bitte zuerst Tracking ausführen.", 409)
     metadata = stage_state.read_json(base / "tracks.json")
     tracking_revision = int(metadata["revision"])
-    if stage_state.video_digest(video_path) != metadata.get("video_sha256"):
+    if not stage_state.video_matches(video_path, metadata):
         raise ReviewError("Das Originalvideo hat sich geändert. Tracking erneut ausführen.", 409)
 
     track_segments.timeline.cache_clear()
     tracks = track_segments.current_tracks(metadata, base)
     track_by_id = {track["track_id"]: track for track in tracks}
     face_rows, face_fields = stage_state.read_csv(base / "face_observations.csv")
-    for field in ("alignment_ok", "embedding_created"):
+    for field in ("alignment_ok", "embedding_created", "face_sample_path"):
         if field not in face_fields:
             face_fields.append(field)
     for row in face_rows:
         row["alignment_ok"], row["embedding_created"] = "", "False"
 
-    selected, rejected_tracks, rejected_frames = {}, [], []
+    usable_by_track = {}
+    rejected_tracks, rejected_frames = [], []
     source_has_usable_face, logical_has_face = set(), set()
     for row in face_rows:
         source, frame = int(row["source_track_id"]), int(row["frame_number"])
@@ -84,17 +83,34 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
             continue
         if usable:
             logical_has_face.add(track_id)
-            selected.setdefault(frame, []).append((row, track_id))
+            usable_by_track.setdefault(track_id, []).append(row)
         else:
             rejected_tracks.append(track_id)
             rejected_frames.append(frame)
 
+    selected = {}
+    for track_id, observations in usable_by_track.items():
+        # Tracking persists a bounded reservoir of lossless face crops per
+        # source track. Use those directly when available; older artifacts
+        # still select temporal samples from their saved person crops.
+        cached = [row for row in observations if row.get("face_sample_path")]
+        chosen = cached[:MAX_FACE_SAMPLES_PER_TRACK] if cached else select_temporal_observations(
+            observations, MAX_FACE_SAMPLES_PER_TRACK,
+        )
+        chosen_face_ids = {int(row["face_id"]) for row in chosen}
+        for row in chosen:
+            frame = int(row["frame_number"])
+            selected.setdefault(frame, []).append((row, track_id))
+        for row in observations:
+            if int(row["face_id"]) not in chosen_face_ids:
+                rejected_tracks.append(track_id)
+                rejected_frames.append(int(row["frame_number"]))
+
+    crop_rows, _ = stage_state.read_csv(base / "person_crops.csv")
+    crop_by_path = {str(row["crop_path"]).replace("\\", "/"): row for row in crop_rows}
+
     records = []
     if selected:
-        capture = cv2.VideoCapture(str(video_path))
-        if not capture.isOpened():
-            capture.release()
-            raise RuntimeError("Originalvideo nicht verfügbar.")
         recognizer = None
         recognition_lock = threading.Lock()
         total_faces = sum(len(rows) for rows in selected.values())
@@ -155,37 +171,26 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
             publish(force=completed_faces >= total_faces)
 
         def frame_batches():
-            last = max(selected)
-            for frame_number in range(1, last + 1):
+            frame_numbers = sorted(selected)
+            for index, frame_number in enumerate(frame_numbers, start=1):
                 if cancel_token is not None:
                     cancel_token.raise_if_cancelled()
-                if not capture.grab():
-                    raise RuntimeError(f"Originalframe {frame_number} nicht verfügbar.")
-                if frame_number in selected:
-                    ok, frame = capture.retrieve()
-                    if not ok:
-                        raise RuntimeError(f"Originalframe {frame_number} konnte nicht dekodiert werden.")
-                    yield (frame_number, frame.copy(), selected[frame_number])
-                if frame_number % 30 == 0 or frame_number == last:
-                    report_progress(progress_cb, f"Videoframes gelesen: {frame_number}/{last}", frame_number, last, {
-                        "phase": "decode", "unit": "frames",
+                yield (frame_number, selected[frame_number])
+                if index % 30 == 0 or index == len(frame_numbers):
+                    report_progress(progress_cb, f"Gesichtsproben geladen: {index}/{len(frame_numbers)}", index,
+                                    len(frame_numbers), {
+                        "phase": "decode", "unit": "face_sample_frames",
                         "workers": {key: state[key] for key in ("queued", "running", "completed", "failed")},
                     })
 
         def process_frame(item):
-            frame_number, frame, observations = item
+            frame_number, observations = item
             results = []
             for row, track_id in observations:
                 if cancel_token is not None:
                     cancel_token.raise_if_cancelled()
                 face_id = int(row["face_id"])
-                try:
-                    x1, y1, x2, y2 = json.loads(row["face_crop_box"])
-                    points = np.asarray(json.loads(row["landmarks"]), dtype=np.float32)
-                    points -= np.asarray([x1, y1], dtype=np.float32)
-                    aligned = align_face(frame[y1:y2, x1:x2].copy(), points)
-                except Exception:
-                    aligned = None
+                aligned = load_aligned_face(base, row, crop_by_path)
                 if aligned is None:
                     results.append((face_id, track_id, frame_number, False, False, None))
                     continue
@@ -211,7 +216,6 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
                     cancel_token=cancel_token,
                 )
         finally:
-            capture.release()
             if recognizer is not None:
                 recognizer.close()
 

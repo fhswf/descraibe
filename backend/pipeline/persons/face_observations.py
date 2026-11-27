@@ -11,6 +11,7 @@ class FaceObservationWriter:
         "face_id", "source_track_id", "scene_id", "frame_number", "timestamp_s", "person_crop_path",
         "face_x1", "face_y1", "face_x2", "face_y2", "face_confidence", "face_usable", "excluded",
         "blur_score", "alignment_ok", "embedding_created", "landmarks", "face_crop_box", "frame_face_bbox",
+        "face_sample_path",
     ]
 
     def __init__(self, output_dir: str | Path, fps: float) -> None:
@@ -59,6 +60,7 @@ class FaceObservationWriter:
             "landmarks": json.dumps([[float(v) if math.isfinite(float(v)) else None for v in point] for point in landmarks]) if landmarks is not None else "null",
             "face_crop_box": json.dumps(list(map(int, face_crop_box))) if face_crop_box is not None else "null",
             "frame_face_bbox": json.dumps(list(map(float, face_bbox))),
+            "face_sample_path": "",
         })
         return self._face_id
 

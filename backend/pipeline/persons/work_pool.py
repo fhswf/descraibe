@@ -29,6 +29,9 @@ def _positive_env(name: str, default: int) -> int:
 _DEFAULT_WORKERS = 1
 MAX_WORKERS = _positive_env("AD_PERSON_CPU_WORKERS", _DEFAULT_WORKERS)
 MAX_OUTSTANDING = _positive_env("AD_PERSON_MAX_PENDING", MAX_WORKERS * 2)
+RFDETR_BATCH_SIZE = _positive_env("AD_PERSON_RFDETR_BATCH_SIZE", 8)
+if RFDETR_BATCH_SIZE > 16:
+    raise RuntimeError("AD_PERSON_RFDETR_BATCH_SIZE must be between 1 and 16.")
 MODEL_SLOTS = _positive_env("AD_PERSON_MODEL_SLOTS", 1)
 STAGE_WORKERS = _positive_env("AD_PERSON_STAGE_WORKERS", 2)
 STAGE_PENDING = _positive_env("AD_PERSON_STAGE_PENDING", 4)

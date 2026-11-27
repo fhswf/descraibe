@@ -61,10 +61,10 @@ def _representative(data: artifacts.Artifacts, track_ids: list[int]) -> dict | N
                           face_width / face_height))
     if faces:
         best_confidence = max(row[1] for row in faces)
-        # Confidence chooses a usable detection; a wider face and larger face
-        # area favor a clear, front-facing representative among near-ties.
+        # Confidence chooses a usable detection; the largest face region wins
+        # among near-ties, with its width-to-height ratio as the next cue.
         close = [row for row in faces if best_confidence - row[1] <= 0.0001 + 1e-12]
-        return max(close, key=lambda row: (row[3], row[2], row[1], -row[0]["crop_id"]))[0]
+        return max(close, key=lambda row: (row[2], row[3], row[1], -row[0]["crop_id"]))[0]
     fallback = [crop for track_id in track_ids for crop in data.by_track[track_id]]
     for crop in sorted(fallback, key=lambda item: (item["width"] * item["height"], -item["crop_id"]), reverse=True):
         try:

@@ -28,20 +28,35 @@ class RFDETRPersonDetector:
         print(f"RF-DETR Nano läuft auf: {self.device}")
 
     def detect(self, frame_bgr) -> list[dict]:
-        frame_rgb = cv2.cvtColor(
-            frame_bgr,
-            cv2.COLOR_BGR2RGB,
-        )
+        return self.detect_batch([frame_bgr])[0]
 
-        detections = self.model.predict(
-            frame_rgb,
+    def detect_batch(self, frames_bgr) -> list[list[dict]]:
+        """Detect people in a batch of frames with one RF-DETR model call."""
+        if not frames_bgr:
+            return []
+        return self.detect_prepared_batch(self.prepare_batch(frames_bgr))
+
+    @staticmethod
+    def prepare_batch(frames_bgr):
+        """Convert frames before taking the shared model lock."""
+        return [cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) for frame in frames_bgr]
+
+    def detect_prepared_batch(self, frames_rgb) -> list[list[dict]]:
+        """Run a prepared RGB batch through RF-DETR."""
+        if not frames_rgb:
+            return []
+        batch_detections = self.model.predict(
+            frames_rgb,
             threshold=RFDETR_CONFIDENCE_THRESHOLD,
+            include_source_image=False,
         )
+        if len(batch_detections) != len(frames_rgb):
+            raise RuntimeError("RF-DETR gab nicht für jedes Batch-Bild Detektionen zurück.")
+        return [self._person_detections(detections) for detections in batch_detections]
 
-        detections = detections[
-            detections.class_id == PERSON_CLASS_ID
-        ]
-
+    @staticmethod
+    def _person_detections(detections) -> list[dict]:
+        detections = detections[detections.class_id == PERSON_CLASS_ID]
         results = []
 
         for box, confidence in zip(
