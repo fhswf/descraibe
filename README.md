@@ -362,7 +362,7 @@ The vendored FaceMoE code retains its [MIT license](backend/vendor/facemoe/LICEN
 7. Current data is stored under `person_analysis/` in the job directory, without run history. Earlier changes invalidate dependent results.
 8. GPT prompts receive person names with Erstnennung/Folgebenennung flags. Qwen attributes are not included in this person context.
 
-While tracking runs, the tracking panel reports scene workers, queued batches and frames, RF-DETR batch size, and sampled GPU utilization. GPU utilization is sampled once per second through PyTorch when the driver exposes it; RF-DETR lane idle time is a host-side proxy for gaps between inference calls, not a GPU measurement.
+While person analysis runs, the progress modal reports active parallel tasks and throughput when the stage provides those counters. Tracking also reports sampled server CPU and GPU utilization, queued batches and frames, and RF-DETR batch size. CPU utilization is sampled from Linux `/proc/stat`; GPU utilization is sampled once per second through PyTorch when the driver exposes it. RF-DETR lane idle time is a host-side proxy for gaps between inference calls, not a GPU measurement. The modal can be hidden while work continues and closes after completion.
 
 Person results are stored in `person_analysis/`. The job's in-memory person overview is rebuilt from these files when loaded.
 

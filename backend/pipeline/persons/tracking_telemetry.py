@@ -29,6 +29,10 @@ class TrackingTelemetry:
         self._gpu_samples: list[float] = []
         self._gpu_stop = threading.Event()
         self._gpu_thread: threading.Thread | None = None
+        self._cpu_status = "not_started"
+        self._cpu_samples: list[float] = []
+        self._cpu_stop = threading.Event()
+        self._cpu_thread: threading.Thread | None = None
 
     def frame_enqueued(self) -> None:
         with self._lock:
@@ -100,14 +104,59 @@ class TrackingTelemetry:
                     lane["waiting_batches"] = max(0, lane["waiting_batches"] - 1)
                     lane["waiting_frames"] = max(0, lane["waiting_frames"] - frame_count)
 
-    def start_gpu_sampling(self, enabled: bool) -> None:
-        if not enabled:
+    @staticmethod
+    def _read_cpu_times() -> tuple[int, int] | None:
+        """Read aggregate system CPU and idle counters from Linux procfs."""
+        try:
+            with open("/proc/stat", encoding="ascii") as stat_file:
+                fields = stat_file.readline().split()
+            if not fields or fields[0] != "cpu":
+                return None
+            times = [int(value) for value in fields[1:]]
+            if len(times) < 4:
+                return None
+            # Guest counters are already included in user/nice, so exclude them
+            # from the total instead of double-counting CPU time.
+            return sum(times[:8]), times[3] + (times[4] if len(times) > 4 else 0)
+        except (OSError, ValueError):
+            return None
+
+    def start_resource_sampling(self, gpu_enabled: bool) -> None:
+        self._cpu_stop.clear()
+        self._cpu_thread = threading.Thread(target=self._sample_cpu, name="tracking-cpu-metrics", daemon=True)
+        self._cpu_thread.start()
+
+        if not gpu_enabled:
             with self._lock:
                 self._gpu_status = "model_on_cpu"
             return
         self._gpu_stop.clear()
         self._gpu_thread = threading.Thread(target=self._sample_gpu, name="tracking-gpu-metrics", daemon=True)
         self._gpu_thread.start()
+
+    def _sample_cpu(self) -> None:
+        previous = self._read_cpu_times()
+        if previous is None:
+            with self._lock:
+                self._cpu_status = "unavailable:proc_stat"
+            return
+        with self._lock:
+            self._cpu_status = "sampling"
+        while not self._cpu_stop.wait(1.0):
+            current = self._read_cpu_times()
+            if current is None:
+                with self._lock:
+                    self._cpu_status = "unavailable:proc_stat"
+                return
+            total_delta = current[0] - previous[0]
+            idle_delta = current[1] - previous[1]
+            previous = current
+            if total_delta <= 0:
+                continue
+            utilization = 100.0 * (1.0 - idle_delta / total_delta)
+            with self._lock:
+                self._cpu_samples.append(max(0.0, min(100.0, utilization)))
+                self._cpu_status = "available"
 
     def _sample_gpu(self) -> None:
         try:
@@ -134,8 +183,12 @@ class TrackingTelemetry:
             with self._lock:
                 self._gpu_status = f"unavailable:{type(exc).__name__}"
 
-    def stop_gpu_sampling(self) -> None:
+    def stop_resource_sampling(self) -> None:
+        self._cpu_stop.set()
         self._gpu_stop.set()
+        if self._cpu_thread is not None:
+            self._cpu_thread.join(timeout=2.0)
+            self._cpu_thread = None
         if self._gpu_thread is not None:
             self._gpu_thread.join(timeout=2.0)
             self._gpu_thread = None
@@ -151,6 +204,7 @@ class TrackingTelemetry:
                 "tracked_frames": self._tracked_frames,
                 "bytetrack_seconds": self._bytetrack_seconds,
                 "crop_write_seconds": self._crop_write_seconds,
+                "cpu_utilization_status": self._cpu_status,
                 "gpu_utilization_status": self._gpu_status,
             }
             for name, lane in self._lanes.items():
@@ -166,6 +220,10 @@ class TrackingTelemetry:
                     f"{name}_lane_idle_seconds": lane["idle_seconds"],
                 })
             samples = list(self._gpu_samples)
+            cpu_samples = list(self._cpu_samples)
+        values["cpu_utilization_samples"] = len(cpu_samples)
+        values["cpu_utilization_average_pct"] = sum(cpu_samples) / len(cpu_samples) if cpu_samples else None
+        values["cpu_utilization_latest_pct"] = cpu_samples[-1] if cpu_samples else None
         values["gpu_utilization_samples"] = len(samples)
         values["gpu_utilization_average_pct"] = sum(samples) / len(samples) if samples else None
         values["gpu_utilization_latest_pct"] = samples[-1] if samples else None

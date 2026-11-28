@@ -466,7 +466,8 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
 
         report_progress(progress_cb, "Tracking-Modelle werden geladen …", 0, max(1, total_samples), {
             "phase": "models", "completed": 0, "total": max(1, total_samples), "unit": "tracking_frames",
-            "workers": {"queued": 0, "running": 0, "completed": 0, "failed": 0},
+            "workers": {"queued": 0, "running": 0, "completed": 0, "failed": 0,
+                        "limit": worker_count()},
         })
 
         task_lock = threading.Lock()
@@ -486,6 +487,7 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
                 state["last_emit"] = now
                 completed_frames = sum(state["frames"].values())
                 workers = {key: state[key] for key in ("queued", "running", "completed", "failed")}
+                workers["limit"] = worker_count()
                 current_task = state["current_task"]
             report_progress(
                 progress_cb,
@@ -531,7 +533,7 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
             detector = RFDETRPersonDetector()
             faces = RetinaFaceDetector(model_cache_dir=Path(__file__).resolve().parents[3] / "models" / "retinaface")
             detector_lock, faces_lock = threading.Lock(), threading.Lock()
-            telemetry.start_gpu_sampling(getattr(detector, "device", None) == "cuda")
+            telemetry.start_resource_sampling(getattr(detector, "device", None) == "cuda")
             try:
                 scene_results = map_bounded(
                     specs,
@@ -548,14 +550,16 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
                     cancel_token=cancel_token,
                 )
             finally:
-                telemetry.stop_gpu_sampling()
+                telemetry.stop_resource_sampling()
 
             if cancel_token is not None:
                 cancel_token.raise_if_cancelled()
             report_progress(progress_cb, "Tracking-Ergebnisse werden zusammengeführt …", 0, 1, {
                 "phase": "merge", "completed": len(scene_results), "total": len(scene_results),
                 "unit": "scenes", "workers": {"queued": 0, "running": 0,
-                                                  "completed": len(scene_results), "failed": 0},
+                                                  "completed": len(scene_results), "failed": 0,
+                                                  "limit": worker_count()},
+                "elapsed_seconds": round(time.monotonic() - started, 1), "pipeline": telemetry.snapshot(),
             })
             tracks, stats = _merge_scenes(
                 scene_results, staged, video_path, fps, progress_cb, total_frames, cancel_token,
@@ -576,6 +580,7 @@ def run_tracking(video_path, job_dir, progress_cb=None, *, tracking_interval_sec
             shutil.rmtree(scene_root, ignore_errors=True)
             report_progress(progress_cb, "Tracking-Ergebnisse werden veröffentlicht …", 0, 1, {
                 "phase": "publishing", "completed": 0, "total": 1, "unit": "publish",
+                "elapsed_seconds": round(time.monotonic() - started, 1), "pipeline": telemetry.snapshot(),
             })
             if cancel_token is not None:
                 cancel_token.begin_commit()

@@ -11,7 +11,7 @@ from .attribute_selection import select_existing
 from .qwen_attributes import FIELDS, GENERATION, MODEL_ID, PROMPT, QwenAttributes, parse_json
 from .review_artifacts import ReviewError
 from .config import MAX_IMAGES_PER_PERSON, validate_parameter
-from .work_pool import CancellationToken, map_bounded, model_slot, report_progress
+from .work_pool import CancellationToken, map_bounded, model_slot, report_progress, worker_count
 
 
 def run_attributes(video_path, job_dir, progress_cb=None, *, max_images=MAX_IMAGES_PER_PERSON,
@@ -44,6 +44,7 @@ def run_attributes(video_path, job_dir, progress_cb=None, *, max_images=MAX_IMAG
             state["last_emit"] = now
             completed = state["completed"]
             workers = {key: state[key] for key in ("queued", "running", "completed", "failed")}
+            workers["limit"] = worker_count()
             current_task = state["current_task"]
         total = len(ordered_selections)
         report_progress(progress_cb, f"Attribute ausgewertet: {completed}/{total} Personen",

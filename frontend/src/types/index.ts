@@ -16,7 +16,7 @@ export interface ProgressInfo {
   status?: 'running' | 'cancelling' | 'cancelled';
   elapsed_seconds?: number;
   pipeline?: TrackingPipelineMetrics;
-  workers?: { queued?: number; running?: number; completed?: number; failed?: number };
+  workers?: { queued?: number; running?: number; completed?: number; failed?: number; limit?: number };
   current_task?: { id?: string; status?: string; current?: number; total?: number; unit?: string; frame_number?: number; person_id?: number };
 }
 
@@ -29,6 +29,10 @@ export interface TrackingPipelineMetrics {
   tracked_frames?: number;
   bytetrack_seconds?: number;
   crop_write_seconds?: number;
+  cpu_utilization_status?: string;
+  cpu_utilization_samples?: number;
+  cpu_utilization_average_pct?: number | null;
+  cpu_utilization_latest_pct?: number | null;
   gpu_utilization_status?: string;
   gpu_utilization_samples?: number;
   gpu_utilization_average_pct?: number | null;

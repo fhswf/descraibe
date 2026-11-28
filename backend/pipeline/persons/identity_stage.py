@@ -8,7 +8,7 @@ from pathlib import Path
 from . import embedding_store, stage_state, track_segments
 from .review_artifacts import ReviewError
 from .config import SIMILARITY_THRESHOLD, validate_parameter
-from .work_pool import CancellationToken, map_bounded, model_slot, report_progress
+from .work_pool import CancellationToken, map_bounded, model_slot, report_progress, worker_count
 
 
 def _true(value) -> bool:
@@ -129,6 +129,7 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
                 state["last_emit"] = now
                 current = state["completed_faces"]
                 workers = {key: state[key] for key in ("queued", "running", "completed", "failed")}
+                workers["limit"] = worker_count()
                 current_task = state["current_task"]
             report_progress(progress_cb, f"Gesichter verarbeitet: {current}/{total_faces}", current, total_faces, {
                 "phase": "embeddings", "completed": current, "total": total_faces, "unit": "faces",
@@ -180,7 +181,8 @@ def run_identities(video_path, job_dir, progress_cb=None, *, similarity_threshol
                     report_progress(progress_cb, f"Gesichtsproben geladen: {index}/{len(frame_numbers)}", index,
                                     len(frame_numbers), {
                         "phase": "decode", "unit": "face_sample_frames",
-                        "workers": {key: state[key] for key in ("queued", "running", "completed", "failed")},
+                        "workers": {**{key: state[key] for key in ("queued", "running", "completed", "failed")},
+                                    "limit": worker_count()},
                     })
 
         def process_frame(item):
